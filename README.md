@@ -2,6 +2,8 @@
 
 Export your full ChatGPT conversations as clean, readable **Markdown** or **PDF** files — including all messages, sender labels, and code blocks.
 
+![ChatGPT Chat Exporter in action](demo/demo.gif)
+
 ---
 
 ## ✅ Features
@@ -30,6 +32,8 @@ Export your full ChatGPT conversations as clean, readable **Markdown** or **PDF*
 ---
 
 ## 🖼️ Demo
+
+![Export process](demo/demo.gif)
 
 | Markdown Output | PDF View |
 |-----------------|----------|
