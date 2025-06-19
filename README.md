@@ -19,7 +19,24 @@ Export your full ChatGPT conversations as clean, readable **Markdown** or **PDF*
 
 ## 📦 How to Use
 
-### Method 1: Install as Userscript (Recommended)
+### Method 1: Console Method
+
+If you prefer the manual method:
+
+#### Export as Markdown
+1. Open a conversation in ChatGPT
+2. Open DevTools → Console
+3. Paste contents of `exporter-markdown.js`
+4. Hit Enter — `.md` file will download
+
+#### Export as PDF
+1. Same as above — paste `exporter-pdf.js`
+2. A printable tab opens with full conversation
+3. Click **Save as PDF**
+
+---
+
+### Method 2: Install as Userscript (Recommended)
 
 This is the safest and most convenient method:
 
@@ -39,21 +56,6 @@ This is the safest and most convenient method:
    - [Install PDF Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/chatgpt-pdf-exporter.user.js)
 
 3. Open ChatGPT and click the "Export as Markdown" or "Export as PDF" button that appears in the sidebar.
-
-### Method 2: Console Method
-
-If you prefer the manual method:
-
-#### Export as Markdown
-1. Open a conversation in ChatGPT
-2. Open DevTools → Console
-3. Paste contents of `exporter-markdown.js`
-4. Hit Enter — `.md` file will download
-
-#### Export as PDF
-1. Same as above — paste `exporter-pdf.js`
-2. A printable tab opens with full conversation
-3. Click **Save as PDF**
 
 ---
 
