@@ -3,33 +3,39 @@
         return date.toISOString().split('T')[0];
     }
 
-    function escapeMarkdown(text) {
+    function cleanMarkdown(text) {
         return text
-            .replace(/\\/g, '\\\\')
-            .replace(/\*/g, '\\*')
-            .replace(/_/g, '\\_')
-            .replace(/`/g, '\\`')
-            .replace(/\n{3,}/g, '\n\n');
+            // Only escape backslashes that aren't already escaping something
+            .replace(/\\(?![\\*_`])/g, '\\\\')
+            // Clean up excessive newlines
+            .replace(/\n{3,}/g, '\n\n')
+            // Remove any HTML entities that might have leaked through
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&amp;/g, '&');
     }
 
     function processMessageContent(element) {
         const clone = element.cloneNode(true);
 
-        // Replace <pre><code> blocks
+        // Replace <pre><code> blocks with proper markdown
         clone.querySelectorAll('pre').forEach(pre => {
             const code = pre.innerText.trim();
             const langMatch = pre.querySelector('code')?.className?.match(/language-([a-zA-Z0-9]+)/);
             const lang = langMatch ? langMatch[1] : '';
-            pre.replaceWith(`\n\n\`\`\`${lang}\n${code}\n\`\`\`\n`);
+            // Create a text node instead of replacing with string to avoid HTML parsing issues
+            const codeBlock = document.createTextNode(`\n\n\`\`\`${lang}\n${code}\n\`\`\`\n`);
+            pre.parentNode.replaceChild(codeBlock, pre);
         });
 
         // Replace images and canvas with placeholders
         clone.querySelectorAll('img, canvas').forEach(el => {
-            el.replaceWith('[Image or Canvas]');
+            const placeholder = document.createTextNode('[Image or Canvas]');
+            el.parentNode.replaceChild(placeholder, el);
         });
 
-        // Convert remaining HTML to plain markdown-style text
-        return escapeMarkdown(clone.innerText.trim());
+        // Convert remaining HTML to clean markdown text
+        return cleanMarkdown(clone.innerText.trim());
     }
 
     function findMessages() {
