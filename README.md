@@ -1,4 +1,4 @@
-# ChatGPT Chat Exporter V.02
+# ChatGPT Chat Exporter V.02 (DISCONTINUED)
 
 Export your full ChatGPT conversations as clean, readable **Markdown** or **PDF** files — including all messages, sender labels, and code blocks.
 
@@ -29,7 +29,7 @@ If you prefer the manual method:
 4. Hit Enter — `.md` file will download
 
 #### Export as PDF
-1. Same as above — paste `exporter-pdf.js`
+1. Same as above — paste [ChatGPT PDF Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-pdf.js) 
 2. A printable tab opens with full conversation
 3. Click **Save as PDF**
 
