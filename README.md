@@ -25,7 +25,7 @@ If you prefer the manual method:
 #### Export as Markdown
 1. Open a conversation in ChatGPT
 2. Open DevTools → Console
-3. Paste contents of `[ChatGPT Markdown Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-markdown.js)`: 
+3. Paste contents of [ChatGPT Markdown Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-markdown.js) 
 4. Hit Enter — `.md` file will download
 
 #### Export as PDF
