@@ -2,7 +2,7 @@
 // @name         ChatGPT Chat Exporter - PDF
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
 // @version      1.1.0
-// @description  Export your ChatGPT conversations as printable PDF files
+// @description  Export your ChatGPT conversations as printable PDF files with improved accuracy
 // @author       Rashid Azarang
 // @match        https://chat.openai.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=openai.com
@@ -56,14 +56,12 @@
     }
 
     function findMessages() {
-        // Try modern selectors first, fall back to legacy
+        // More specific selectors to avoid nested elements
         const selectors = [
-            'div[data-message-author-role]', // Modern ChatGPT
-            'div[data-testid*="conversation-turn"]', // Potential new structure  
-            'div[data-testid*="message"]', // Alternative message selector
-            'article', // Semantic structure
-            'div[class*="group"]', // Legacy fallback
-            '.text-base' // Original PDF fallback
+            'div[data-message-author-role]', // Modern ChatGPT with clear author role
+            'article[data-testid*="conversation-turn"]', // Conversation turns
+            'div[data-testid="conversation-turn"]', // Specific conversation turn
+            'div[class*="group"]:not([class*="group"] [class*="group"])', // Top-level groups only
         ];
 
         let messages = [];
@@ -75,63 +73,131 @@
             }
         }
 
-        // Filter out obvious duplicates or invalid messages
+        if (messages.length === 0) {
+            // Fallback: try to find conversation container and parse its structure
+            const conversationContainer = document.querySelector('[role="main"], main, .conversation, [class*="conversation"]');
+            if (conversationContainer) {
+                // Look for direct children that seem like message containers
+                messages = conversationContainer.querySelectorAll(':scope > div, :scope > article');
+                console.log(`PDF UserScript: Fallback: found ${messages.length} potential messages in conversation container`);
+            }
+        }
+
+        // Filter and validate messages
         const validMessages = Array.from(messages).filter(msg => {
             const text = msg.textContent.trim();
-            // More refined filtering
-            if (text.length < 10 || text.length > 100000) return false;
             
-            // Skip elements that seem like UI components
-            if (msg.querySelector('button, input, textarea')) return false;
+            // Must have substantial content
+            if (text.length < 30) return false;
+            if (text.length > 100000) return false;
             
-            // Must contain meaningful content
-            return text.split(' ').length > 2;
+            // Skip elements that are clearly UI components
+            if (msg.querySelector('input[type="text"], textarea')) return false;
+            if (msg.classList.contains('typing') || msg.classList.contains('loading')) return false;
+            
+            // Must contain meaningful content (not just buttons/UI)
+            const meaningfulText = text.replace(/\s+/g, ' ').trim();
+            if (meaningfulText.split(' ').length < 5) return false;
+            
+            return true;
         });
 
-        // Remove nested messages (child messages inside parent messages)
-        return validMessages.filter(msg => {
-            return !validMessages.some(other => other !== msg && other.contains(msg));
+        // Remove nested messages and consolidate content
+        const consolidatedMessages = [];
+        const usedElements = new Set();
+
+        validMessages.forEach(msg => {
+            if (usedElements.has(msg)) return;
+            
+            // Check if this message is nested within another valid message
+            const isNested = validMessages.some(other => 
+                other !== msg && other.contains(msg) && !usedElements.has(other)
+            );
+            
+            if (!isNested) {
+                consolidatedMessages.push(msg);
+                usedElements.add(msg);
+            }
         });
+
+        return consolidatedMessages;
     }
 
-    function identifySender(messageElement, index) {
-        // Method 1: Check for data attributes (modern ChatGPT)
+    function identifySender(messageElement, index, allMessages) {
+        // Method 1: Check for data attributes (most reliable)
         const authorRole = messageElement.getAttribute('data-message-author-role');
         if (authorRole) {
             return authorRole === 'user' ? 'You' : 'ChatGPT';
         }
 
-        // Method 2: Look for avatar images
-        const avatar = messageElement.querySelector('img[alt], img[src*="avatar"]');
-        if (avatar) {
+        // Method 2: Look for avatar images with better detection
+        const avatars = messageElement.querySelectorAll('img');
+        for (const avatar of avatars) {
             const alt = avatar.alt?.toLowerCase() || '';
             const src = avatar.src?.toLowerCase() || '';
+            const classes = avatar.className?.toLowerCase() || '';
             
-            if (alt.includes('user') || alt.includes('you') || src.includes('user')) {
+            // User indicators
+            if (alt.includes('user') || src.includes('user') || classes.includes('user')) {
                 return 'You';
             }
-            if (alt.includes('chatgpt') || alt.includes('assistant') || src.includes('assistant')) {
+            
+            // Assistant indicators
+            if (alt.includes('chatgpt') || alt.includes('assistant') || alt.includes('gpt') || 
+                src.includes('assistant') || src.includes('chatgpt') || classes.includes('assistant')) {
                 return 'ChatGPT';
             }
         }
 
-        // Method 3: Text-based detection
+        // Method 3: Content analysis with better patterns
         const text = messageElement.textContent.toLowerCase();
-        if (text.includes('i understand') || text.includes('i can help') || text.includes("here's") || text.includes("i'll")) {
+        const textStart = text.substring(0, 200); // Look at beginning of message
+        
+        // Strong ChatGPT indicators
+        if (textStart.match(/^(i understand|i can help|here's|i'll|let me|i'd be happy|certainly|of course)/)) {
             return 'ChatGPT';
         }
-        if (text.includes('can you') || text.includes('please help') || text.includes('how do i')) {
+        
+        // Strong user indicators  
+        if (textStart.match(/^(can you|please help|how do i|i need|i want|help me|could you)/)) {
             return 'You';
         }
 
-        // Method 4: Structural position (fallback - assumes alternating pattern)
+        // Method 4: Structural analysis - look at DOM structure
+        const hasCodeBlocks = messageElement.querySelectorAll('pre, code').length > 0;
+        const hasLongText = messageElement.textContent.length > 200;
+        const hasLists = messageElement.querySelectorAll('ul, ol, li').length > 0;
+        
+        // ChatGPT messages tend to be longer and more structured
+        if (hasCodeBlocks && hasLongText && hasLists) {
+            return 'ChatGPT';
+        }
+
+        // Method 5: Position-based fallback with better logic
+        // Try to detect actual alternating pattern by looking at content characteristics
+        if (index > 0 && allMessages[index - 1]) {
+            const prevText = allMessages[index - 1].textContent;
+            const currentText = messageElement.textContent;
+            
+            // If previous was short and current is long, likely user -> assistant
+            if (prevText.length < 100 && currentText.length > 300) {
+                return 'ChatGPT';
+            }
+            
+            // If previous was long and current is short, likely assistant -> user  
+            if (prevText.length > 300 && currentText.length < 100) {
+                return 'You';
+            }
+        }
+
+        // Final fallback
         return index % 2 === 0 ? 'You' : 'ChatGPT';
     }
 
     function extractConversationTitle() {
         // Try to get actual conversation title
         const titleSelectors = [
-            'h1',
+            'h1:not([class*="hidden"])',
             '[class*="conversation-title"]',
             '[data-testid*="conversation-title"]',
             'title'
@@ -142,7 +208,7 @@
             if (element && element.textContent.trim()) {
                 const title = element.textContent.trim();
                 // Avoid generic titles
-                if (!['chatgpt', 'new chat', 'untitled'].includes(title.toLowerCase())) {
+                if (!['chatgpt', 'new chat', 'untitled', 'chat'].includes(title.toLowerCase())) {
                     return title;
                 }
             }
@@ -153,35 +219,24 @@
 
     function extractFormattedContent() {
         const messages = findMessages();
-        let html = '';
+        
+        if (messages.length === 0) {
+            console.log('PDF UserScript: No messages found. The page structure may have changed.');
+            return '<div class="message"><div class="content">No messages found.</div></div>';
+        }
 
-        // Track previous message to avoid duplicates and fix sender sequence
-        let previousContent = '';
-        let previousSender = '';
-        let processedCount = 0;
+        console.log(`PDF UserScript: Processing ${messages.length} messages...`);
+
+        // Process messages with better duplicate detection
+        const processedMessages = [];
+        const seenContent = new Set();
 
         messages.forEach((messageElement, index) => {
-            const sender = identifySender(messageElement, index);
+            const sender = identifySender(messageElement, index, messages);
             
-            // Find content within message
-            const contentSelectors = [
-                '.whitespace-pre-wrap', '.markdown', '.prose', // Legacy
-                '[data-message-content]', // Modern
-                'div[class*="message-content"]' // Generic
-            ];
-            
-            let contentElement = messageElement;
-            for (const selector of contentSelectors) {
-                const found = messageElement.querySelector(selector);
-                if (found) {
-                    contentElement = found;
-                    break;
-                }
-            }
-
-            if (!contentElement) return;
-
-            const clone = contentElement.cloneNode(true);
+            // Remove UI elements that shouldn't be in the export
+            const clone = messageElement.cloneNode(true);
+            clone.querySelectorAll('button, svg, [class*="copy"], [class*="edit"], [class*="regenerate"]').forEach(el => el.remove());
 
             clone.querySelectorAll('pre').forEach(pre => {
                 const code = sanitize(pre.innerText.trim());
@@ -194,37 +249,65 @@
 
             const cleanText = sanitize(clone.innerText.trim()).replace(/\n/g, '<br>');
             
-            // Skip empty messages or exact duplicates
-            if (!cleanText || cleanText === previousContent) {
+            // Skip if empty or too short
+            if (!cleanText || cleanText.trim().length < 30) {
+                console.log(`PDF UserScript: Skipping message ${index}: too short or empty`);
                 return;
             }
 
-            // Skip if content is too short (likely UI elements, not actual messages)
-            if (cleanText.trim().length < 20) {
+            // Create a content hash for duplicate detection
+            const contentHash = cleanText.substring(0, 100).replace(/\s+/g, ' ').trim();
+            if (seenContent.has(contentHash)) {
+                console.log(`PDF UserScript: Skipping message ${index}: duplicate content`);
                 return;
             }
+            seenContent.add(contentHash);
 
-            // Fix sender alternation if we have consecutive messages from same sender
-            let finalSender = sender;
-            if (previousSender && previousSender === sender && processedCount > 0) {
-                // Likely missed a message in between, use opposite sender
-                finalSender = previousSender === 'You' ? 'ChatGPT' : 'You';
-                console.log(`PDF UserScript: Fixed consecutive ${sender} messages at index ${index}`);
-            }
-
-            html += `
-                <div class="message">
-                    <div class="sender">${finalSender}</div>
-                    <div class="content">${cleanText}</div>
-                </div>
-            `;
-
-            previousContent = cleanText;
-            previousSender = finalSender;
-            processedCount++;
+            processedMessages.push({
+                sender,
+                content: cleanText,
+                originalIndex: index
+            });
         });
 
-        console.log(`PDF UserScript: Processed ${processedCount} unique messages from ${messages.length} detected elements`);
+        // Apply sender sequence correction
+        for (let i = 1; i < processedMessages.length; i++) {
+            const current = processedMessages[i];
+            const previous = processedMessages[i - 1];
+            
+            // If we have two consecutive messages from the same sender, try to fix it
+            if (current.sender === previous.sender) {
+                // Use content analysis to determine which should be flipped
+                const currentLength = current.content.length;
+                const previousLength = previous.content.length;
+                
+                // If current message is much longer, it's likely ChatGPT
+                if (currentLength > previousLength * 2 && currentLength > 500) {
+                    current.sender = 'ChatGPT';
+                } else if (previousLength > currentLength * 2 && previousLength > 500) {
+                    previous.sender = 'ChatGPT';
+                    current.sender = 'You';
+                } else {
+                    // Default alternating fix
+                    current.sender = current.sender === 'You' ? 'ChatGPT' : 'You';
+                }
+                
+                console.log(`PDF UserScript: Fixed consecutive ${previous.sender} messages at positions ${i-1} and ${i}`);
+            }
+        }
+
+        // Generate HTML output
+        let html = '';
+        processedMessages.forEach(({ sender, content }) => {
+            html += `
+                <div class="message">
+                    <div class="sender">${sender}</div>
+                    <div class="content">${content}</div>
+                </div>
+            `;
+        });
+
+        console.log(`PDF UserScript: Export completed: ${processedMessages.length} messages exported`);
         return html;
     }
 
@@ -248,61 +331,79 @@
             padding: 2rem;
             background: #fff;
             color: #333;
+            line-height: 1.6;
         }
-        h1 {
+        .header {
             text-align: center;
-        }
-        .meta {
-            font-size: 0.9rem;
-            color: #555;
-            margin-bottom: 2rem;
-            text-align: center;
-        }
-        .message {
             margin-bottom: 2rem;
             padding-bottom: 1rem;
-            border-bottom: 1px solid #ddd;
+            border-bottom: 2px solid #eee;
+        }
+        .header h1 {
+            color: #2c3e50;
+            margin-bottom: 0.5rem;
+        }
+        .metadata {
+            color: #666;
+            font-size: 0.9rem;
+        }
+        .message {
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            border-radius: 8px;
+            background: #f8f9fa;
         }
         .sender {
             font-weight: bold;
-            font-size: 1.1rem;
+            color: #2c3e50;
             margin-bottom: 0.5rem;
+            font-size: 1.1rem;
+        }
+        .content {
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
         pre {
             background: #f4f4f4;
             padding: 1rem;
+            border-radius: 4px;
             overflow-x: auto;
-            border-radius: 5px;
-            font-family: monospace;
-            font-size: 0.9rem;
+            border-left: 4px solid #007acc;
         }
         code {
-            white-space: pre-wrap;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9rem;
         }
-        .content {
-            line-height: 1.5;
+        @media print {
+            body { margin: 0; padding: 1rem; }
+            .message { break-inside: avoid; }
         }
     </style>
 </head>
 <body>
-    <h1>${title}</h1>
-    <div class="meta">
-        <div><strong>Date:</strong> ${date}</div>
-        <div><strong>Source:</strong> <a href="${source}">${source}</a></div>
+    <div class="header">
+        <h1>${title}</h1>
+        <div class="metadata">
+            <div><strong>Date:</strong> ${date}</div>
+            <div><strong>Source:</strong> <a href="${source}">chat.openai.com</a></div>
+        </div>
     </div>
-    ${conversationHTML}
-    <script>
-        window.onload = () => {
-            window.print();
-        };
-    </script>
+    
+    <div class="conversation">
+        ${conversationHTML}
+    </div>
 </body>
-</html>
-        `;
+</html>`;
 
         const blob = new Blob([html], { type: 'text/html' });
         const url = URL.createObjectURL(blob);
-        window.open(url, '_blank');
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ChatGPT_Conversation_${date}.html`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
     // Add the export button when the DOM is fully loaded
