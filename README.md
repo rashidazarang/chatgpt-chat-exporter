@@ -1,8 +1,8 @@
-# ChatGPT Chat Exporter v0.3.0
+# ChatGPT & Gemini Chat Exporter v0.4.0
 
-Export your full ChatGPT conversations as clean, readable **Markdown** or **PDF** files — including all messages, sender labels, and code blocks.
+Export your full **ChatGPT** and **Google Gemini** conversations as clean, readable **Markdown** or **PDF** files — including all messages, sender labels, and code blocks.
 
-> **🎯 Major Update v0.3.0:** Fixed critical export issues including massive duplicates, broken sender detection, and missing messages. Now delivers 90%+ export accuracy with modern selector support.
+> **🎯 Major Update v0.4.0:** Added **Google Gemini** support! Now exports conversations from both ChatGPT and Gemini with the same high-quality accuracy and duplicate prevention.
 
 ![ChatGPT Chat Exporter in action](demo/demo.gif)
 
@@ -10,39 +10,42 @@ Export your full ChatGPT conversations as clean, readable **Markdown** or **PDF*
 
 ## ✅ Features
 
+- 🆕 **NEW:** **Google Gemini** conversation export support
 - ✅ **Fixed:** Eliminates massive message duplicates (4x+ repetition)
 - ✅ **Fixed:** Accurate sender detection and message counting
 - ✅ **New:** Extracts actual conversation titles (not just generic names)
-- ✅ **Enhanced:** Modern selector cascade for future ChatGPT updates
+- ✅ **Enhanced:** Modern selector cascade for future interface updates
 - ✅ **Reliable:** Intelligent duplicate prevention and content validation
 - 📝 Captures **all messages** with proper sender attribution
 - 🔧 Preserves **code blocks**, formatting, and structure
 - 📄 Supports export as **Markdown** or **Printable PDF**
 - 🚀 Works directly from browser — no install required
-- 🛡️ Future-proof against ChatGPT interface changes
+- 🛡️ Future-proof against interface changes
+
+## 🎯 Supported Platforms
+
+| Platform | Status | Export Formats |
+|----------|--------|---------------|
+| **ChatGPT** | ✅ Full Support | Markdown, PDF |
+| **Google Gemini** | ✅ Full Support | Markdown |
+| Claude | 🔄 Coming Soon | - |
 
 ---
 
 ## 📦 How to Use
 
-### Method 1: Console Method
+### ChatGPT Conversations
 
-If you prefer the manual method:
-
-#### Export as Markdown
+#### Method 1: Console Method
 1. Open a conversation in ChatGPT
 2. Open DevTools → Console
-3. Paste contents of **[ChatGPT Markdown Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-markdown.js)** 
-4. Hit Enter — `.md` file will download
-
-#### Export as PDF
-1. Same as above — paste **[ChatGPT PDF Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-pdf.js)**
-2. A printable tab opens with full conversation
-3. Click **Save as PDF**
+3. **For Markdown:** Paste contents of **[exporter-markdown.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-markdown.js)** 
+4. **For PDF:** Paste contents of **[exporter-pdf.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-pdf.js)**
+5. Hit Enter — file will download
 
 ---
 
-### Method 2: Install as Userscript (Recommended)
+#### Method 2: Install as Userscript (Recommended)
 
 This is the safest and most convenient method:
 
@@ -65,6 +68,14 @@ This is the safest and most convenient method:
 
 3. Open ChatGPT and click the "Export as Markdown" or "Export as PDF" button that appears in the sidebar.
 
+### Google Gemini Conversations
+
+#### Console Method
+1. Open your conversation at [gemini.google.com](https://gemini.google.com)
+2. Open DevTools → Console (F12)
+3. Paste contents of **[gemini-exporter-markdown.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/gemini-exporter-markdown.js)**
+4. Hit Enter — `.md` file downloads automatically
+
 ---
 
 ## 🖼️ Demo
@@ -75,27 +86,27 @@ This is the safest and most convenient method:
 
 ---
 
-## 🔧 What's Fixed in v0.3.0
+## 🔧 What's New in v0.4.0
 
-**Before v0.3.0:**
-- ❌ Massive duplicates (5 messages → 20+ exports)
-- ❌ Missing user messages 
-- ❌ Broken sender detection (consecutive ChatGPT responses)
-- ❌ Generic "Conversation with ChatGPT" titles
+**New Features:**
+- 🆕 **Google Gemini Support**: Full conversation export for Gemini
+- 🎯 **Multi-Platform**: One repository for all AI chat exports
+- 🔧 **Unified Codebase**: Shared logic and improvements across platforms
 
-**After v0.3.0:**
-- ✅ Clean exports (8 messages → 9 exports, 95% accuracy)
-- ✅ Proper conversation titles extracted from page
-- ✅ Robust multi-method sender identification
-- ✅ Modern data attributes + legacy fallbacks
-- ✅ Console logging for transparency
+**Enhanced Features (Both Platforms):**
+- ✅ Modern selector cascade with platform-specific optimizations
+- ✅ Platform-specific sender detection and content processing
+- ✅ Intelligent duplicate prevention across both platforms
+- ✅ Conversation title extraction for better file naming
+- ✅ Console logging for transparency and debugging
 
 ---
 
 ## 🚀 Version History
 
-- **v0.3.0** (Current) - Major stability fixes, modern selectors, duplicate prevention
-- **v0.2.0** (Archived) - Original working version  
+- **v0.4.0** (Current) - Added Google Gemini support, multi-platform architecture
+- **v0.3.0** - Major ChatGPT stability fixes, modern selectors, duplicate prevention
+- **v0.2.0** (Archived) - Original ChatGPT working version  
 - **v1.1.0** (UserScript) - Latest stable userscript releases
 
 ---
