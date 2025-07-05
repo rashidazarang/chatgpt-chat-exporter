@@ -11,25 +11,12 @@ Export your full **ChatGPT** and **Google Gemini** conversations as clean, reada
 ## ✅ Features
 
 - 🆕 **NEW:** **Google Gemini** conversation export support
-- ✅ **Fixed:** Eliminates massive message duplicates (4x+ repetition)
-- ✅ **Fixed:** Accurate sender detection and message counting
-- ✅ **New:** Extracts actual conversation titles (not just generic names)
-- ✅ **Enhanced:** Modern selector cascade for future interface updates
-- ✅ **Reliable:** Intelligent duplicate prevention and content validation
 - 📝 Captures **all messages** with proper sender attribution
 - 🔧 Preserves **code blocks**, formatting, and structure
 - 📄 Supports export as **Markdown** or **Printable PDF**
 - 🚀 Works directly from browser — no install required
 - 🛡️ Future-proof against interface changes
-
-## 🎯 Supported Platforms
-
-| Platform | Status | Export Formats |
-|----------|--------|---------------|
-| **ChatGPT** | ✅ Full Support | Markdown, PDF |
-| **Google Gemini** | ✅ Full Support | Markdown |
-| Claude | 🔄 Coming Soon | - |
-
+  
 ---
 
 ## 📦 How to Use
