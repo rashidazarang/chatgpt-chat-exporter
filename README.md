@@ -77,7 +77,6 @@ This is the safest and most convenient method:
 
 **New Features:**
 - 🆕 **Google Gemini Support**: Full conversation export for Gemini
-- 🎯 **Multi-Platform**: One repository for all AI chat exports
 - 🔧 **Unified Codebase**: Shared logic and improvements across platforms
 
 **Enhanced Features (Both Platforms):**
