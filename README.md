@@ -1,4 +1,4 @@
-# ChatGPT & Gemini Chat Exporter v0.4.0
+# ChatGPT Chat Exporter v0.4.0
 
 Export your full **ChatGPT** and **Google Gemini** conversations as clean, readable **Markdown** or **PDF** files — including all messages, sender labels, and code blocks.
 
