@@ -27,8 +27,8 @@ Export your full **ChatGPT** conversations as clean, readable **Markdown** or **
 #### Method 1: Console Method
 1. Open a conversation in ChatGPT
 2. Open DevTools → Console
-3. **For Markdown:** Paste contents of **[exporter-markdown.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-markdown.js)** 
-4. **For PDF:** Paste contents of **[exporter-pdf.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-pdf.js)**
+3. **For Markdown:** Paste contents of **[chatgpt-exporter-markdown.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-markdown.js)** 
+4. **For PDF:** Paste contents of **[chatgpt-exporter-pdf.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-pdf.js)**
 5. Hit Enter — file will download
 
 ---
