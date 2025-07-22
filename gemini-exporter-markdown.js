@@ -1,314 +1,384 @@
 (() => {
-    function formatDate(date = new Date()) {
-        return date.toISOString().split('T')[0];
-    }
+    'use strict';
 
-    function cleanMarkdown(text) {
-        return text
-            // Only escape backslashes that aren't already escaping something
+    // Configuration object for easy maintenance
+    const CONFIG = {
+        selectors: {
+            messages: [
+                '[data-test-id="conversation-turn"]',
+                '[class*="conversation-turn"]',
+                'model-response',
+                '[role="presentation"] > div',
+                '.conversation-container > div',
+                '[class*="message"]',
+                'div[class*="turn"]:not([class*="turn"] [class*="turn"])'
+            ],
+            title: [
+                'h1:not([class*="hidden"])',
+                '[class*="conversation-title"]',
+                '[data-testid*="conversation-title"]',
+                '[aria-label*="conversation"]'
+            ],
+            uiElements: 'button, svg, [class*="copy"], [class*="edit"], [class*="regenerate"], [class*="more"], [aria-label*="copy"]',
+            codeBlocks: 'pre',
+            media: 'img, canvas'
+        },
+        patterns: {
+            geminiIndicators: /^(i understand|i can help|here's|i'll|let me|i'd be happy|certainly|of course|absolutely)/i,
+            userIndicators: /^(can you|please help|how do i|i need|i want|help me|could you|explain|what is)/i,
+            genericTitles: /^(gemini|new chat|untitled|chat|bard)$/i
+        },
+        limits: {
+            minMessageLength: 30,
+            maxMessageLength: 100000,
+            minWords: 5,
+            contentHashLength: 100
+        }
+    };
+
+    // Utility functions
+    const utils = {
+        formatDate: (date = new Date()) => date.toISOString().split('T')[0],
+        
+        cleanMarkdown: (text) => text
             .replace(/\\(?![\\*_`])/g, '\\\\')
-            // Clean up excessive newlines
             .replace(/\n{3,}/g, '\n\n')
-            // Remove any HTML entities that might have leaked through
             .replace(/&lt;/g, '<')
             .replace(/&gt;/g, '>')
-            .replace(/&amp;/g, '&');
-    }
-
-    function processMessageContent(element) {
-        const clone = element.cloneNode(true);
-
-        // Remove UI elements that shouldn't be in the export
-        clone.querySelectorAll('button, svg, [class*="copy"], [class*="edit"], [class*="regenerate"], [class*="more"], [aria-label*="copy"]').forEach(el => el.remove());
-
-        // Replace <pre><code> blocks with proper markdown
-        clone.querySelectorAll('pre').forEach(pre => {
-            const code = pre.innerText.trim();
-            const langMatch = pre.querySelector('code')?.className?.match(/language-([a-zA-Z0-9]+)/);
-            const lang = langMatch ? langMatch[1] : '';
-            const codeBlock = document.createTextNode(`\n\n\`\`\`${lang}\n${code}\n\`\`\`\n`);
-            pre.parentNode.replaceChild(codeBlock, pre);
-        });
-
-        // Replace images and canvas with placeholders
-        clone.querySelectorAll('img, canvas').forEach(el => {
-            const placeholder = document.createTextNode('[Image or Canvas]');
-            el.parentNode.replaceChild(placeholder, el);
-        });
-
-        // Convert remaining HTML to clean markdown text
-        return cleanMarkdown(clone.innerText.trim());
-    }
-
-    function findMessages() {
-        // Gemini-specific selectors
-        const selectors = [
-            '[data-test-id="conversation-turn"]', // Gemini conversation turns
-            '[class*="conversation-turn"]', // Alternative conversation turn class
-            'model-response', // Gemini response elements
-            '[role="presentation"] > div', // Message containers
-            '.conversation-container > div', // Direct children of conversation
-            '[class*="message"]', // Generic message containers
-            'div[class*="turn"]:not([class*="turn"] [class*="turn"])', // Top-level turns only
-        ];
-
-        let messages = [];
-        for (const selector of selectors) {
-            messages = document.querySelectorAll(selector);
-            if (messages.length > 0) {
-                console.log(`Using selector: ${selector}, found ${messages.length} messages`);
-                break;
-            }
-        }
-
-        if (messages.length === 0) {
-            // Fallback: try to find conversation container and parse its structure
-            const conversationContainer = document.querySelector(
-                '[role="main"], main, .conversation, [class*="conversation"], [class*="chat"]'
-            );
-            if (conversationContainer) {
-                // Look for direct children that seem like message containers
-                messages = conversationContainer.querySelectorAll(':scope > div, :scope > article');
-                console.log(`Fallback: found ${messages.length} potential messages in conversation container`);
-            }
-        }
-
-        // Filter and validate messages
-        const validMessages = Array.from(messages).filter(msg => {
-            const text = msg.textContent.trim();
-            
-            // Must have substantial content
-            if (text.length < 30) return false;
-            if (text.length > 100000) return false;
-            
-            // Skip elements that are clearly UI components
-            if (msg.querySelector('input[type="text"], textarea')) return false;
-            if (msg.classList.contains('typing') || msg.classList.contains('loading')) return false;
-            
-            // Must contain meaningful content (not just buttons/UI)
-            const meaningfulText = text.replace(/\s+/g, ' ').trim();
-            if (meaningfulText.split(' ').length < 5) return false;
-            
-            return true;
-        });
-
-        // Remove nested messages and consolidate content
-        const consolidatedMessages = [];
-        const usedElements = new Set();
-
-        validMessages.forEach(msg => {
-            if (usedElements.has(msg)) return;
-            
-            // Check if this message is nested within another valid message
-            const isNested = validMessages.some(other => 
-                other !== msg && other.contains(msg) && !usedElements.has(other)
-            );
-            
-            if (!isNested) {
-                consolidatedMessages.push(msg);
-                usedElements.add(msg);
-            }
-        });
-
-        return consolidatedMessages;
-    }
-
-    function identifySender(messageElement, index, allMessages) {
-        // Method 1: Check for Gemini-specific data attributes
-        const modelRole = messageElement.getAttribute('data-message-author-role');
-        if (modelRole) {
-            return modelRole === 'user' ? 'You' : 'Gemini';
-        }
-
-        // Method 2: Look for avatar images with Gemini-specific detection
-        const avatars = messageElement.querySelectorAll('img');
-        for (const avatar of avatars) {
-            const alt = avatar.alt?.toLowerCase() || '';
-            const src = avatar.src?.toLowerCase() || '';
-            const classes = avatar.className?.toLowerCase() || '';
-            
-            // User indicators
-            if (alt.includes('user') || src.includes('user') || classes.includes('user')) {
-                return 'You';
-            }
-            
-            // Gemini indicators
-            if (alt.includes('gemini') || alt.includes('assistant') || alt.includes('bard') || 
-                src.includes('assistant') || src.includes('gemini') || classes.includes('assistant')) {
-                return 'Gemini';
-            }
-        }
-
-        // Method 3: Content analysis with Gemini-specific patterns
-        const text = messageElement.textContent.toLowerCase();
-        const textStart = text.substring(0, 200); // Look at beginning of message
+            .replace(/&amp;/g, '&'),
         
-        // Strong Gemini indicators
-        if (textStart.match(/^(i understand|i can help|here's|i'll|let me|i'd be happy|certainly|of course|absolutely)/)) {
-            return 'Gemini';
-        }
+        createContentHash: (content) => 
+            content.substring(0, CONFIG.limits.contentHashLength)
+                   .replace(/\s+/g, ' ')
+                   .trim(),
         
-        // Strong user indicators  
-        if (textStart.match(/^(can you|please help|how do i|i need|i want|help me|could you|explain|what is)/)) {
-            return 'You';
-        }
+        isValidMessageLength: (text) => {
+            const { minMessageLength, maxMessageLength, minWords } = CONFIG.limits;
+            return text.length >= minMessageLength && 
+                   text.length <= maxMessageLength && 
+                   text.split(' ').length >= minWords;
+        },
 
-        // Method 4: Structural analysis - look at DOM structure
-        const hasCodeBlocks = messageElement.querySelectorAll('pre, code').length > 0;
-        const hasLongText = messageElement.textContent.length > 200;
-        const hasLists = messageElement.querySelectorAll('ul, ol, li').length > 0;
+        logStep: (message, data) => console.log(`[Gemini Exporter] ${message}`, data || ''),
         
-        // Gemini messages tend to be longer and more structured
-        if (hasCodeBlocks && hasLongText && hasLists) {
-            return 'Gemini';
+        showError: (message, details) => {
+            console.error(`[Gemini Exporter] ${message}`, details);
+            alert(`Export failed: ${message}`);
         }
+    };
 
-        // Method 5: Check for Gemini-specific CSS classes or containers
-        const classes = messageElement.className?.toLowerCase() || '';
-        const parentClasses = messageElement.parentElement?.className?.toLowerCase() || '';
-        
-        if (classes.includes('model-response') || classes.includes('assistant') ||
-            parentClasses.includes('model-response') || parentClasses.includes('assistant')) {
-            return 'Gemini';
-        }
-
-        // Method 6: Position-based fallback with better logic
-        if (index > 0 && allMessages[index - 1]) {
-            const prevText = allMessages[index - 1].textContent;
-            const currentText = messageElement.textContent;
+    // Message processing functions
+    const messageProcessor = {
+        processContent: (element) => {
+            const clone = element.cloneNode(true);
             
-            // If previous was short and current is long, likely user -> assistant
-            if (prevText.length < 100 && currentText.length > 300) {
-                return 'Gemini';
-            }
+            // Remove UI elements
+            clone.querySelectorAll(CONFIG.selectors.uiElements)
+                 .forEach(el => el.remove());
             
-            // If previous was long and current is short, likely assistant -> user  
-            if (prevText.length > 300 && currentText.length < 100) {
-                return 'You';
+            // Process code blocks
+            messageProcessor.processCodeBlocks(clone);
+            
+            // Replace media with placeholders
+            clone.querySelectorAll(CONFIG.selectors.media)
+                 .forEach(el => el.parentNode.replaceChild(
+                     document.createTextNode('[Image or Canvas]'), el
+                 ));
+            
+            return utils.cleanMarkdown(clone.innerText.trim());
+        },
+
+        processCodeBlocks: (clone) => {
+            clone.querySelectorAll(CONFIG.selectors.codeBlocks).forEach(pre => {
+                const code = pre.innerText.trim();
+                const langMatch = pre.querySelector('code')?.className?.match(/language-([a-zA-Z0-9]+)/);
+                const lang = langMatch ? langMatch[1] : '';
+                const codeBlock = document.createTextNode(`\n\n\`\`\`${lang}\n${code}\n\`\`\`\n`);
+                pre.parentNode.replaceChild(codeBlock, pre);
+            });
+        },
+
+        identifySender: (messageElement, index, allMessages) => {
+            // Try different identification methods in order of reliability
+            const methods = [
+                () => messageProcessor.checkDataAttributes(messageElement),
+                () => messageProcessor.checkAvatars(messageElement),
+                () => messageProcessor.analyzeContent(messageElement),
+                () => messageProcessor.analyzeStructure(messageElement),
+                () => messageProcessor.checkClasses(messageElement),
+                () => messageProcessor.contextualAnalysis(messageElement, index, allMessages)
+            ];
+
+            for (const method of methods) {
+                const result = method();
+                if (result) return result;
             }
+
+            // Final fallback
+            return index % 2 === 0 ? 'You' : 'Gemini';
+        },
+
+        checkDataAttributes: (element) => {
+            const role = element.getAttribute('data-message-author-role');
+            return role === 'user' ? 'You' : role === 'model' ? 'Gemini' : null;
+        },
+
+        checkAvatars: (element) => {
+            const avatars = element.querySelectorAll('img');
+            for (const avatar of avatars) {
+                const attrs = [avatar.alt, avatar.src, avatar.className]
+                    .filter(Boolean)
+                    .join(' ')
+                    .toLowerCase();
+                
+                if (attrs.includes('user')) return 'You';
+                if (attrs.match(/gemini|assistant|bard/)) return 'Gemini';
+            }
+            return null;
+        },
+
+        analyzeContent: (element) => {
+            const textStart = element.textContent.toLowerCase().substring(0, 200);
+            if (CONFIG.patterns.geminiIndicators.test(textStart)) return 'Gemini';
+            if (CONFIG.patterns.userIndicators.test(textStart)) return 'You';
+            return null;
+        },
+
+        analyzeStructure: (element) => {
+            const hasCodeBlocks = element.querySelectorAll('pre, code').length > 0;
+            const hasLongText = element.textContent.length > 200;
+            const hasLists = element.querySelectorAll('ul, ol, li').length > 0;
+            
+            return (hasCodeBlocks && hasLongText && hasLists) ? 'Gemini' : null;
+        },
+
+        checkClasses: (element) => {
+            const classes = [element.className, element.parentElement?.className]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase();
+            
+            if (classes.match(/model-response|assistant/)) return 'Gemini';
+            if (classes.includes('user')) return 'You';
+            return null;
+        },
+
+        contextualAnalysis: (element, index, allMessages) => {
+            if (index === 0 || !allMessages[index - 1]) return null;
+            
+            const prevLength = allMessages[index - 1].textContent.length;
+            const currentLength = element.textContent.length;
+            
+            if (prevLength < 100 && currentLength > 300) return 'Gemini';
+            if (prevLength > 300 && currentLength < 100) return 'You';
+            return null;
         }
+    };
 
-        // Final fallback
-        return index % 2 === 0 ? 'You' : 'Gemini';
-    }
-
-    function extractConversationTitle() {
-        // Try to get actual conversation title for Gemini
-        const titleSelectors = [
-            'h1:not([class*="hidden"])',
-            '[class*="conversation-title"]',
-            '[data-testid*="conversation-title"]',
-            '[aria-label*="conversation"]',
-            'title'
-        ];
-
-        for (const selector of titleSelectors) {
-            const element = document.querySelector(selector);
-            if (element && element.textContent.trim()) {
-                const title = element.textContent.trim();
-                // Avoid generic titles
-                if (!['gemini', 'new chat', 'untitled', 'chat', 'bard'].includes(title.toLowerCase())) {
-                    return title;
+    // Message finder with improved error handling
+    const messageFinder = {
+        find: () => {
+            utils.logStep('Searching for messages...');
+            
+            // Try each selector until we find messages
+            for (const selector of CONFIG.selectors.messages) {
+                const messages = document.querySelectorAll(selector);
+                if (messages.length > 0) {
+                    utils.logStep(`Found ${messages.length} messages with selector: ${selector}`);
+                    return messageFinder.validateMessages(Array.from(messages));
                 }
             }
-        }
 
-        return 'Conversation with Gemini';
-    }
+            // Fallback approach
+            return messageFinder.fallbackSearch();
+        },
 
-    // Main export logic
-    const messages = findMessages();
-    
-    if (messages.length === 0) {
-        alert('No messages found. The page structure may have changed.');
-        return;
-    }
+        validateMessages: (messages) => {
+            return messages.filter(msg => {
+                const text = msg.textContent.trim();
+                
+                if (!utils.isValidMessageLength(text)) return false;
+                if (msg.querySelector('input[type="text"], textarea')) return false;
+                if (msg.classList.contains('typing') || msg.classList.contains('loading')) return false;
+                
+                return true;
+            });
+        },
 
-    console.log(`Processing ${messages.length} messages...`);
-
-    const lines = [];
-    const title = extractConversationTitle();
-    const date = formatDate();
-    const url = window.location.href;
-
-    lines.push(`# ${title}\n`);
-    lines.push(`**Date:** ${date}`);
-    lines.push(`**Source:** [gemini.google.com](${url})\n`);
-    lines.push(`---\n`);
-
-    // Process messages with better duplicate detection
-    const processedMessages = [];
-    const seenContent = new Set();
-
-    messages.forEach((messageElement, index) => {
-        const sender = identifySender(messageElement, index, messages);
-        const content = processMessageContent(messageElement);
-        
-        // Skip if empty or too short
-        if (!content || content.trim().length < 30) {
-            console.log(`Skipping message ${index}: too short or empty`);
-            return;
-        }
-
-        // Create a content hash for duplicate detection
-        const contentHash = content.substring(0, 100).replace(/\s+/g, ' ').trim();
-        if (seenContent.has(contentHash)) {
-            console.log(`Skipping message ${index}: duplicate content`);
-            return;
-        }
-        seenContent.add(contentHash);
-
-        processedMessages.push({
-            sender,
-            content,
-            originalIndex: index
-        });
-    });
-
-    // Apply sender sequence correction
-    for (let i = 1; i < processedMessages.length; i++) {
-        const current = processedMessages[i];
-        const previous = processedMessages[i - 1];
-        
-        // If we have two consecutive messages from the same sender, try to fix it
-        if (current.sender === previous.sender) {
-            // Use content analysis to determine which should be flipped
-            const currentLength = current.content.length;
-            const previousLength = previous.content.length;
+        fallbackSearch: () => {
+            utils.logStep('Trying fallback search...');
+            const container = document.querySelector(
+                '[role="main"], main, .conversation, [class*="conversation"], [class*="chat"]'
+            );
             
-            // If current message is much longer, it's likely Gemini
-            if (currentLength > previousLength * 2 && currentLength > 500) {
-                current.sender = 'Gemini';
-            } else if (previousLength > currentLength * 2 && previousLength > 500) {
-                previous.sender = 'Gemini';
-                current.sender = 'You';
-            } else {
-                // Default alternating fix
-                current.sender = current.sender === 'You' ? 'Gemini' : 'You';
+            if (!container) return [];
+            
+            const messages = container.querySelectorAll(':scope > div, :scope > article');
+            utils.logStep(`Fallback found ${messages.length} potential messages`);
+            
+            return messageFinder.validateMessages(Array.from(messages));
+        },
+
+        consolidateMessages: (messages) => {
+            const consolidated = [];
+            const usedElements = new Set();
+
+            messages.forEach(msg => {
+                if (usedElements.has(msg)) return;
+                
+                const isNested = messages.some(other => 
+                    other !== msg && other.contains(msg) && !usedElements.has(other)
+                );
+                
+                if (!isNested) {
+                    consolidated.push(msg);
+                    usedElements.add(msg);
+                }
+            });
+
+            return consolidated;
+        }
+    };
+
+    // Export functionality
+    const exporter = {
+        extractTitle: () => {
+            for (const selector of CONFIG.selectors.title) {
+                const element = document.querySelector(selector);
+                if (element?.textContent?.trim()) {
+                    const title = element.textContent.trim();
+                    if (!CONFIG.patterns.genericTitles.test(title)) {
+                        return title;
+                    }
+                }
             }
-            
-            console.log(`Fixed consecutive ${previous.sender} messages at positions ${i-1} and ${i}`);
+            return 'Conversation with Gemini';
+        },
+
+        processMessages: (messages) => {
+            const processed = [];
+            const seenContent = new Set();
+
+            messages.forEach((messageElement, index) => {
+                try {
+                    const content = messageProcessor.processContent(messageElement);
+                    
+                    if (!content || content.trim().length < CONFIG.limits.minMessageLength) {
+                        utils.logStep(`Skipping message ${index}: too short`);
+                        return;
+                    }
+
+                    const contentHash = utils.createContentHash(content);
+                    if (seenContent.has(contentHash)) {
+                        utils.logStep(`Skipping message ${index}: duplicate`);
+                        return;
+                    }
+                    seenContent.add(contentHash);
+
+                    const sender = messageProcessor.identifySender(messageElement, index, messages);
+                    processed.push({ sender, content, originalIndex: index });
+                    
+                } catch (error) {
+                    utils.logStep(`Error processing message ${index}:`, error.message);
+                }
+            });
+
+            return exporter.fixSenderSequence(processed);
+        },
+
+        fixSenderSequence: (messages) => {
+            for (let i = 1; i < messages.length; i++) {
+                const current = messages[i];
+                const previous = messages[i - 1];
+                
+                if (current.sender === previous.sender) {
+                    const currentLength = current.content.length;
+                    const previousLength = previous.content.length;
+                    
+                    if (currentLength > previousLength * 2 && currentLength > 500) {
+                        current.sender = 'Gemini';
+                    } else if (previousLength > currentLength * 2 && previousLength > 500) {
+                        previous.sender = 'Gemini';
+                        current.sender = 'You';
+                    } else {
+                        current.sender = current.sender === 'You' ? 'Gemini' : 'You';
+                    }
+                    
+                    utils.logStep(`Fixed consecutive messages at positions ${i-1} and ${i}`);
+                }
+            }
+            return messages;
+        },
+
+        generateMarkdown: (messages) => {
+            const title = exporter.extractTitle();
+            const date = utils.formatDate();
+            const url = window.location.href;
+
+            const lines = [
+                `# ${title}\n`,
+                `**Date:** ${date}`,
+                `**Source:** [gemini.google.com](${url})\n`,
+                `---\n`
+            ];
+
+            messages.forEach(({ sender, content }) => {
+                lines.push(`### **${sender}**\n`, content, '\n---\n');
+            });
+
+            return lines.join('\n');
+        },
+
+        downloadFile: (content, filename) => {
+            try {
+                const blob = new Blob([content], { type: 'text/markdown' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                return true;
+            } catch (error) {
+                utils.showError('Failed to download file', error);
+                return false;
+            }
         }
+    };
+
+    // Main execution with comprehensive error handling
+    try {
+        utils.logStep('Starting Gemini conversation export...');
+        
+        const rawMessages = messageFinder.find();
+        if (rawMessages.length === 0) {
+            utils.showError('No messages found. The page structure may have changed.');
+            return;
+        }
+
+        const consolidatedMessages = messageFinder.consolidateMessages(rawMessages);
+        utils.logStep(`Consolidated ${rawMessages.length} raw messages into ${consolidatedMessages.length} valid messages`);
+
+        const processedMessages = exporter.processMessages(consolidatedMessages);
+        if (processedMessages.length === 0) {
+            utils.showError('No valid messages could be processed.');
+            return;
+        }
+
+        const markdown = exporter.generateMarkdown(processedMessages);
+        const filename = `Gemini_Conversation_${utils.formatDate()}.md`;
+        
+        if (exporter.downloadFile(markdown, filename)) {
+            utils.logStep(`Export completed successfully: ${processedMessages.length} messages exported`);
+            console.log(`File downloaded: ${filename}`);
+        }
+
+    } catch (error) {
+        utils.showError('Unexpected error during export', error);
+        console.error('[Gemini Exporter] Full error details:', error);
     }
-
-    // Generate final output
-    processedMessages.forEach(({ sender, content }) => {
-        lines.push(`### **${sender}**\n`);
-        lines.push(content);
-        lines.push('\n---\n');
-    });
-
-    // Create and download file
-    const markdownContent = lines.join('\n');
-    const blob = new Blob([markdownContent], { type: 'text/markdown' });
-    const url2 = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url2;
-    a.download = `Gemini_Conversation_${date}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url2);
-
-    console.log(`Export completed: ${processedMessages.length} messages exported`);
-})(); 
+})();
