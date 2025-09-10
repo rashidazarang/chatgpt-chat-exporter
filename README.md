@@ -1,5 +1,5 @@
 # ChatGPT Chat Exporter 
-*Version: v0.4.0*
+*Version: v0.5.0*
 
 Export your full **ChatGPT** conversations as clean, readable **Markdown** or **PDF** files — including all messages, sender labels, and code blocks.
 
