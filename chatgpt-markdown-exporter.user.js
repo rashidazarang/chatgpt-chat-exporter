@@ -1,15 +1,58 @@
+// ==UserScript==
+// @name         ChatGPT Chat Exporter - Markdown
+// @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
+// @version      0.5.0
+// @description  Export ChatGPT conversations to Markdown format
+// @author       rashidazarang
+// @match        https://chat.openai.com/*
+// @match        https://chatgpt.com/*
+// @match        https://chatgpt.com/c/*
+// @grant        none
+// @license      MIT
+// ==/UserScript==
+
 (() => {
+    'use strict';
+
     function formatDate(date = new Date()) {
         return date.toISOString().split('T')[0];
     }
 
-    function sanitize(text) {
+    function cleanMarkdown(text) {
         return text
-            .replace(/&/g, '&amp;')  // Replace & first to avoid double-escaping
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
+            // Only escape backslashes that aren't already escaping something
+            .replace(/\\(?![\\*_`])/g, '\\\\')
+            // Clean up excessive newlines
+            .replace(/\n{3,}/g, '\n\n')
+            // Remove any HTML entities that might have leaked through
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&amp;/g, '&');
+    }
+
+    function processMessageContent(element) {
+        const clone = element.cloneNode(true);
+
+        // Remove UI elements that shouldn't be in the export
+        clone.querySelectorAll('button, svg, [class*="copy"], [class*="edit"], [class*="regenerate"]').forEach(el => el.remove());
+
+        // Replace <pre><code> blocks with proper markdown
+        clone.querySelectorAll('pre').forEach(pre => {
+            const code = pre.innerText.trim();
+            const langMatch = pre.querySelector('code')?.className?.match(/language-([a-zA-Z0-9]+)/);
+            const lang = langMatch ? langMatch[1] : '';
+            const codeBlock = document.createTextNode(`\n\n\`\`\`${lang}\n${code}\n\`\`\`\n`);
+            pre.parentNode.replaceChild(codeBlock, pre);
+        });
+
+        // Replace images and canvas with placeholders
+        clone.querySelectorAll('img, canvas').forEach(el => {
+            const placeholder = document.createTextNode('[Image or Canvas]');
+            el.parentNode.replaceChild(placeholder, el);
+        });
+
+        // Convert remaining HTML to clean markdown text
+        return cleanMarkdown(clone.innerText.trim());
     }
 
     function findMessages() {
@@ -26,7 +69,7 @@
         for (const selector of selectors) {
             messages = document.querySelectorAll(selector);
             if (messages.length > 0) {
-                console.log(`HTML: Using selector: ${selector}, found ${messages.length} messages`);
+                console.log(`Using selector: ${selector}, found ${messages.length} messages`);
                 break;
             }
         }
@@ -37,7 +80,7 @@
             if (conversationContainer) {
                 // Look for direct children that seem like message containers
                 messages = conversationContainer.querySelectorAll(':scope > div, :scope > article');
-                console.log(`HTML: Fallback: found ${messages.length} potential messages in conversation container`);
+                console.log(`Fallback: found ${messages.length} potential messages in conversation container`);
             }
         }
 
@@ -172,18 +215,28 @@
             }
         }
 
-        return 'ChatGPT Conversation';
+        return 'Conversation with ChatGPT';
     }
 
-    function extractFormattedContent() {
+    function exportToMarkdown() {
         const messages = findMessages();
         
         if (messages.length === 0) {
-            console.log('HTML: No messages found. The page structure may have changed.');
-            return '<div class="message"><div class="content">No messages found.</div></div>';
+            alert('No messages found. The page structure may have changed.');
+            return;
         }
 
-        console.log(`HTML: Processing ${messages.length} messages...`);
+        console.log(`Processing ${messages.length} messages...`);
+
+        const lines = [];
+        const title = extractConversationTitle();
+        const date = formatDate();
+        const url = window.location.href;
+
+        lines.push(`# ${title}\n`);
+        lines.push(`**Date:** ${date}`);
+        lines.push(`**Source:** [chat.openai.com](${url})\n`);
+        lines.push(`---\n`);
 
         // Process messages with better duplicate detection
         const processedMessages = [];
@@ -191,39 +244,25 @@
 
         messages.forEach((messageElement, index) => {
             const sender = identifySender(messageElement, index, messages);
-            
-            // Remove UI elements that shouldn't be in the export
-            const clone = messageElement.cloneNode(true);
-            clone.querySelectorAll('button, svg, [class*="copy"], [class*="edit"], [class*="regenerate"]').forEach(el => el.remove());
-
-            clone.querySelectorAll('pre').forEach(pre => {
-                const code = sanitize(pre.innerText.trim());
-                pre.replaceWith(`<pre><code>${code}</code></pre>`);
-            });
-
-            clone.querySelectorAll('img, canvas').forEach(el => {
-                el.replaceWith('[Image or Canvas]');
-            });
-
-            const cleanText = sanitize(clone.innerText.trim()).replace(/\n/g, '<br>');
+            const content = processMessageContent(messageElement);
             
             // Skip if empty or too short
-            if (!cleanText || cleanText.trim().length < 30) {
-                console.log(`HTML: Skipping message ${index}: too short or empty`);
+            if (!content || content.trim().length < 30) {
+                console.log(`Skipping message ${index}: too short or empty`);
                 return;
             }
 
             // Create a content hash for duplicate detection
-            const contentHash = cleanText.substring(0, 100).replace(/\s+/g, ' ').trim();
+            const contentHash = content.substring(0, 100).replace(/\s+/g, ' ').trim();
             if (seenContent.has(contentHash)) {
-                console.log(`HTML: Skipping message ${index}: duplicate content`);
+                console.log(`Skipping message ${index}: duplicate content`);
                 return;
             }
             seenContent.add(contentHash);
 
             processedMessages.push({
                 sender,
-                content: cleanText,
+                content,
                 originalIndex: index
             });
         });
@@ -250,117 +289,84 @@
                     current.sender = current.sender === 'You' ? 'ChatGPT' : 'You';
                 }
                 
-                console.log(`HTML: Fixed consecutive ${previous.sender} messages at positions ${i-1} and ${i}`);
+                console.log(`Fixed consecutive ${previous.sender} messages at positions ${i-1} and ${i}`);
             }
         }
 
-        // Generate HTML output
-        let html = '';
+        // Generate final output
         processedMessages.forEach(({ sender, content }) => {
-            html += `
-                <div class="message">
-                    <div class="sender">${sender}</div>
-                    <div class="content">${content}</div>
-                </div>
-            `;
+            lines.push(`### **${sender}**\n`);
+            lines.push(content);
+            lines.push('\n---\n');
         });
 
-        console.log(`HTML: Export completed: ${processedMessages.length} messages exported`);
-        return html;
+        // Create and download file
+        const markdownContent = lines.join('\n');
+        const blob = new Blob([markdownContent], { type: 'text/markdown' });
+        const url2 = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url2;
+        // Use document title for better file naming (Issue #12)
+        const safeTitle = document.title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+        a.download = safeTitle ? `${safeTitle} (${date}).md` : `ChatGPT_Conversation_${date}.md`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url2);
+
+        console.log(`Export completed: ${processedMessages.length} messages exported`);
     }
 
-    const date = formatDate();
-    const source = window.location.href;
-    const title = extractConversationTitle();
-    const conversationHTML = extractFormattedContent();
+    // Add export button to the page
+    function addExportButton() {
+        // Check if button already exists
+        if (document.querySelector('#chatgpt-export-markdown-btn')) return;
 
-    const html = `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>${title} - ${date}</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', sans-serif;
-            max-width: 800px;
-            margin: auto;
-            padding: 2rem;
-            background: #fff;
-            color: #333;
-            line-height: 1.6;
+        const button = document.createElement('button');
+        button.id = 'chatgpt-export-markdown-btn';
+        button.textContent = 'Export as Markdown';
+        button.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background-color: #10a37f;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 10000;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        `;
+        
+        button.addEventListener('click', exportToMarkdown);
+        button.addEventListener('mouseenter', () => {
+            button.style.backgroundColor = '#0d8f6e';
+        });
+        button.addEventListener('mouseleave', () => {
+            button.style.backgroundColor = '#10a37f';
+        });
+        
+        document.body.appendChild(button);
+    }
+
+    // Wait for page to load
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', addExportButton);
+    } else {
+        // Add button after a short delay to ensure page is fully loaded
+        setTimeout(addExportButton, 1000);
+    }
+
+    // Re-add button if navigation changes (for SPAs)
+    const observer = new MutationObserver(() => {
+        if (!document.querySelector('#chatgpt-export-markdown-btn')) {
+            addExportButton();
         }
-        .header {
-            text-align: center;
-            margin-bottom: 2rem;
-            padding-bottom: 1rem;
-            border-bottom: 2px solid #eee;
-        }
-        .header h1 {
-            color: #2c3e50;
-            margin-bottom: 0.5rem;
-        }
-        .metadata {
-            color: #666;
-            font-size: 0.9rem;
-        }
-        .message {
-            margin-bottom: 1.5rem;
-            padding: 1rem;
-            border-radius: 8px;
-            background: #f8f9fa;
-        }
-        .sender {
-            font-weight: bold;
-            color: #2c3e50;
-            margin-bottom: 0.5rem;
-            font-size: 1.1rem;
-        }
-        .content {
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-        pre {
-            background: #f4f4f4;
-            padding: 1rem;
-            border-radius: 4px;
-            overflow-x: auto;
-            border-left: 4px solid #007acc;
-        }
-        code {
-            font-family: 'Consolas', 'Monaco', monospace;
-            font-size: 0.9rem;
-        }
-        @media print {
-            body { margin: 0; padding: 1rem; }
-            .message { break-inside: avoid; }
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>${title}</h1>
-        <div class="metadata">
-            <div><strong>Date:</strong> ${date}</div>
-            <div><strong>Source:</strong> <a href="${source}">chat.openai.com</a></div>
-        </div>
-    </div>
+    });
     
-    <div class="conversation">
-        ${conversationHTML}
-    </div>
-</body>
-</html>`;
-
-    const blob = new Blob([html], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    // Use document title for better file naming (Issue #12)
-    const safeTitle = document.title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
-    a.download = safeTitle ? `${safeTitle} (${date}).html` : `ChatGPT_Conversation_${date}.html`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    observer.observe(document.body, { childList: true, subtree: true });
 })();

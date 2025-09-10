@@ -1,6 +1,18 @@
+// ==UserScript==
+// @name         ChatGPT Chat Exporter - PDF
+// @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
+// @version      0.5.0
+// @description  Export ChatGPT conversations to PDF-ready HTML format
+// @author       rashidazarang
+// @match        https://chat.openai.com/*
+// @match        https://chatgpt.com/*
+// @match        https://chatgpt.com/c/*
+// @grant        none
+// @license      MIT
+// ==/UserScript==
+
 (() => {
-    // Direct PDF generation without external libraries
-    // This creates a data URL that triggers browser's print-to-PDF dialog
+    'use strict';
     
     function formatDate(date = new Date()) {
         return date.toISOString().split('T')[0];
@@ -131,22 +143,22 @@
         return 'ChatGPT Conversation';
     }
 
-    // Main export logic
-    const messages = findMessages();
-    
-    if (messages.length === 0) {
-        alert('No messages found. The page structure may have changed.');
-        return;
-    }
+    function exportToPDF() {
+        const messages = findMessages();
+        
+        if (messages.length === 0) {
+            alert('No messages found. The page structure may have changed.');
+            return;
+        }
 
-    console.log(`PDF: Processing ${messages.length} messages...`);
+        console.log(`PDF: Processing ${messages.length} messages...`);
 
-    const title = extractTitle();
-    const date = formatDate();
-    const url = window.location.href;
+        const title = extractTitle();
+        const date = formatDate();
+        const url = window.location.href;
 
-    // Create HTML content optimized for PDF printing
-    let htmlContent = `<!DOCTYPE html>
+        // Create HTML content optimized for PDF printing
+        let htmlContent = `<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -271,55 +283,109 @@
     
     <div class="conversation">`;
 
-    // Process messages
-    const seenContent = new Set();
-    let processedCount = 0;
+        // Process messages
+        const seenContent = new Set();
+        let processedCount = 0;
 
-    messages.forEach((messageElement, index) => {
-        const sender = identifySender(messageElement, index);
-        const content = processMessageContent(messageElement);
-        
-        if (!content || content.length < 10) return;
-        
-        const contentHash = content.substring(0, 100).replace(/\s+/g, ' ');
-        if (seenContent.has(contentHash)) return;
-        seenContent.add(contentHash);
-        
-        const senderClass = sender.toLowerCase() === 'you' ? 'user' : 'assistant';
-        
-        htmlContent += `
+        messages.forEach((messageElement, index) => {
+            const sender = identifySender(messageElement, index);
+            const content = processMessageContent(messageElement);
+            
+            if (!content || content.length < 10) return;
+            
+            const contentHash = content.substring(0, 100).replace(/\s+/g, ' ');
+            if (seenContent.has(contentHash)) return;
+            seenContent.add(contentHash);
+            
+            const senderClass = sender.toLowerCase() === 'you' ? 'user' : 'assistant';
+            
+            htmlContent += `
         <div class="message ${senderClass}">
             <div class="sender">${cleanText(sender)}</div>
             <div class="content">${cleanText(content).replace(/\[CODE\]([\s\S]*?)\[\/CODE\]/g, '<pre class="code-block">$1</pre>')}</div>
         </div>`;
-        
-        processedCount++;
-    });
+            
+            processedCount++;
+        });
 
-    htmlContent += `
+        htmlContent += `
     </div>
 </body>
 </html>`;
 
-    // Create blob and download
-    const blob = new Blob([htmlContent], { type: 'text/html' });
-    const url2 = URL.createObjectURL(blob);
-    
-    // Create download link
-    const a = document.createElement('a');
-    a.href = url2;
-    const safeTitle = document.title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
-    a.download = safeTitle ? `${safeTitle} (${date}) - PrintToPDF.html` : `ChatGPT_Conversation_${date}_PrintToPDF.html`;
-    
-    // Auto-download
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url2);
+        // Create blob and download
+        const blob = new Blob([htmlContent], { type: 'text/html' });
+        const url2 = URL.createObjectURL(blob);
+        
+        // Create download link
+        const a = document.createElement('a');
+        a.href = url2;
+        const safeTitle = document.title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+        a.download = safeTitle ? `${safeTitle} (${date}) - PrintToPDF.html` : `ChatGPT_Conversation_${date}_PrintToPDF.html`;
+        
+        // Auto-download
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url2);
 
-    console.log(`PDF: Export completed - ${processedCount} messages processed`);
-    console.log('PDF: The HTML file has been downloaded. Open it and press Ctrl+P (Cmd+P on Mac) to save as PDF.');
+        console.log(`PDF: Export completed - ${processedCount} messages processed`);
+        console.log('PDF: The HTML file has been downloaded. Open it and press Ctrl+P (Cmd+P on Mac) to save as PDF.');
+        
+        // Show instructions
+        alert(`✅ Export Complete!\n\n${processedCount} messages exported.\n\nTo create PDF:\n1. Open the downloaded HTML file\n2. Press Ctrl+P (Cmd+P on Mac)\n3. Choose "Save as PDF"\n4. Click Save\n\nThe yellow instruction box will not appear in the PDF.`);
+    }
+
+    // Add export button to the page
+    function addExportButton() {
+        // Check if button already exists
+        if (document.querySelector('#chatgpt-export-pdf-btn')) return;
+
+        const button = document.createElement('button');
+        button.id = 'chatgpt-export-pdf-btn';
+        button.textContent = 'Export as PDF';
+        button.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 180px;
+            padding: 10px 20px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 10000;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        `;
+        
+        button.addEventListener('click', exportToPDF);
+        button.addEventListener('mouseenter', () => {
+            button.style.backgroundColor = '#2c7fb8';
+        });
+        button.addEventListener('mouseleave', () => {
+            button.style.backgroundColor = '#3498db';
+        });
+        
+        document.body.appendChild(button);
+    }
+
+    // Wait for page to load
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', addExportButton);
+    } else {
+        // Add button after a short delay to ensure page is fully loaded
+        setTimeout(addExportButton, 1000);
+    }
+
+    // Re-add button if navigation changes (for SPAs)
+    const observer = new MutationObserver(() => {
+        if (!document.querySelector('#chatgpt-export-pdf-btn')) {
+            addExportButton();
+        }
+    });
     
-    // Show instructions
-    alert(`✅ Export Complete!\n\n${processedCount} messages exported.\n\nTo create PDF:\n1. Open the downloaded HTML file\n2. Press Ctrl+P (Cmd+P on Mac)\n3. Choose "Save as PDF"\n4. Click Save\n\nThe yellow instruction box will not appear in the PDF.`);
+    observer.observe(document.body, { childList: true, subtree: true });
 })();
