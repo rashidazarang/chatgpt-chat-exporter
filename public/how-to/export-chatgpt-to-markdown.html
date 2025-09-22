@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Export ChatGPT to Markdown - Free Open-Source Guide</title>
+    <meta name="description" content="Step-by-step guide to export ChatGPT conversations to Markdown (.md) files. Preserve code blocks, formatting, and structure. No extension needed.">
+    <link rel="canonical" href="https://rashidazarang.com/how-to/export-chatgpt-to-markdown">
+    <link rel="stylesheet" href="/assets/css/theme.css" />
+    <script src="/assets/js/nav.js" defer></script>
+    
+    <!-- HowTo Schema -->
+    <script type="application/ld+json">
+    {
+      "@context":"https://schema.org",
+      "@type":"HowTo",
+      "name":"How to Export ChatGPT Conversations to Markdown",
+      "description":"Use an open-source userscript or console snippet to export any ChatGPT chat as Markdown.",
+      "step":[
+        {
+          "@type":"HowToStep",
+          "name":"Install a userscript manager",
+          "text":"Install Tampermonkey or Violentmonkey extension in your browser (Chrome, Firefox, Edge, Safari).",
+          "url":"https://www.tampermonkey.net/"
+        },
+        {
+          "@type":"HowToStep",
+          "name":"Install the Markdown exporter userscript",
+          "text":"Visit the GreasyFork page and click Install to add the ChatGPT Markdown exporter.",
+          "url":"https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown"
+        },
+        {
+          "@type":"HowToStep",
+          "name":"Open a conversation in ChatGPT",
+          "text":"Navigate to chat.openai.com and open the conversation you want to export."
+        },
+        {
+          "@type":"HowToStep",
+          "name":"Click Export as Markdown",
+          "text":"Look for the new Export button in the ChatGPT interface and click it. The .md file will download automatically with smart naming."
+        }
+      ],
+      "totalTime":"PT2M",
+      "supply":[
+        {
+          "@type":"HowToSupply",
+          "name":"Web browser (Chrome, Firefox, Edge, or Safari)"
+        },
+        {
+          "@type":"HowToSupply",
+          "name":"Tampermonkey or Violentmonkey userscript manager"
+        },
+        {
+          "@type":"HowToSupply",
+          "name":"Active ChatGPT account"
+        }
+      ],
+      "tool":[
+        {
+          "@type":"HowToTool",
+          "name":"ChatGPT Chat Exporter userscript"
+        }
+      ],
+      "image":"https://rashidazarang.com/images/chatgpt-markdown-export-demo.png"
+    }
+    </script>
+
+</head>
+<body>
+    <header class="site-header">
+        <div class="nav-container">
+            <a class="nav-brand" href="/chatgpt-exporter">
+                <span>⚡</span>
+                ChatGPT Exporter
+            </a>
+            <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" data-nav-toggle>
+                <span class="sr-only">Toggle navigation</span>
+                <span class="nav-toggle-bars"></span>
+            </button>
+            <nav id="primary-nav" class="nav-links" data-nav-menu>
+                <a href="/chatgpt-exporter">Overview</a>
+                <a href="/how-to/export-chatgpt-to-markdown">Markdown</a>
+                <a href="/how-to/export-chatgpt-to-pdf">PDF</a>
+                <a href="/how-to/export-gemini-to-markdown">Gemini</a>
+                <a href="/compare/chatgpt-exporter-vs-extensions">Comparison</a>
+                <a href="/guide/export-all-chatgpt-data">Data Export</a>
+                <a href="/docs/chatgpt-exporter">Docs</a>
+                <a class="nav-cta" href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown?utm_source=site&utm_medium=nav&utm_campaign=chatgpt_exporter">Install Markdown</a>
+            </nav>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Breadcrumb -->
+        <div class="breadcrumb">
+            <a href="/">Home</a> → <a href="/chatgpt-exporter">ChatGPT Exporter</a> → Export to Markdown
+        </div>
+
+        <!-- Main Header -->
+        <h1>How to Export ChatGPT to Markdown (Free, Open-Source)</h1>
+        <div class="meta">
+            Last updated: January 2025 • 2 minute read • By Rashid Azarang
+        </div>
+
+        <!-- Introduction -->
+        <div class="intro">
+            <p><strong>Export any ChatGPT conversation to clean Markdown format</strong> with properly preserved code blocks, formatting, and structure. This guide shows you how to use the free, open-source ChatGPT Exporter to save your chats as .md files — perfect for note-taking apps like Obsidian, documentation, or version control.</p>
+            <p>→ <a href="/chatgpt-exporter">Learn more about ChatGPT Exporter</a></p>
+        </div>
+
+        <!-- Requirements -->
+        <div class="requirements">
+            <h2>📋 Prerequisites</h2>
+            <ul>
+                <li>A web browser (Chrome, Firefox, Edge, or Safari)</li>
+                <li>Either Tampermonkey/Violentmonkey installed OR access to browser console (F12)</li>
+                <li>An active ChatGPT account with conversations to export</li>
+            </ul>
+        </div>
+
+        <!-- Method 1: Userscript -->
+        <h2>Method 1: Userscript Installation (Recommended)</h2>
+        
+        <div class="step">
+            <h3><span class="step-number">1</span>Install a Userscript Manager</h3>
+            <p>First, you need a userscript manager. We recommend:</p>
+            <ul>
+                <li><strong>Tampermonkey:</strong> Available for <a href="https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo" target="_blank">Chrome</a>, <a href="https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/" target="_blank">Firefox</a>, <a href="https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd" target="_blank">Edge</a></li>
+                <li><strong>Violentmonkey:</strong> Open-source alternative for <a href="https://chrome.google.com/webstore/detail/violentmonkey/jinjaccalgkegednnccohejagnlnfdag" target="_blank">Chrome</a>, <a href="https://addons.mozilla.org/en-US/firefox/addon/violentmonkey/" target="_blank">Firefox</a></li>
+            </ul>
+            <p>Install one of these extensions from your browser's extension store.</p>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">2</span>Install the ChatGPT Markdown Exporter</h3>
+            <p>Once you have a userscript manager installed:</p>
+            <ol>
+                <li>Visit the <a href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown" target="_blank">ChatGPT Markdown Exporter on GreasyFork</a></li>
+                <li>Click the green <strong>"Install this script"</strong> button</li>
+                <li>Your userscript manager will open — click <strong>"Install"</strong> again</li>
+            </ol>
+            <p>The script is now installed and will automatically run on ChatGPT.</p>
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">3</span>Open ChatGPT and Navigate to a Conversation</h3>
+            <p>Go to <a href="https://chat.openai.com" target="_blank">chat.openai.com</a> and open any conversation you want to export.</p>
+            <img src="/images/chatgpt-conversation-example.png" alt="ChatGPT conversation example">
+        </div>
+
+        <div class="step">
+            <h3><span class="step-number">4</span>Click the Export Button</h3>
+            <p>With the userscript installed, you'll see a new <strong>"Export as Markdown"</strong> button in the ChatGPT interface.</p>
+            <p>Click it, and your conversation will automatically download as a .md file with smart naming based on your conversation title.</p>
+            <img src="/images/export-button-location.png" alt="Export button location in ChatGPT">
+        </div>
+
+        <!-- Method 2: Console -->
+        <div class="alternative-method">
+            <h2>Method 2: Console Method (No Installation Required)</h2>
+            <p>If you prefer not to install anything, you can export using the browser console:</p>
+            <ol>
+                <li><strong>Open ChatGPT</strong> and navigate to your conversation</li>
+                <li><strong>Open Developer Console:</strong> Press F12 or right-click → Inspect → Console tab</li>
+                <li><strong>Paste the export code:</strong> Copy the console snippet from our <a href="/docs/chatgpt-exporter#console-method">documentation</a></li>
+                <li><strong>Press Enter:</strong> Your Markdown file downloads immediately</li>
+            </ol>
+            <div class="tip">
+                💡 <strong>Tip:</strong> The console method is perfect for one-time exports or if you can't install browser extensions.
+            </div>
+        </div>
+
+        <!-- What You Get -->
+        <h2>📝 What's in Your Markdown Export?</h2>
+        <p>The exported Markdown file includes:</p>
+        <ul>
+            <li>✅ Complete conversation history with proper formatting</li>
+            <li>✅ Preserved code blocks with syntax highlighting markers</li>
+            <li>✅ Proper heading hierarchy and lists</li>
+            <li>✅ Clean, readable Markdown compatible with Obsidian, GitHub, and other apps</li>
+            <li>✅ Smart file naming based on conversation title</li>
+        </ul>
+
+        <div class="code-block">
+# ChatGPT Conversation Export
+
+## User
+How do I center a div in CSS?
+
+## Assistant
+Here are several ways to center a div:
+
+### Method 1: Flexbox
+```css
+.parent {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+```
+        </div>
+
+        <!-- Troubleshooting -->
+        <div class="troubleshooting">
+            <h2>🔧 Troubleshooting</h2>
+            
+            <div class="faq-item">
+                <div class="faq-question">Export button doesn't appear?</div>
+                <p>Ensure your userscript manager is enabled and the script is active. Try refreshing the ChatGPT page.</p>
+            </div>
+            
+            <div class="faq-item">
+                <div class="faq-question">Code blocks not formatting correctly?</div>
+                <p>The exporter preserves code blocks with proper markdown syntax. If your markdown viewer doesn't display them correctly, check its settings.</p>
+            </div>
+            
+            <div class="faq-item">
+                <div class="faq-question">Images showing as placeholders?</div>
+                <p>ChatGPT images are referenced as links. The exporter includes image placeholders that link to the original sources.</p>
+            </div>
+            
+            <div class="faq-item">
+                <div class="faq-question">Very long conversations timing out?</div>
+                <p>For extremely long conversations (100+ messages), the export might take a few seconds. The browser may show as unresponsive briefly — this is normal.</p>
+            </div>
+        </div>
+
+        <!-- Use Cases -->
+        <h2>💡 Popular Use Cases for Markdown Exports</h2>
+        <ul>
+            <li><strong>Obsidian & Note-Taking:</strong> Import conversations directly into your knowledge base</li>
+            <li><strong>Documentation:</strong> Convert AI-assisted code explanations into project docs</li>
+            <li><strong>GitHub:</strong> Share conversations as markdown files in repositories</li>
+            <li><strong>Blog Posts:</strong> Transform helpful ChatGPT responses into content</li>
+            <li><strong>Study Notes:</strong> Organize learning conversations by topic</li>
+        </ul>
+
+        <!-- CTA Section -->
+        <div class="cta-section">
+            <h2>Ready to Export Your ChatGPT Conversations?</h2>
+            <p>Get started with the free, open-source ChatGPT Exporter</p>
+            <a href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown" class="cta-button">Install Markdown Exporter</a>
+            <a href="/how-to/export-chatgpt-to-pdf" class="cta-button secondary">Learn PDF Export →</a>
+        </div>
+
+        <!-- Related Guides -->
+        <h2>📚 Related Guides</h2>
+        <ul>
+            <li><a href="/how-to/export-chatgpt-to-pdf">How to Export ChatGPT to PDF</a></li>
+            <li><a href="/how-to/export-gemini-to-markdown">How to Export Gemini to Markdown</a></li>
+            <li><a href="/compare/chatgpt-exporter-vs-extensions">ChatGPT Exporter vs Browser Extensions</a></li>
+            <li><a href="/guide/export-all-chatgpt-data">Export All Your ChatGPT Data (OpenAI Method)</a></li>
+        </ul>
+
+        <!-- Footer -->
+        <div class="page-footer">
+            <p>Created by Rashid Azarang • <a href="https://github.com/rashidazarang/chatgpt-chat-exporter">GitHub</a> • <a href="/docs/chatgpt-exporter">Documentation</a></p>
+        </div>
+    </div>
+</body>
+</html>

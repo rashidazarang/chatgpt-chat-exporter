@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatGPT Exporter — Export chats to Markdown & PDF (Open-source)</title>
+    <meta name="description" content="Export ChatGPT conversations to Markdown or PDF in one click — no extension needed. Open-source userscripts; preserves code blocks; Gemini supported.">
+    <link rel="canonical" href="https://rashidazarang.com/chatgpt-exporter">
+    <link rel="stylesheet" href="/assets/css/theme.css" />
+    <script src="/assets/js/nav.js" defer></script>
+    
+    <!-- Schema Markup -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "ChatGPT Chat Exporter",
+      "alternateName": "ChatGPT Exporter",
+      "applicationCategory": "BrowserApplication",
+      "operatingSystem": "Web",
+      "softwareVersion": "0.5.0",
+      "license": "https://opensource.org/licenses/MIT",
+      "isAccessibleForFree": true,
+      "description": "Export ChatGPT conversations as clean Markdown or print-ready PDF directly from your browser. No extension required. Open-source userscripts; Gemini supported.",
+      "url": "https://rashidazarang.com/chatgpt-exporter",
+      "sameAs": [
+        "https://github.com/rashidazarang/chatgpt-chat-exporter",
+        "https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown",
+        "https://greasyfork.org/en/scripts/530790-chatgpt-chat-exporter-pdf"
+      ],
+      "creator": {
+        "@type": "Person",
+        "name": "Rashid Azarang"
+      }
+    }
+    </script>
+
+    <!-- FAQPage Schema -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "How is this different from OpenAI's data export?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "OpenAI's export delivers a ZIP with all history in JSON via email; it's not a per-chat Markdown/PDF export. This exporter saves the current conversation directly from your browser."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do I need a Chrome extension?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. Use a userscript (Tampermonkey/Violentmonkey) or paste a console snippet."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What formats are supported?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Markdown (.md), print-ready PDF (via HTML), and HTML; Gemini Markdown is also supported."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does it preserve code blocks and formatting?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes — code blocks and structure are preserved in both Markdown and PDF."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is it safe?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "It runs locally in your browser; the code is open-source (MIT)."
+          }
+        }
+      ]
+    }
+    </script>
+
+</head>
+<body>
+    <header class="site-header">
+        <div class="nav-container">
+            <a class="nav-brand" href="/chatgpt-exporter">
+                <span>⚡</span>
+                ChatGPT Exporter
+            </a>
+            <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" data-nav-toggle>
+                <span class="sr-only">Toggle navigation</span>
+                <span class="nav-toggle-bars"></span>
+            </button>
+            <nav id="primary-nav" class="nav-links" data-nav-menu>
+                <a href="/chatgpt-exporter">Overview</a>
+                <a href="/how-to/export-chatgpt-to-markdown">Markdown</a>
+                <a href="/how-to/export-chatgpt-to-pdf">PDF</a>
+                <a href="/how-to/export-gemini-to-markdown">Gemini</a>
+                <a href="/compare/chatgpt-exporter-vs-extensions">Comparison</a>
+                <a href="/guide/export-all-chatgpt-data">Data Export</a>
+                <a href="/docs/chatgpt-exporter">Docs</a>
+                <a class="nav-cta" href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown?utm_source=site&utm_medium=nav&utm_campaign=chatgpt_exporter">Install Markdown</a>
+            </nav>
+        </div>
+    </header>
+    <div class="container">
+        <!-- Hero Section -->
+        <div class="hero">
+            <h1>ChatGPT Exporter — Export chats to Markdown & PDF (no extension)</h1>
+            <p class="subhead">A lightweight, open-source exporter that runs in your browser: clean Markdown, print-ready PDF, proper code blocks — and Gemini support.</p>
+            <div class="cta-buttons">
+                <a href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown?utm_source=site&utm_medium=cta&utm_campaign=chatgpt_exporter" class="cta-button">
+                    📝 Install Markdown Userscript
+                </a>
+                <a href="https://greasyfork.org/en/scripts/530790-chatgpt-chat-exporter-pdf?utm_source=site&utm_medium=cta&utm_campaign=chatgpt_exporter" class="cta-button">
+                    📄 Install PDF Userscript
+                </a>
+                <a href="https://github.com/rashidazarang/chatgpt-chat-exporter?utm_source=site&utm_medium=cta&utm_campaign=chatgpt_exporter" class="cta-button secondary">
+                    ⭐ View on GitHub
+                </a>
+            </div>
+            <p class="note">Works on ChatGPT; Gemini Markdown supported.</p>
+        </div>
+
+        <!-- Why This Over Extensions -->
+        <div class="section">
+            <h2>Why ChatGPT Exporter Over Extensions?</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3>🔒 No Store Install</h3>
+                    <p>Works entirely client-side in your browser. No Chrome Web Store installation required.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🛡️ Minimal Permissions</h3>
+                    <p>Userscripts have a smaller permission footprint than full extensions. Your data stays private.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>📝 Clean Output</h3>
+                    <p>Produces cleaner Markdown and stable PDF exports with properly preserved code blocks.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🌐 Open Source</h3>
+                    <p>MIT licensed. Review the code, contribute, or modify it for your needs.</p>
+                </div>
+            </div>
+            <p>Compare with <a href="/compare/chatgpt-exporter-vs-extensions">popular extensions</a> to see the full differences.</p>
+        </div>
+
+        <!-- How It Works -->
+        <div class="section">
+            <h2>How to Use ChatGPT Exporter</h2>
+            <div class="tabs">
+                <div class="tab active" onclick="showTab(event, 'userscript')">Userscript Method</div>
+                <div class="tab" onclick="showTab(event, 'console')">Console Method</div>
+            </div>
+            
+            <div id="userscript" class="tab-content active">
+                <h3>Userscript Installation (Recommended)</h3>
+                <ol>
+                    <li><strong>Install a userscript manager:</strong> Add Tampermonkey or Violentmonkey to your browser</li>
+                    <li><strong>Install the exporter:</strong> Click the install button above for Markdown or PDF</li>
+                    <li><strong>Open ChatGPT:</strong> Navigate to any conversation</li>
+                    <li><strong>Export:</strong> Click the new export button that appears in the interface</li>
+                </ol>
+                <p>The file downloads automatically with smart naming based on your conversation.</p>
+            </div>
+            
+            <div id="console" class="tab-content">
+                <h3>Console Method (Quick, No Install)</h3>
+                <ol>
+                    <li><strong>Open ChatGPT:</strong> Navigate to the conversation you want to export</li>
+                    <li><strong>Open Developer Console:</strong> Press F12 or right-click → Inspect → Console</li>
+                    <li><strong>Paste the script:</strong> Copy and paste the exporter code</li>
+                    <li><strong>Press Enter:</strong> Your file downloads immediately</li>
+                </ol>
+                <p>Perfect for one-time exports. See the <a href="/docs/chatgpt-exporter">full documentation</a> for the console snippet.</p>
+            </div>
+        </div>
+
+        <!-- Formats & Platforms -->
+        <div class="section">
+            <h2>Supported Formats & Platforms</h2>
+            <table class="comparison-table">
+                <tr>
+                    <th>Format</th>
+                    <th>File Type</th>
+                    <th>Best For</th>
+                    <th>Features</th>
+                </tr>
+                <tr>
+                    <td><strong>Markdown</strong></td>
+                    <td>.md</td>
+                    <td>Note-taking apps, version control</td>
+                    <td>Clean formatting, code blocks preserved, Obsidian-ready</td>
+                </tr>
+                <tr>
+                    <td><strong>PDF</strong></td>
+                    <td>.pdf</td>
+                    <td>Sharing, archiving, printing</td>
+                    <td>Print-optimized, maintains layout, professional appearance</td>
+                </tr>
+                <tr>
+                    <td><strong>HTML</strong></td>
+                    <td>.html</td>
+                    <td>Web publishing, custom styling</td>
+                    <td>Self-contained, customizable CSS, embeddable</td>
+                </tr>
+                <tr>
+                    <td><strong>Gemini</strong></td>
+                    <td>.md</td>
+                    <td>Google Gemini conversations</td>
+                    <td>Markdown export for Gemini chats (v0.4+)</td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- Privacy & Security -->
+        <div class="section">
+            <h2>🔐 Privacy & Security</h2>
+            <p><strong>Your conversations never leave your browser.</strong> ChatGPT Exporter runs entirely client-side with no external servers or data collection.</p>
+            <ul>
+                <li>✅ <strong>100% Local Processing:</strong> All export operations happen in your browser</li>
+                <li>✅ <strong>Open Source (MIT):</strong> <a href="https://github.com/rashidazarang/chatgpt-chat-exporter">Review every line of code</a></li>
+                <li>✅ <strong>No Analytics:</strong> Zero tracking, no telemetry, no data collection</li>
+                <li>✅ <strong>No Network Requests:</strong> Works offline once installed</li>
+            </ul>
+        </div>
+
+        <!-- Comparison with OpenAI Export -->
+        <div class="section">
+            <h2>ChatGPT Exporter vs OpenAI's Built-in Export</h2>
+            <p>OpenAI offers an account-level data export, but it's designed for different use cases:</p>
+            <table class="comparison-table">
+                <tr>
+                    <th>Feature</th>
+                    <th>ChatGPT Exporter</th>
+                    <th>OpenAI Account Export</th>
+                </tr>
+                <tr>
+                    <td>Export Type</td>
+                    <td>Individual conversations</td>
+                    <td>All data at once</td>
+                </tr>
+                <tr>
+                    <td>Format</td>
+                    <td>Markdown, PDF, HTML</td>
+                    <td>JSON in ZIP file</td>
+                </tr>
+                <tr>
+                    <td>Speed</td>
+                    <td>Instant download</td>
+                    <td>Email delivery (can take time)</td>
+                </tr>
+                <tr>
+                    <td>Use Case</td>
+                    <td>Share, publish, reference specific chats</td>
+                    <td>Archive, account transfer, compliance</td>
+                </tr>
+            </table>
+            <p>Learn more: <a href="/guide/export-all-chatgpt-data">How to export all your ChatGPT data</a></p>
+        </div>
+
+        <!-- FAQ Section -->
+        <div class="section">
+            <h2>Frequently Asked Questions</h2>
+            
+            <div class="faq-item">
+                <div class="faq-question">How is this different from OpenAI's data export?</div>
+                <div class="faq-answer">OpenAI's export delivers a ZIP with all history in JSON via email; it's not a per-chat Markdown/PDF export. ChatGPT Exporter saves the current conversation directly from your browser in readable formats.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">Do I need a Chrome extension?</div>
+                <div class="faq-answer">No. Use a userscript manager (Tampermonkey/Violentmonkey) or paste a console snippet. No Chrome Web Store installation required.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">What formats are supported?</div>
+                <div class="faq-answer">Markdown (.md), print-ready PDF (via HTML), HTML (.html), and Gemini Markdown are all supported.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">Does it preserve code blocks and formatting?</div>
+                <div class="faq-answer">Yes — code blocks and structure are preserved in both Markdown and PDF exports with proper syntax highlighting.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">Is it safe?</div>
+                <div class="faq-answer">It runs locally in your browser with no external connections. The code is open-source (MIT license) and can be reviewed on GitHub.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">Why not use an extension instead?</div>
+                <div class="faq-answer">Extensions like ChatGPT Exporter and ExportGPT exist but require store installation and broader permissions. If you value minimal footprint and transparency, a userscript or console-only approach is simpler and safer.</div>
+            </div>
+        </div>
+
+        <!-- Author Box -->
+        <div class="section text-center">
+            <h2>About the Developer</h2>
+            <p>Created by <strong>Rashid Azarang</strong></p>
+            <p>
+                <a href="https://github.com/rashidazarang/chatgpt-chat-exporter">GitHub Repository</a> • 
+                <a href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown">Markdown Script</a> • 
+                <a href="https://greasyfork.org/en/scripts/530790-chatgpt-chat-exporter-pdf">PDF Script</a> • 
+                <a href="https://github.com/rashidazarang/chatgpt-chat-exporter/releases">Release Notes</a>
+            </p>
+            <p><small>Version 0.5.0 • MIT License • Last updated: January 2025</small></p>
+        </div>
+    </div>
+
+    <script>
+    function showTab(evt, tabName) {
+        document.querySelectorAll('.tab-content').forEach((tab) => {
+            tab.classList.remove('active');
+        });
+        document.querySelectorAll('.tab').forEach((tab) => {
+            tab.classList.remove('active');
+        });
+
+        const target = document.getElementById(tabName);
+        if (target) {
+            target.classList.add('active');
+        }
+        if (evt && evt.currentTarget) {
+            evt.currentTarget.classList.add('active');
+        }
+    }
+
+    document.querySelectorAll('a[href*="greasyfork.org"], a[href*="github.com"]').forEach((link) => {
+        link.addEventListener('click', function () {
+            if (typeof gtag !== 'undefined') {
+                gtag('event', 'click', {
+                    event_category: 'outbound',
+                    event_label: this.href,
+                    transport_type: 'beacon'
+                });
+            }
+        });
+    });
+    </script>
+</body>
+</html>

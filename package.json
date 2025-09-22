@@ -1,0 +1,21 @@
+{
+  "name": "chatgpt-chat-exporter-master",
+  "version": "1.0.0",
+  "description": "*Version: v0.4.0*",
+  "main": "exporter-html.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rashidazarang/chatgpt-chat-exporter.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/rashidazarang/chatgpt-chat-exporter/issues"
+  },
+  "homepage": "https://github.com/rashidazarang/chatgpt-chat-exporter#readme"
+}

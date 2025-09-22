@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatGPT Exporter Documentation — Quick start, console method, releases</title>
+    <meta name="description" content="Official documentation for ChatGPT Exporter. Covers installation, console usage, Gemini mode, troubleshooting, and release history." />
+    <link rel="canonical" href="https://rashidazarang.com/docs/chatgpt-exporter" />
+    <link rel="stylesheet" href="/assets/css/theme.css" />
+    <script src="/assets/js/nav.js" defer></script>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "TechArticle",
+      "headline": "ChatGPT Exporter Documentation",
+      "author": {
+        "@type": "Person",
+        "name": "Rashid Azarang"
+      },
+      "datePublished": "2025-01-07",
+      "dateModified": "2025-01-07",
+      "description": "Documentation for installing and using the ChatGPT Exporter userscripts and console workflows."
+    }
+    </script>
+
+</head>
+<body>
+    <header class="site-header">
+        <div class="nav-container">
+            <a class="nav-brand" href="/chatgpt-exporter">
+                <span>⚡</span>
+                ChatGPT Exporter
+            </a>
+            <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" data-nav-toggle>
+                <span class="sr-only">Toggle navigation</span>
+                <span class="nav-toggle-bars"></span>
+            </button>
+            <nav id="primary-nav" class="nav-links" data-nav-menu>
+                <a href="/chatgpt-exporter">Overview</a>
+                <a href="/how-to/export-chatgpt-to-markdown">Markdown</a>
+                <a href="/how-to/export-chatgpt-to-pdf">PDF</a>
+                <a href="/how-to/export-gemini-to-markdown">Gemini</a>
+                <a href="/compare/chatgpt-exporter-vs-extensions">Comparison</a>
+                <a href="/guide/export-all-chatgpt-data">Data Export</a>
+                <a href="/docs/chatgpt-exporter">Docs</a>
+                <a class="nav-cta" href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown?utm_source=site&utm_medium=nav&utm_campaign=chatgpt_exporter">Install Markdown</a>
+            </nav>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="breadcrumb">
+            <a href="/chatgpt-exporter">ChatGPT Exporter</a> → Documentation
+        </div>
+
+        <h1>ChatGPT Exporter Documentation</h1>
+        <div class="meta">Install, update, and customize the open-source exporter • Last updated January 2025</div>
+
+        <div class="intro">
+            <p>This documentation covers the userscript installation flow, console snippet, Gemini support, troubleshooting, and release history for <strong>ChatGPT Exporter</strong>.</p>
+            <p>For an overview or feature comparison, read the <a href="/chatgpt-exporter">landing page</a>. For step-by-step tutorials, visit the <a href="/how-to/export-chatgpt-to-markdown">Markdown</a> or <a href="/how-to/export-chatgpt-to-pdf">PDF</a> guides.</p>
+        </div>
+
+        <div class="toc">
+            <strong>On this page</strong>
+            <ul>
+                <li><a href="#quick-start">Quick start (userscript)</a></li>
+                <li><a href="#console-method">Console method</a></li>
+                <li><a href="#gemini">Gemini support</a></li>
+                <li><a href="#troubleshooting">Troubleshooting</a></li>
+                <li><a href="#releases">Release highlights</a></li>
+                <li><a href="#privacy">Privacy & security</a></li>
+            </ul>
+        </div>
+
+        <section id="quick-start">
+            <h2>Quick start (userscript)</h2>
+            <div class="card">
+                <ol>
+                    <li>Install a userscript manager: <a href="https://www.tampermonkey.net/" target="_blank" rel="noopener">Tampermonkey</a> or <a href="https://violentmonkey.github.io/" target="_blank" rel="noopener">Violentmonkey</a>.</li>
+                    <li>Install the exporter script from GreasyFork:
+                        <ul>
+                            <li><a href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown" target="_blank" rel="noopener">Markdown exporter</a></li>
+                            <li><a href="https://greasyfork.org/en/scripts/530790-chatgpt-chat-exporter-pdf" target="_blank" rel="noopener">PDF exporter</a></li>
+                        </ul>
+                    </li>
+                    <li>Open ChatGPT or Gemini, refresh once, and use the new <strong>Export</strong> button that appears near the conversation title.</li>
+                </ol>
+                <p>Updates arrive automatically; your manager will prompt you before applying new versions.</p>
+            </div>
+        </section>
+
+        <section id="console-method">
+            <h2>Console method</h2>
+            <div class="card">
+                <p>For restricted environments or quick one-off exports, run the exporter from the browser console without installing anything.</p>
+                <h3>Markdown console snippet</h3>
+                <pre><code>await import("https://cdn.jsdelivr.net/gh/rashidazarang/chatgpt-chat-exporter@main/exporter-markdown.js");
+window.chatGPTChatExporter.exportCurrentChat();</code></pre>
+                <p>Open Developer Tools (F12), switch to the Console tab, paste the snippet, and press Enter. A <code>.md</code> file downloads instantly.</p>
+                <h3>PDF console snippet</h3>
+                <pre><code>await import("https://cdn.jsdelivr.net/gh/rashidazarang/chatgpt-chat-exporter@main/exporter-pdf.js");
+window.chatGPTChatExporter.exportCurrentChat({ format: "pdf" });</code></pre>
+                <p>Make sure popups are allowed so the browser can open the print dialog.</p>
+            </div>
+        </section>
+
+        <section id="gemini">
+            <h2>Gemini support</h2>
+            <div class="card">
+                <p>Version 0.4+ includes Gemini selectors. The userscript automatically detects <code>gemini.google.com</code>. Approve the additional domain the first time you export.</p>
+                <ul>
+                    <li>Markdown naming uses the conversation title with <code>-gemini.md</code>.</li>
+                    <li>Console usage: run the same snippets while on a Gemini conversation.</li>
+                    <li>Experimental Gemini layouts may require selector tweaks — open an issue if you hit one.</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="troubleshooting">
+            <h2>Troubleshooting</h2>
+            <div class="grid">
+                <div class="card">
+                    <h3>Export button missing</h3>
+                    <p>Ensure the script is enabled and refresh the tab. In Tampermonkey, the icon should be green on ChatGPT/Gemini domains.</p>
+                </div>
+                <div class="card">
+                    <h3>Partial exports</h3>
+                    <p>Expand all messages before exporting. Collapsed responses are skipped because the DOM isn’t loaded.</p>
+                </div>
+                <div class="card">
+                    <h3>Images & attachments</h3>
+                    <p>Images are referenced as inline placeholders. Download originals via the chat viewer if you need binaries.</p>
+                </div>
+                <div class="card">
+                    <h3>Styling tweaks</h3>
+                    <p>Fork the repo, edit the HTML template in <code>exporter-html.js</code>, and build locally. Contributions welcome.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="releases">
+            <h2>Release highlights</h2>
+            <div class="release">
+                <strong>v0.5.0</strong> — Smart file naming, print-ready PDF improvements, Gemini enhancements. (<a href="https://github.com/rashidazarang/chatgpt-chat-exporter/releases" target="_blank" rel="noopener">Release notes</a>)
+            </div>
+            <div class="release">
+                <strong>v0.4.0</strong> — Gemini Markdown support, HTML exporter improvements.
+            </div>
+            <div class="release">
+                <strong>v0.3.0</strong> — Console snippets published, Markdown styling refined.
+            </div>
+        </section>
+
+        <section id="privacy">
+            <h2>Privacy & security</h2>
+            <div class="callout">
+                <ul>
+                    <li>Runs locally in your browser; no network requests.</li>
+                    <li>Open-source under MIT — audit every line on <a href="https://github.com/rashidazarang/chatgpt-chat-exporter" target="_blank" rel="noopener">GitHub</a>.</li>
+                    <li>No analytics, telemetry, or third-party dependencies beyond the userscript manager/CDN.</li>
+                </ul>
+            </div>
+        </section>
+
+        <div class="footer-link">
+            <p>Created by Rashid Azarang • <a href="mailto:hello@rashidazarang.com">hello@rashidazarang.com</a></p>
+        </div>
+    </div>
+</body>
+</html>
