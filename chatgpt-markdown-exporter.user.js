@@ -59,7 +59,9 @@
             if (!href || href.startsWith('javascript:') || href.startsWith('#')) return;
 
             const text = link.textContent.replace(/\s+/g, ' ').trim() || href;
-            const markdown = `[${text}](${href})`;
+            const escapedText = text.replace(/([\[\]])/g, '\\$1');
+            const safeHref = href.replace(/\)/g, '%29');
+            const markdown = `[${escapedText}](${safeHref})`;
             link.parentNode.replaceChild(document.createTextNode(markdown), link);
         });
 
