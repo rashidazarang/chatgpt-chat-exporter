@@ -41,11 +41,16 @@
             if (link.closest('pre, code')) return;
 
             const href = (link.href || '').trim();
-            if (!href || href.startsWith('javascript:') || href.startsWith('#')) return;
+            const lowerHref = href.toLowerCase();
+            if (!href || lowerHref.startsWith('javascript:') || lowerHref.startsWith('data:') || lowerHref.startsWith('vbscript:') || href.startsWith('#')) return;
 
             const text = link.textContent.replace(/\s+/g, ' ').trim() || href;
-            const escapedText = text.replace(/([\[\]])/g, '\\$1');
-            const safeHref = href.replace(/\)/g, '%29');
+            const escapedText = text
+                .replace(/\\/g, '\\\\')
+                .replace(/([\[\]])/g, '\\$1');
+            const safeHref = href
+                .replace(/\\/g, '%5C')
+                .replace(/\)/g, '%29');
             const markdown = `[${escapedText}](${safeHref})`;
             link.parentNode.replaceChild(document.createTextNode(markdown), link);
         });
