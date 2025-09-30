@@ -40,11 +40,11 @@
         clone.querySelectorAll('a[href]').forEach(link => {
             if (link.closest('pre, code')) return;
 
-            const url = link.href?.trim();
-            if (!url || url.startsWith('javascript:') || url.startsWith('#')) return;
+            const href = (link.href || '').trim();
+            if (!href || href.startsWith('javascript:') || href.startsWith('#')) return;
 
-            const text = link.textContent.replace(/\s+/g, ' ').trim() || url;
-            const markdown = `[${text}](${url})`;
+            const text = link.textContent.replace(/\s+/g, ' ').trim() || href;
+            const markdown = `[${text}](${href})`;
             link.parentNode.replaceChild(document.createTextNode(markdown), link);
         });
         // Convert remaining HTML to clean markdown text
