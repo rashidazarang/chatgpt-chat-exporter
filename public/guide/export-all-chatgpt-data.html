@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Export All ChatGPT Data — Official OpenAI archive walkthrough</title>
+    <meta name="description" content="Follow OpenAI’s official process to export your full ChatGPT account data, plus tips for combining the archive with per-chat Markdown and PDF exports." />
+    <link rel="canonical" href="https://chatgpt-chat-exporter.vercel.app/guide/export-all-chatgpt-data" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="How to Export All ChatGPT Data" />
+    <meta property="og:description" content="Step through OpenAI’s archive export and pair it with ChatGPT Exporter userscripts for readable Markdown/PDFs." />
+    <meta property="og:url" content="https://chatgpt-chat-exporter.vercel.app/guide/export-all-chatgpt-data" />
+    <meta property="og:image" content="https://chatgpt-chat-exporter.vercel.app/assets/og/og-export-all-data.png" />
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:title" content="Export All ChatGPT Data" />
+    <meta property="twitter:description" content="Use OpenAI’s archive plus the ChatGPT Exporter for readable per-chat files." />
+    <meta property="twitter:image" content="https://chatgpt-chat-exporter.vercel.app/assets/og/og-export-all-data.png" />
+    <link rel="stylesheet" href="/assets/css/theme.css" />
+    <script src="/assets/js/nav.js" defer></script>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "HowTo",
+      "name": "How to export all ChatGPT data",
+      "description": "Use OpenAI’s data controls to request a full ChatGPT archive and pair it with per-chat exports for daily use.",
+      "totalTime": "PT10M",
+      "estimatedCost": {
+        "@type": "MonetaryAmount",
+        "currency": "USD",
+        "value": "0"
+      },
+      "step": [
+        {
+          "@type": "HowToStep",
+          "position": 1,
+          "name": "Open ChatGPT settings",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Navigate to chat.openai.com, click your name in the bottom left, and open Settings." }
+        },
+        {
+          "@type": "HowToStep",
+          "position": 2,
+          "name": "Visit Data Controls",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Choose Data Controls from the sidebar and click Export Data." }
+        },
+        {
+          "@type": "HowToStep",
+          "position": 3,
+          "name": "Confirm the export request",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Enter the email associated with your OpenAI account and confirm the export." }
+        },
+        {
+          "@type": "HowToStep",
+          "position": 4,
+          "name": "Download the ZIP archive",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Open the email from OpenAI, click the download link, and save the ZIP file to your computer." }
+        }
+      ]
+    }
+    </script>
+
+</head>
+<body>
+    <header class="site-header">
+        <div class="nav-container">
+            <a class="nav-brand" href="/chatgpt-exporter">
+                <span>⚡</span>
+                ChatGPT Exporter
+            </a>
+            <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" data-nav-toggle>
+                <span class="sr-only">Toggle navigation</span>
+                <span class="nav-toggle-bars"></span>
+            </button>
+            <nav id="primary-nav" class="nav-links" data-nav-menu>
+                <a href="/chatgpt-exporter">Overview</a>
+                <a href="/how-to/export-chatgpt-to-markdown">Markdown</a>
+                <a href="/how-to/export-chatgpt-to-pdf">PDF</a>
+                <a href="/how-to/export-gemini-to-markdown">Gemini</a>
+                <a href="/compare/chatgpt-exporter-vs-extensions">Comparison</a>
+                <a href="/guide/export-all-chatgpt-data">Data Export</a>
+                <a href="/docs/chatgpt-exporter">Docs</a>
+                <a class="nav-cta" href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown?utm_source=site&utm_medium=nav&utm_campaign=chatgpt_exporter">Install Markdown</a>
+            </nav>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="breadcrumb">
+            <a href="/chatgpt-exporter">Home</a> → Export all data
+        </div>
+
+        <h1>How to Export All ChatGPT Data (Official OpenAI Method)</h1>
+        <div class="meta">Updated January 2025 • Includes follow-up tips • By Rashid Azarang</div>
+
+        <div class="intro">
+            <p>OpenAI provides a built-in way to export <strong>your entire ChatGPT account</strong>. It delivers a ZIP archive with JSON conversations, settings, and metadata. It’s perfect for compliance, record-keeping, or migrating to another tool.</p>
+            <p>This guide walks through the request, what to expect in the archive, and how to complement it with per-chat Markdown/PDF exports using the ChatGPT Exporter userscript.</p>
+        </div>
+
+        <div class="alert">
+            <strong>Heads-up:</strong> OpenAI emails the archive link. It can take anywhere from a few minutes to a few hours depending on account size. The link expires after 24 hours for security.
+        </div>
+
+        <h2>Step-by-step: request your archive</h2>
+        <div class="step">
+            <span class="step-number">1</span>
+            <div>
+                <h3>Open ChatGPT settings</h3>
+                <p>Go to <a href="https://chat.openai.com" target="_blank" rel="noopener">chat.openai.com</a>, click your name (bottom left), and choose <strong>Settings</strong>.</p>
+            </div>
+        </div>
+        <div class="step">
+            <span class="step-number">2</span>
+            <div>
+                <h3>Navigate to Data Controls</h3>
+                <p>Select the <strong>Data Controls</strong> tab and click <strong>Export Data</strong>.</p>
+            </div>
+        </div>
+        <div class="step">
+            <span class="step-number">3</span>
+            <div>
+                <h3>Confirm the export</h3>
+                <p>Enter the email associated with your account, confirm, and wait for OpenAI’s email with the download link.</p>
+            </div>
+        </div>
+        <div class="step">
+            <span class="step-number">4</span>
+            <div>
+                <h3>Download the ZIP</h3>
+                <p>Open the email titled “Your ChatGPT data export is ready”. Download the ZIP and extract it locally.</p>
+            </div>
+        </div>
+
+        <h2>What’s inside the archive?</h2>
+        <div class="two-column">
+            <div class="card">
+                <h3>JSON conversations</h3>
+                <p>All your chats in machine-readable JSON. Good for backups or custom pipelines, but not reader-friendly.</p>
+            </div>
+            <div class="card">
+                <h3>Account metadata</h3>
+                <p>Profile info, settings, workspace data (if applicable), and usage logs.</p>
+            </div>
+            <div class="card">
+                <h3>Uploads & files</h3>
+                <p>Attachments you’ve uploaded. Media is stored separately within the ZIP.</p>
+            </div>
+            <div class="card">
+                <h3>Limits</h3>
+                <p>No per-chat Markdown or PDF. For that, use the ChatGPT Exporter userscripts.</p>
+            </div>
+        </div>
+
+        <h2>Pair it with per-chat exports</h2>
+        <p>Once you have the full archive, use the ChatGPT Exporter to save the specific chats you reference frequently in Markdown or PDF format. It’s faster than digging through JSON whenever you need a readable transcript.</p>
+        <ul>
+            <li><a href="/how-to/export-chatgpt-to-markdown">Export ChatGPT to Markdown</a></li>
+            <li><a href="/how-to/export-chatgpt-to-pdf">Export ChatGPT to PDF</a></li>
+        </ul>
+
+        <h2>FAQ</h2>
+        <div class="faq-item">
+            <div class="faq-question">How long does the download link last?</div>
+            <p>24 hours. If it expires, repeat the request from Data Controls.</p>
+        </div>
+        <div class="faq-item">
+            <div class="faq-question">Can I delete the archive after downloading?</div>
+            <p>Yes. It’s stored locally on your machine once you download it. Delete it if you no longer need a backup.</p>
+        </div>
+        <div class="faq-item">
+            <div class="faq-question">Does this remove my data?</div>
+            <p>No. This is a read-only export. To delete data, use the <strong>Delete account</strong> option in Data Controls.</p>
+        </div>
+
+        <div class="cta-section">
+            <h2>Next: download readable transcripts</h2>
+            <p>Use the open-source ChatGPT Exporter for Markdown/PDF copies of the chats you touch every day.</p>
+            <a href="/chatgpt-exporter" class="cta-button">View the exporter</a>
+            <a href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown" class="cta-button secondary">Install Markdown userscript</a>
+        </div>
+
+        <div class="page-footer">
+            <p>Created by Rashid Azarang • <a href="https://github.com/rashidazarang/chatgpt-chat-exporter" target="_blank" rel="noopener">GitHub</a> • <a href="/docs/chatgpt-exporter">Documentation</a></p>
+        </div>
+    </div>
+</body>
+</html>

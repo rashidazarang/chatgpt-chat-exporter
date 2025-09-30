@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Export Gemini Conversations to Markdown</title>
+    <meta name="description" content="Save any Google Gemini chat as Markdown using the ChatGPT Exporter userscript. Preserve code blocks, citations, and structure with a single click." />
+    <link rel="canonical" href="https://chatgpt-chat-exporter.vercel.app/how-to/export-gemini-to-markdown" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="How to Export Gemini Conversations to Markdown" />
+    <meta property="og:description" content="Use the ChatGPT Exporter userscript to download Gemini chats as structured Markdown — open-source and quick." />
+    <meta property="og:url" content="https://chatgpt-chat-exporter.vercel.app/how-to/export-gemini-to-markdown" />
+    <meta property="og:image" content="https://chatgpt-chat-exporter.vercel.app/assets/og/og-gemini-markdown.png" />
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:title" content="Export Gemini to Markdown" />
+    <meta property="twitter:description" content="Step-by-step Gemini export guide using the open-source ChatGPT Exporter." />
+    <meta property="twitter:image" content="https://chatgpt-chat-exporter.vercel.app/assets/og/og-gemini-markdown.png" />
+    <link rel="stylesheet" href="/assets/css/theme.css" />
+    <script src="/assets/js/nav.js" defer></script>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "HowTo",
+      "name": "How to export Gemini conversations to Markdown",
+      "description": "Use the open-source ChatGPT Exporter userscript to download Google Gemini chats as Markdown files.",
+      "totalTime": "PT3M",
+      "estimatedCost": {
+        "@type": "MonetaryAmount",
+        "currency": "USD",
+        "value": "0"
+      },
+      "supply": [
+        { "@type": "HowToSupply", "name": "Google Gemini conversation" },
+        { "@type": "HowToSupply", "name": "Userscript manager" }
+      ],
+      "tool": [
+        { "@type": "HowToTool", "name": "ChatGPT Chat Exporter (Gemini mode)" }
+      ],
+      "step": [
+        {
+          "@type": "HowToStep",
+          "position": 1,
+          "name": "Install a userscript manager",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Install Tampermonkey or Violentmonkey and enable it in your browser." }
+        },
+        {
+          "@type": "HowToStep",
+          "position": 2,
+          "name": "Install the exporter",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Install the ChatGPT Chat Exporter userscript from GitHub or GreasyFork." }
+        },
+        {
+          "@type": "HowToStep",
+          "position": 3,
+          "name": "Switch to Gemini",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Open gemini.google.com and refresh so the Export button appears." }
+        },
+        {
+          "@type": "HowToStep",
+          "position": 4,
+          "name": "Export the Markdown",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Click Export Markdown, choose a filename, and download the .md file." }
+        }
+      ]
+    }
+    </script>
+
+</head>
+<body>
+    <header class="site-header">
+        <div class="nav-container">
+            <a class="nav-brand" href="/chatgpt-exporter">
+                <span>⚡</span>
+                ChatGPT Exporter
+            </a>
+            <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" data-nav-toggle>
+                <span class="sr-only">Toggle navigation</span>
+                <span class="nav-toggle-bars"></span>
+            </button>
+            <nav id="primary-nav" class="nav-links" data-nav-menu>
+                <a href="/chatgpt-exporter">Overview</a>
+                <a href="/how-to/export-chatgpt-to-markdown">Markdown</a>
+                <a href="/how-to/export-chatgpt-to-pdf">PDF</a>
+                <a href="/how-to/export-gemini-to-markdown">Gemini</a>
+                <a href="/compare/chatgpt-exporter-vs-extensions">Comparison</a>
+                <a href="/guide/export-all-chatgpt-data">Data Export</a>
+                <a href="/docs/chatgpt-exporter">Docs</a>
+                <a class="nav-cta" href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown?utm_source=site&utm_medium=nav&utm_campaign=chatgpt_exporter">Install Markdown</a>
+            </nav>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="breadcrumb">
+            <a href="/chatgpt-exporter">Home</a> → Gemini Markdown export
+        </div>
+
+        <div class="badge">Gemini support</div>
+        <h1>How to Export Gemini Conversations to Markdown</h1>
+        <div class="meta">Updated January 2025 • 3 minute read • By Rashid Azarang</div>
+
+        <div class="intro">
+            <p>Version 0.4 of ChatGPT Exporter added first-class support for <strong>gemini.google.com</strong>. Using the same userscript, you can now download Gemini responses as clean Markdown — ideal for notes, documentation, or publishing.</p>
+            <p>This guide covers the recommended userscript flow and common troubleshooting tips.</p>
+        </div>
+
+        <h2>Install and export</h2>
+        <div class="step">
+            <span class="step-number">1</span>
+            <div>
+                <h3>Install a userscript manager</h3>
+                <p>Use <a href="https://www.tampermonkey.net/" target="_blank" rel="noopener">Tampermonkey</a> or <a href="https://violentmonkey.github.io/" target="_blank" rel="noopener">Violentmonkey</a>. Once installed, pin it so you can enable the script on both ChatGPT and Gemini domains.</p>
+            </div>
+        </div>
+
+        <div class="step">
+            <span class="step-number">2</span>
+            <div>
+                <h3>Install the exporter</h3>
+                <p>Install the Markdown userscript from <a href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown" target="_blank" rel="noopener">GreasyFork</a>. If you prefer manual installs, grab the latest bundle from <a href="https://github.com/rashidazarang/chatgpt-chat-exporter" target="_blank" rel="noopener">GitHub releases</a>.</p>
+            </div>
+        </div>
+
+        <div class="step">
+            <span class="step-number">3</span>
+            <div>
+                <h3>Enable Gemini domain access</h3>
+                <p>After the first export, your userscript manager may prompt you to allow <code>https://gemini.google.com/*</code>. Approve it so the Export button injects on Gemini pages.</p>
+            </div>
+        </div>
+
+        <div class="step">
+            <span class="step-number">4</span>
+            <div>
+                <h3>Export your Markdown</h3>
+                <p>Open the Gemini conversation, click <strong>Export Markdown</strong>, and download the <code>.md</code> file. The output mirrors ChatGPT export formatting (headings, lists, code blocks, citations).</p>
+            </div>
+        </div>
+
+        <div class="callout">
+            Console-only workflow? Head to the <a href="/docs/chatgpt-exporter#gemini">documentation</a> for the Gemini snippet and manual instructions.
+        </div>
+
+        <h2>Compatibility notes</h2>
+        <div class="compatibility">
+            <ul>
+                <li>Supports Gemini’s default and “Pro” modes. Labs/experimental UIs may change selectors — report issues on GitHub.</li>
+                <li>Images export as references (similar to ChatGPT). Download originals from the Gemini interface if needed.</li>
+                <li>Markdown naming follows the Gemini conversation title with <code>-gemini.md</code> suffix.</li>
+            </ul>
+        </div>
+
+        <h2>Helpful follow-ups</h2>
+        <ul>
+            <li><a href="/chatgpt-exporter">Landing page — ChatGPT Exporter overview</a></li>
+            <li><a href="/how-to/export-chatgpt-to-markdown">Export ChatGPT to Markdown</a></li>
+            <li><a href="/compare/chatgpt-exporter-vs-extensions">Why userscripts beat extensions for exporting</a></li>
+        </ul>
+
+        <div class="cta-section">
+            <h2>Install the exporter once, export everywhere</h2>
+            <p>One userscript covers ChatGPT, Gemini, Markdown, HTML, and more.</p>
+            <a href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown" class="cta-button">Install Markdown Exporter</a>
+            <a href="https://github.com/rashidazarang/chatgpt-chat-exporter" class="cta-button secondary" target="_blank" rel="noopener">View source on GitHub</a>
+        </div>
+
+        <div class="page-footer">
+            <p>Created by Rashid Azarang • <a href="https://github.com/rashidazarang/chatgpt-chat-exporter" target="_blank" rel="noopener">GitHub</a> • <a href="/docs/chatgpt-exporter">Documentation</a></p>
+        </div>
+    </div>
+</body>
+</html>

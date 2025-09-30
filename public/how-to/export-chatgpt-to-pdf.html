@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Export ChatGPT to PDF — Print-ready userscript workflow</title>
+    <meta name="description" content="Export ChatGPT conversations to polished, print-ready PDFs. Install the open-source userscript or use the console snippet. No browser extension required." />
+    <link rel="canonical" href="https://chatgpt-chat-exporter.vercel.app/how-to/export-chatgpt-to-pdf" />
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="How to Export ChatGPT to PDF (Print-ready userscript workflow)">
+    <meta property="og:description" content="Install the open-source ChatGPT Exporter userscript to create polished, print-ready PDFs in one click.">
+    <meta property="og:url" content="https://chatgpt-chat-exporter.vercel.app/how-to/export-chatgpt-to-pdf" />
+    <meta property="og:image" content="https://chatgpt-chat-exporter.vercel.app/assets/og/og-export-pdf.png" />
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:title" content="How to Export ChatGPT to PDF">
+    <meta property="twitter:description" content="Generate print-ready ChatGPT PDFs using the open-source userscript or console snippet." />
+    <meta property="twitter:image" content="https://chatgpt-chat-exporter.vercel.app/assets/og/og-export-pdf.png" />
+    <link rel="stylesheet" href="/assets/css/theme.css" />
+    <script src="/assets/js/nav.js" defer></script>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "HowTo",
+      "name": "How to export ChatGPT conversations to PDF",
+      "description": "Use the ChatGPT Exporter userscript to download any ChatGPT thread as a print-ready PDF directly from your browser.",
+      "totalTime": "PT4M",
+      "estimatedCost": {
+        "@type": "MonetaryAmount",
+        "currency": "USD",
+        "value": "0"
+      },
+      "supply": [
+        { "@type": "HowToSupply", "name": "ChatGPT conversation" },
+        { "@type": "HowToSupply", "name": "Userscript manager (Tampermonkey or Violentmonkey)" }
+      ],
+      "tool": [
+        { "@type": "HowToTool", "name": "ChatGPT Chat Exporter — PDF userscript" }
+      ],
+      "step": [
+        {
+          "@type": "HowToStep",
+          "position": 1,
+          "name": "Install a userscript manager",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Install Tampermonkey or Violentmonkey in your browser and confirm it is enabled."
+          }
+        },
+        {
+          "@type": "HowToStep",
+          "position": 2,
+          "name": "Add the PDF exporter userscript",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Open the ChatGPT Chat Exporter — PDF listing on GreasyFork and click Install." }
+        },
+        {
+          "@type": "HowToStep",
+          "position": 3,
+          "name": "Refresh ChatGPT",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Reload chat.openai.com so the new Export PDF button appears in the header." }
+        },
+        {
+          "@type": "HowToStep",
+          "position": 4,
+          "name": "Export the conversation",
+          "itemListElement": {
+            "@type": "HowToDirection",
+            "text": "Click Export PDF, choose a destination, and download the print-ready document." }
+        }
+      ]
+    }
+    </script>
+
+</head>
+<body>
+    <header class="site-header">
+        <div class="nav-container">
+            <a class="nav-brand" href="/chatgpt-exporter">
+                <span>⚡</span>
+                ChatGPT Exporter
+            </a>
+            <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" data-nav-toggle>
+                <span class="sr-only">Toggle navigation</span>
+                <span class="nav-toggle-bars"></span>
+            </button>
+            <nav id="primary-nav" class="nav-links" data-nav-menu>
+                <a href="/chatgpt-exporter">Overview</a>
+                <a href="/how-to/export-chatgpt-to-markdown">Markdown</a>
+                <a href="/how-to/export-chatgpt-to-pdf">PDF</a>
+                <a href="/how-to/export-gemini-to-markdown">Gemini</a>
+                <a href="/compare/chatgpt-exporter-vs-extensions">Comparison</a>
+                <a href="/guide/export-all-chatgpt-data">Data Export</a>
+                <a href="/docs/chatgpt-exporter">Docs</a>
+                <a class="nav-cta" href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown?utm_source=site&utm_medium=nav&utm_campaign=chatgpt_exporter">Install Markdown</a>
+            </nav>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="breadcrumb">
+            <a href="/chatgpt-exporter">Home</a> → Export to PDF
+        </div>
+
+        <h1>How to Export ChatGPT to PDF (Open-source, Print-ready)</h1>
+        <div class="meta">Updated January 2025 • 4 minute read • By Rashid Azarang</div>
+
+        <div class="intro">
+            <p>Need a polished PDF copy of your ChatGPT conversation? The <strong>ChatGPT Exporter</strong> userscript delivers print-ready PDFs without installing a full browser extension. It runs locally, preserves layout, and includes smart pagination.</p>
+            <p>Below is the exact workflow, plus tips for customizing headers, fonts, and page breaks.</p>
+        </div>
+
+        <div class="requirements">
+            <strong>You’ll need:</strong>
+            <ul>
+                <li>ChatGPT access in a Chromium, Firefox, or Arc browser</li>
+                <li>Tampermonkey or Violentmonkey userscript manager</li>
+                <li>The <a href="https://greasyfork.org/en/scripts/530790-chatgpt-chat-exporter-pdf" target="_blank" rel="noopener">ChatGPT Chat Exporter — PDF</a> script</li>
+            </ul>
+        </div>
+
+        <h2>Install and export (userscript method)</h2>
+
+        <div class="step">
+            <span class="step-number">1</span>
+            <div>
+                <h3>Install a userscript manager</h3>
+                <p>Add <a href="https://www.tampermonkey.net/" target="_blank" rel="noopener">Tampermonkey</a> or <a href="https://violentmonkey.github.io/" target="_blank" rel="noopener">Violentmonkey</a> to your browser. Open the dashboard once to confirm it is active.</p>
+            </div>
+        </div>
+
+        <div class="step">
+            <span class="step-number">2</span>
+            <div>
+                <h3>Add the PDF exporter</h3>
+                <p>Visit the <a href="https://greasyfork.org/en/scripts/530790-chatgpt-chat-exporter-pdf" target="_blank" rel="noopener">GreasyFork listing</a>, click <strong>Install this script</strong>, then approve the prompt in your manager. Updates ship automatically.</p>
+            </div>
+        </div>
+
+        <div class="step">
+            <span class="step-number">3</span>
+            <div>
+                <h3>Refresh ChatGPT</h3>
+                <p>Go to <a href="https://chat.openai.com" target="_blank" rel="noopener">chat.openai.com</a>, open the conversation, and refresh once. An <strong>Export as PDF</strong> button appears near the title bar.</p>
+            </div>
+        </div>
+
+        <div class="step">
+            <span class="step-number">4</span>
+            <div>
+                <h3>Export your PDF</h3>
+                <p>Click the button, pick a filename, and save. The exporter renders a print-optimized HTML template and hands it to the browser’s native PDF generator.</p>
+            </div>
+        </div>
+
+        <div class="callout">
+            Prefer a one-off download without installing anything? Use the <a href="/docs/chatgpt-exporter#console-method">console method</a> — paste the snippet, run it, and the PDF downloads immediately.
+        </div>
+
+        <h2>What the PDF includes</h2>
+        <div class="highlight-grid">
+            <div class="highlight">
+                <strong>Clean typography</strong>
+                <p>Readable sans-serif body copy, monospaced code blocks, and optional cover page metadata.</p>
+            </div>
+            <div class="highlight">
+                <strong>Smart pagination</strong>
+                <p>Automatic page breaks at logical sections so answers never split mid-sentence.</p>
+            </div>
+            <div class="highlight">
+                <strong>Dark & light support</strong>
+                <p>Styles flip automatically based on your ChatGPT theme for visual parity.</p>
+            </div>
+            <div class="highlight">
+                <strong>File naming</strong>
+                <p>Files include the conversation title and timestamp (<code>chatgpt-export-2025-01-07.pdf</code>).</p>
+            </div>
+        </div>
+
+        <h2>Customize the output</h2>
+        <table class="spec-table">
+            <tr>
+                <th>Option</th>
+                <th>Where to change it</th>
+                <th>Why it matters</th>
+            </tr>
+            <tr>
+                <td>Page size</td>
+                <td>Browser print dialog (A4, Letter)</td>
+                <td>Match publishing or internal style requirements.</td>
+            </tr>
+            <tr>
+                <td>Headers & footers</td>
+                <td>Toggle in print dialog</td>
+                <td>Add timestamps or hide them for a cleaner export.</td>
+            </tr>
+            <tr>
+                <td>Images</td>
+                <td>Leave inline, or download originals</td>
+                <td>Images export as embedded nodes; download separately if you need high-resolution versions.</td>
+            </tr>
+        </table>
+
+        <h2>Troubleshooting</h2>
+        <div class="faq-item">
+            <div class="faq-question">The PDF button is missing</div>
+            <p>Ensure the userscript is enabled and refresh the tab. Tampermonkey may ask you to allow the ChatGPT domain after installation.</p>
+        </div>
+        <div class="faq-item">
+            <div class="faq-question">PDF looks different from ChatGPT</div>
+            <p>The exporter applies a dedicated stylesheet for print. Use the <strong>Preview</strong> button in your browser to check before saving, or tweak the template via GitHub.</p>
+        </div>
+        <div class="faq-item">
+            <div class="faq-question">Long chats stall during export</div>
+            <p>Expand all messages before exporting. On very long threads, wait a few seconds while the browser finishes rendering the HTML snapshot.</p>
+        </div>
+
+        <div class="cta-section">
+            <h2>Export your next ChatGPT conversation</h2>
+            <p>Install the userscript once and download PDFs in a single click.</p>
+            <a href="https://greasyfork.org/en/scripts/530790-chatgpt-chat-exporter-pdf" class="cta-button">Install PDF Exporter</a>
+            <a href="/how-to/export-chatgpt-to-markdown" class="cta-button secondary">Prefer Markdown? See the guide →</a>
+        </div>
+
+        <h2>Keep learning</h2>
+        <ul>
+            <li><a href="/chatgpt-exporter">ChatGPT Exporter landing page</a></li>
+            <li><a href="/compare/chatgpt-exporter-vs-extensions">Compare userscripts vs extensions</a></li>
+            <li><a href="/guide/export-all-chatgpt-data">Bulk export your entire ChatGPT account</a></li>
+        </ul>
+
+        <div class="page-footer">
+            <p>Created by Rashid Azarang • <a href="https://github.com/rashidazarang/chatgpt-chat-exporter" target="_blank" rel="noopener">GitHub</a> • <a href="/docs/chatgpt-exporter">Documentation</a></p>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatGPT Exporter vs Browser Extensions — Privacy, formats, and speed</title>
+    <meta name="description" content="See how the open-source ChatGPT Exporter userscript compares to Chrome extensions like ChatGPT Exporter and ExportGPT. Review privacy, permissions, formats, and maintenance." />
+    <link rel="canonical" href="https://chatgpt-chat-exporter.vercel.app/compare/chatgpt-exporter-vs-extensions" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="ChatGPT Exporter vs Browser Extensions" />
+    <meta property="og:description" content="Compare privacy, permissions, and output quality between the ChatGPT Exporter userscript and Chrome extensions." />
+    <meta property="og:url" content="https://chatgpt-chat-exporter.vercel.app/compare/chatgpt-exporter-vs-extensions" />
+    <meta property="og:image" content="https://chatgpt-chat-exporter.vercel.app/assets/og/og-comparison.png" />
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:title" content="Userscript vs Extensions for ChatGPT Exports" />
+    <meta property="twitter:description" content="See why the open-source userscript beats heavy extensions for exporting ChatGPT chats." />
+    <meta property="twitter:image" content="https://chatgpt-chat-exporter.vercel.app/assets/og/og-comparison.png" />
+    <link rel="stylesheet" href="/assets/css/theme.css" />
+    <script src="/assets/js/nav.js" defer></script>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "TechArticle",
+      "headline": "ChatGPT Exporter vs Browser Extensions",
+      "description": "Comparison of the ChatGPT Exporter userscript with popular Chrome extensions across privacy, permissions, formats, and maintenance.",
+      "datePublished": "2025-01-07",
+      "dateModified": "2025-01-07",
+      "author": {
+        "@type": "Person",
+        "name": "Rashid Azarang"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "ChatGPT Exporter"
+      }
+    }
+    </script>
+
+</head>
+<body>
+    <header class="site-header">
+        <div class="nav-container">
+            <a class="nav-brand" href="/chatgpt-exporter">
+                <span>⚡</span>
+                ChatGPT Exporter
+            </a>
+            <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" data-nav-toggle>
+                <span class="sr-only">Toggle navigation</span>
+                <span class="nav-toggle-bars"></span>
+            </button>
+            <nav id="primary-nav" class="nav-links" data-nav-menu>
+                <a href="/chatgpt-exporter">Overview</a>
+                <a href="/how-to/export-chatgpt-to-markdown">Markdown</a>
+                <a href="/how-to/export-chatgpt-to-pdf">PDF</a>
+                <a href="/how-to/export-gemini-to-markdown">Gemini</a>
+                <a href="/compare/chatgpt-exporter-vs-extensions">Comparison</a>
+                <a href="/guide/export-all-chatgpt-data">Data Export</a>
+                <a href="/docs/chatgpt-exporter">Docs</a>
+                <a class="nav-cta" href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown?utm_source=site&utm_medium=nav&utm_campaign=chatgpt_exporter">Install Markdown</a>
+            </nav>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="breadcrumb">
+            <a href="/chatgpt-exporter">Home</a> → Comparison
+        </div>
+
+        <span class="pill">Privacy-first</span>
+        <h1>ChatGPT Exporter vs Browser Extensions</h1>
+        <div class="meta">Updated January 2025 • Objective comparison • By Rashid Azarang</div>
+
+        <div class="intro">
+            <p>Browser extensions promise one-click ChatGPT exports, but they add a heavy permission footprint and run code in the background. The <strong>ChatGPT Exporter</strong> userscript keeps everything on the page, open-sourced, and easy to audit.</p>
+            <p>This page compares core criteria — privacy, formats, maintenance, and speed — so you can choose the workflow that fits.</p>
+        </div>
+
+        <h2>Feature comparison</h2>
+        <table class="compare-table">
+            <tr>
+                <th>Dimension</th>
+                <th>ChatGPT Exporter (userscript)</th>
+                <th>Chrome extensions (ChatGPT Exporter, ExportGPT, etc.)</th>
+            </tr>
+            <tr>
+                <td>Install footprint</td>
+                <td>Userscript manager only. No background processes.</td>
+                <td>Extension install (service workers, background scripts, updates via Chrome Web Store).</td>
+            </tr>
+            <tr>
+                <td>Permissions</td>
+                <td>Runs in active tab. Review the source before enabling.</td>
+                <td>Often request broad permissions (clipboard, network, multiple domains).</td>
+            </tr>
+            <tr>
+                <td>Formats</td>
+                <td>Markdown, PDF, HTML, Gemini Markdown (open roadmap for more).</td>
+                <td>Varies: PDF/MD/TXT/JSON depending on the extension.</td>
+            </tr>
+            <tr>
+                <td>Output quality</td>
+                <td>Clean Markdown heading hierarchy, code fences, smart pagination for PDF.</td>
+                <td>Inconsistent Markdown formatting; some rely on screenshots.</td>
+            </tr>
+            <tr>
+                <td>Updates</td>
+                <td>Auto-notified via userscript manager; changelog on GitHub.</td>
+                <td>Depends on author; update lag while stores approve new versions.</td>
+            </tr>
+            <tr>
+                <td>Auditability</td>
+                <td>Single-file script on GitHub and GreasyFork.</td>
+                <td>Source sometimes obfuscated or unavailable.</td>
+            </tr>
+        </table>
+
+        <div class="callout">
+            Looking for an account-level export? Use <a href="/guide/export-all-chatgpt-data">OpenAI’s official data export</a> to download everything, then switch back to the userscript for per-chat Markdown/PDF.
+        </div>
+
+        <h2>When to pick a userscript</h2>
+        <div class="grid">
+            <div class="grid-card">
+                <h3>Security-first environments</h3>
+                <p>Audit the code before every run and keep it in version control. No hidden background activity.</p>
+            </div>
+            <div class="grid-card">
+                <h3>Multi-format output</h3>
+                <p>Need Markdown for notes and PDF for sharing? Install both userscripts, switch with one click.</p>
+            </div>
+            <div class="grid-card">
+                <h3>Quick experiments</h3>
+                <p>Use the <a href="/docs/chatgpt-exporter#console-method">console method</a> when you or teammates can’t install extensions.</p>
+            </div>
+        </div>
+
+        <h2>When an extension still helps</h2>
+        <ul>
+            <li>You want a visual UI with settings, history, or bulk exports.</li>
+            <li>You’re okay with broader permissions for features like automatic backups.</li>
+            <li>You need integrations that call external APIs (Drive, Slack, etc.).</li>
+        </ul>
+
+        <div class="cta-section">
+            <h2>Switch to a transparent exporter</h2>
+            <p>Install the open-source userscript, keep data local, and export Markdown or PDF instantly.</p>
+            <a href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown" class="cta-button">Install Markdown userscript</a>
+            <a href="https://greasyfork.org/en/scripts/530790-chatgpt-chat-exporter-pdf" class="cta-button secondary">Install PDF userscript</a>
+        </div>
+
+        <h2>Continue exploring</h2>
+        <ul>
+            <li><a href="/chatgpt-exporter">Landing page — features & FAQ</a></li>
+            <li><a href="/how-to/export-chatgpt-to-markdown">Markdown tutorial</a></li>
+            <li><a href="/how-to/export-chatgpt-to-pdf">PDF tutorial</a></li>
+        </ul>
+
+        <div class="page-footer">
+            <p>Created by Rashid Azarang • <a href="https://github.com/rashidazarang/chatgpt-chat-exporter" target="_blank" rel="noopener">GitHub</a> • <a href="/docs/chatgpt-exporter">Documentation</a></p>
+        </div>
+    </div>
+</body>
+</html>
