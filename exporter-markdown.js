@@ -318,5 +318,4 @@
     URL.revokeObjectURL(url2);
 
     console.log(`Export completed: ${processedMessages.length} messages exported`);
-<<<<<<< HEAD
 })();
