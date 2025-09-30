@@ -47,7 +47,6 @@
             const markdown = `[${text}](${url})`;
             link.parentNode.replaceChild(document.createTextNode(markdown), link);
         });
-
         // Convert remaining HTML to clean markdown text
         return cleanMarkdown(clone.innerText.trim());
     }
@@ -312,4 +311,5 @@
     URL.revokeObjectURL(url2);
 
     console.log(`Export completed: ${processedMessages.length} messages exported`);
+<<<<<<< HEAD
 })();
