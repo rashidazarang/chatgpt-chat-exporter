@@ -85,12 +85,26 @@
     function processMessageContent(element) {
         const clone = element.cloneNode(true);
         
-        // Remove UI elements
-        clone.querySelectorAll('button, svg, [class*="copy"], [class*="edit"]').forEach(el => el.remove());
-        
-        // Process code blocks
+        // Remove UI elements.
+        // Do NOT use [class*="edit"]: matches CodeMirror's "cm-editor" wrapper
+        // that holds the actual code in modern ChatGPT.
+        clone.querySelectorAll('button, svg').forEach(el => el.remove());
+
+        // Process code blocks. Modern ChatGPT renders code via CodeMirror inside
+        // <pre> with a sticky language header div and the code in .cm-content.
         clone.querySelectorAll('pre').forEach(pre => {
-            const code = pre.innerText.trim();
+            pre.querySelector('[class*="sticky"]')?.remove();
+            const cmContent = pre.querySelector('.cm-content');
+            const codeEl = pre.querySelector('code');
+            let code;
+            if (cmContent) {
+                // CodeMirror separates lines with <br>. The clone is detached from
+                // layout so innerText collapses; replace <br> with "\n" and read textContent.
+                cmContent.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+                code = cmContent.textContent.trim();
+            } else {
+                code = (codeEl?.innerText ?? pre.innerText).trim();
+            }
             const codeBlock = document.createElement('div');
             codeBlock.className = 'code-block';
             codeBlock.textContent = code;

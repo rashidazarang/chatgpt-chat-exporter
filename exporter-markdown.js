@@ -18,14 +18,38 @@
     function processMessageContent(element) {
         const clone = element.cloneNode(true);
 
-        // Remove UI elements that shouldn't be in the export
-        clone.querySelectorAll('button, svg, [class*="copy"], [class*="edit"], [class*="regenerate"]').forEach(el => el.remove());
+        // Remove UI elements that shouldn't be in the export.
+        // Do NOT use [class*="edit"]: it matches CodeMirror's "cm-editor" wrapper
+        // that holds the actual code in modern ChatGPT, and would erase code blocks.
+        clone.querySelectorAll('button, svg, [class*="regenerate"]').forEach(el => el.remove());
 
-        // Replace <pre><code> blocks with proper markdown
+        // Convert code blocks to fenced markdown.
+        // Modern ChatGPT renders code via CodeMirror inside <pre>: the language label
+        // sits in a sticky header div and the code lives in .cm-content (no <pre><code>).
         clone.querySelectorAll('pre').forEach(pre => {
-            const code = pre.innerText.trim();
-            const langMatch = pre.querySelector('code')?.className?.match(/language-([a-zA-Z0-9]+)/);
-            const lang = langMatch ? langMatch[1] : '';
+            const codeEl = pre.querySelector('code');
+            const langMatch = codeEl?.className?.match(/language-([a-zA-Z0-9]+)/);
+            let lang = langMatch ? langMatch[1] : '';
+            if (!lang) {
+                const header = pre.querySelector('[class*="sticky"]');
+                const headerText = header?.innerText?.trim() || '';
+                if (headerText && headerText.length < 30 && !headerText.includes('\n')) {
+                    lang = headerText.toLowerCase();
+                }
+                header?.remove();
+            }
+
+            const cmContent = pre.querySelector('.cm-content');
+            let code;
+            if (cmContent) {
+                // CodeMirror separates lines with <br>. The clone is detached from
+                // layout so innerText collapses; replace <br> with "\n" and read textContent.
+                cmContent.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+                code = cmContent.textContent.trim();
+            } else {
+                code = (codeEl?.innerText ?? pre.innerText).trim();
+            }
+
             const codeBlock = document.createTextNode(`\n\n\`\`\`${lang}\n${code}\n\`\`\`\n`);
             pre.parentNode.replaceChild(codeBlock, pre);
         });

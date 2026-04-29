@@ -192,12 +192,26 @@
         messages.forEach((messageElement, index) => {
             const sender = identifySender(messageElement, index, messages);
             
-            // Remove UI elements that shouldn't be in the export
+            // Remove UI elements that shouldn't be in the export.
+            // Do NOT use [class*="edit"]: matches CodeMirror's "cm-editor" wrapper
+            // that holds the actual code in modern ChatGPT.
             const clone = messageElement.cloneNode(true);
-            clone.querySelectorAll('button, svg, [class*="copy"], [class*="edit"], [class*="regenerate"]').forEach(el => el.remove());
+            clone.querySelectorAll('button, svg, [class*="regenerate"]').forEach(el => el.remove());
 
             clone.querySelectorAll('pre').forEach(pre => {
-                const code = sanitize(pre.innerText.trim());
+                pre.querySelector('[class*="sticky"]')?.remove();
+                const cmContent = pre.querySelector('.cm-content');
+                const codeEl = pre.querySelector('code');
+                let raw;
+                if (cmContent) {
+                    // CodeMirror separates lines with <br>. The clone is detached from
+                    // layout so innerText collapses; replace <br> with "\n" and read textContent.
+                    cmContent.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+                    raw = cmContent.textContent;
+                } else {
+                    raw = codeEl?.innerText ?? pre.innerText;
+                }
+                const code = sanitize(raw.trim());
                 pre.replaceWith(`<pre><code>${code}</code></pre>`);
             });
 
