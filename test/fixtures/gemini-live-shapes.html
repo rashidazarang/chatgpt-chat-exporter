@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head><title>Gemini Live Shapes Fixture</title></head>
+<body>
+    <main>
+        <user-query>
+            <div class="query-text">Controlled synthetic Gemini prompt with code, table, media, and file card.</div>
+        </user-query>
+        <model-response>
+            <message-content>
+                <div class="response-container">
+                    <h2>Gemini Audit</h2>
+                    <p><strong>Bold</strong> and <em>italic</em> synthetic response text.</p>
+                    <response-element>
+                        <code-block language="javascript">
+                            <div slot="header">JavaScript</div>
+                            <pre><code>function audit() {
+  return "gemini";
+}</code></pre>
+                        </code-block>
+                    </response-element>
+                    <table>
+                        <tr><th>Provider</th><th>Shape</th><th>Status</th></tr>
+                        <tr><td>Gemini</td><td>code-block</td><td>Observed</td></tr>
+                    </table>
+                    <ol>
+                        <li>First ordered item</li>
+                        <li>Second ordered item</li>
+                    </ol>
+                    <p>Reference <a href="https://gemini.google.com/app">Gemini app</a>.</p>
+                    <canvas aria-label="synthetic chart"></canvas>
+                    <div class="file-card"><span>gemini-notes.txt</span></div>
+                </div>
+            </message-content>
+        </model-response>
+    </main>
+</body>
+</html>

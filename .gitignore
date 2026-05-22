@@ -1,5 +1,9 @@
 # Dependency directories
 node_modules/
+
+# Local-only live reverse-engineering captures. These can contain private
+# authenticated DOM/network evidence and must never be committed.
+private-research/
 npm-debug.log
 yarn-debug.log
 yarn-error.log
@@ -33,4 +37,4 @@ agent-orchestra/
 airtable-ai-agent/
 mcp-ide-playbooks/
 mcp-intelligence/
-test-npm-install/ 
+test-npm-install/

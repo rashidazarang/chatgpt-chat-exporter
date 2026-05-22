@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head><title>ChatGPT Live Shapes Fixture</title></head>
+<body>
+    <main>
+        <div data-message-author-role="user">
+            <p>Controlled synthetic prompt with headings, math, code, tables, media, files, and artifacts.</p>
+        </div>
+        <div data-message-author-role="assistant">
+            <div class="markdown prose">
+                <h2>Audit Heading</h2>
+                <p>
+                    <strong>Bold</strong> text, <em>italic</em> text, and inline variance
+                    <span class="katex">
+                        <span class="katex-mathml">
+                            <math><semantics><annotation encoding="application/x-tex">\sigma^2</annotation></semantics></math>
+                        </span>
+                        <span class="katex-html">visual sigma squared</span>
+                    </span>.
+                </p>
+                <span class="katex-display">
+                    <span class="katex">
+                        <span class="katex-mathml">
+                            <math><semantics><annotation encoding="application/x-tex">y=x^2</annotation></semantics></math>
+                        </span>
+                        <span class="katex-html">visual equation</span>
+                    </span>
+                </span>
+                <pre>
+                    <div class="sticky top-0"><span>TypeScript</span><button>Copy</button></div>
+                    <div class="cm-editor">
+                        <div class="cm-content"><span>const value = 1;</span><br><span>console.log(value);</span></div>
+                    </div>
+                </pre>
+                <table>
+                    <thead><tr><th>Feature</th><th>Status</th><th>Notes</th></tr></thead>
+                    <tbody><tr><td>Tables</td><td>Stable</td><td>Flatten spans</td></tr></tbody>
+                </table>
+                <ul>
+                    <li>Parent item
+                        <ul><li>Child item</li></ul>
+                    </li>
+                </ul>
+                <blockquote>Quoted synthetic result.</blockquote>
+                <p>See <a href="https://example.com/a)b">Doc [A]</a>.</p>
+                <div data-testid="file-card"><span>sample-report.csv</span><button>Download</button></div>
+                <div data-testid="artifact-card"><span>audit-notes.md</span></div>
+                <img alt="synthetic chart">
+            </div>
+        </div>
+    </main>
+</body>
+</html>

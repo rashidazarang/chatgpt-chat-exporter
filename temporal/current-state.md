@@ -1,5 +1,7 @@
 ## Current State Analysis
 
+> v0.7.0 update: the major selector/content extraction issues listed below have been addressed by the shared extraction engine in `src/extraction-engine.js`, generated console/userscript outputs, and synthetic live-shape tests. This document is retained as historical planning context.
+
 ### **Identified Issues:**
 
 1. **Fragile DOM Selectors**: The code relies on CSS classes like `.text-base`, `div[class*="group"]`, `.markdown`, `.prose`, `.whitespace-pre-wrap` which are likely to break when OpenAI updates ChatGPT's interface.
@@ -27,20 +29,20 @@
 *Priority: Critical*
 
 **1.1 ChatGPT Interface Analysis**
-- [ ] Inspect current ChatGPT DOM structure across different conversation types
-- [ ] Identify stable selectors and data attributes
-- [ ] Document conversation flow patterns and message containers
-- [ ] Test with various conversation types (text, code, images, files, plugins)
+- [x] Inspect current ChatGPT DOM structure across representative live synthetic conversations
+- [x] Identify stable selectors and data attributes
+- [x] Document conversation flow patterns and message containers
+- [x] Test with representative text, code, image/media, table, math, file/card, and artifact-like synthetic structures
 
 **1.2 Selector Modernization**
-- [ ] Replace fragile CSS class selectors with more robust alternatives
-- [ ] Implement fallback selector strategies
-- [ ] Add selector validation and graceful degradation
-- [ ] Create selector mapping for different ChatGPT interface versions
+- [x] Replace fragile CSS class selectors with more robust alternatives
+- [x] Implement fallback selector strategies
+- [x] Add selector validation and graceful degradation
+- [x] Create provider selector mapping for current ChatGPT and Gemini interfaces
 
 **1.3 Message Detection Overhaul**
-- [ ] Unify message detection logic between markdown and PDF exporters
-- [ ] Implement reliable sender identification (You vs ChatGPT vs System)
+- [x] Unify message detection logic between markdown, HTML, PDF, Gemini, and userscript exporters
+- [x] Implement reliable sender identification (You vs ChatGPT/Gemini)
 - [ ] Add support for system messages and conversation metadata
 - [ ] Handle edge cases (deleted messages, loading states, errors)
 
@@ -48,10 +50,10 @@
 *Priority: High*
 
 **2.1 Content Extraction Improvement**
-- [ ] Enhanced code block detection with language identification
-- [ ] Better handling of nested HTML structures
-- [ ] Support for ChatGPT's rich content (tables, lists, formatting)
-- [ ] Improved image and media placeholder handling
+- [x] Enhanced code block detection with language identification
+- [x] Better handling of nested HTML structures
+- [x] Support for ChatGPT's rich content (tables, lists, formatting)
+- [x] Improved image, media, file, and artifact placeholder handling
 
 **2.2 Markdown Processing**
 - [ ] Fix markdown escaping issues
