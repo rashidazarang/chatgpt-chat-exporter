@@ -5,13 +5,14 @@
     const CONFIG = {
         selectors: {
             messages: [
+                'user-query, model-response',
                 '[data-test-id="conversation-turn"]',
+                '[data-testid="conversation-turn"]',
+                '[data-message-author-role]',
                 '[class*="conversation-turn"]',
-                'model-response',
+                '[role="listitem"]',
                 '[role="presentation"] > div',
-                '.conversation-container > div',
-                '[class*="message"]',
-                'div[class*="turn"]:not([class*="turn"] [class*="turn"])'
+                '.conversation-container > div'
             ],
             title: [
                 'h1:not([class*="hidden"])',
@@ -19,9 +20,9 @@
                 '[data-testid*="conversation-title"]',
                 '[aria-label*="conversation"]'
             ],
-            uiElements: 'button, svg, [class*="copy"], [class*="edit"], [class*="regenerate"], [class*="more"], [aria-label*="copy"]',
+            uiElements: 'button, svg, [class*="regenerate"], [class*="more"], [data-testid*="copy"], [aria-label*="Copy"], [aria-label*="copy"]',
             codeBlocks: 'pre',
-            media: 'img, canvas'
+            media: 'img, canvas, video, audio'
         },
         patterns: {
             geminiIndicators: /^(i understand|i can help|here's|i'll|let me|i'd be happy|certainly|of course|absolutely)/i,
@@ -41,7 +42,6 @@
         formatDate: (date = new Date()) => date.toISOString().split('T')[0],
         
         cleanMarkdown: (text) => text
-            .replace(/\\(?![\\*_`])/g, '\\\\')
             .replace(/\n{3,}/g, '\n\n')
             .replace(/&lt;/g, '<')
             .replace(/&gt;/g, '>')
@@ -60,6 +60,8 @@
         },
 
         logStep: (message, data) => console.log(`[Gemini Exporter] ${message}`, data || ''),
+
+        getText: (element) => (element?.innerText ?? element?.textContent ?? '').trim(),
         
         showError: (message, details) => {
             console.error(`[Gemini Exporter] ${message}`, details);
@@ -76,25 +78,134 @@
             clone.querySelectorAll(CONFIG.selectors.uiElements)
                  .forEach(el => el.remove());
             
-            // Process code blocks
             messageProcessor.processCodeBlocks(clone);
+            messageProcessor.processMath(clone);
+            messageProcessor.processMedia(clone);
+            messageProcessor.processLinks(clone);
+            messageProcessor.processTables(clone);
             
-            // Replace media with placeholders
-            clone.querySelectorAll(CONFIG.selectors.media)
-                 .forEach(el => el.parentNode.replaceChild(
-                     document.createTextNode('[Image or Canvas]'), el
-                 ));
-            
-            return utils.cleanMarkdown(clone.innerText.trim());
+            return utils.cleanMarkdown(utils.getText(clone));
         },
 
         processCodeBlocks: (clone) => {
             clone.querySelectorAll(CONFIG.selectors.codeBlocks).forEach(pre => {
-                const code = pre.innerText.trim();
-                const langMatch = pre.querySelector('code')?.className?.match(/language-([a-zA-Z0-9]+)/);
-                const lang = langMatch ? langMatch[1] : '';
+                const { lang, code } = messageProcessor.extractCodeBlock(pre);
                 const codeBlock = document.createTextNode(`\n\n\`\`\`${lang}\n${code}\n\`\`\`\n`);
                 pre.parentNode.replaceChild(codeBlock, pre);
+            });
+        },
+
+        extractCodeBlock: (pre) => {
+            const codeEl = pre.querySelector('code');
+            const langMatch = codeEl?.className?.match(/language-([a-zA-Z0-9_-]+)/);
+            let lang = langMatch ? langMatch[1] : '';
+
+            if (!lang) {
+                const header = pre.querySelector('[class*="sticky"], [class*="code-header"], [data-test-id*="code"], [data-testid*="code"]');
+                const headerText = utils.getText(header).replace(/\b(copy|code|download)\b/gi, '').trim();
+                if (headerText && headerText.length < 30 && !headerText.includes('\n')) {
+                    lang = headerText.toLowerCase();
+                }
+                header?.remove();
+            }
+
+            const cmContent = pre.querySelector('.cm-content');
+            if (cmContent) {
+                const cmLines = cmContent.querySelectorAll('.cm-line');
+                if (cmLines.length > 0) {
+                    return { lang, code: Array.from(cmLines).map(line => line.textContent).join('\n').trim() };
+                }
+
+                cmContent.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+                return { lang, code: cmContent.textContent.trim() };
+            }
+
+            return { lang, code: utils.getText(codeEl || pre) };
+        },
+
+        processMath: (clone) => {
+            const processed = new Set();
+
+            clone.querySelectorAll('annotation[encoding*="tex"]').forEach(annotation => {
+                const tex = annotation.textContent.trim();
+                if (!tex) return;
+
+                const displayRoot = annotation.closest('.katex-display, mjx-container[display="true"], [display="block"]');
+                const mathRoot = displayRoot || annotation.closest('.katex, mjx-container, math');
+                if (!mathRoot || processed.has(mathRoot)) return;
+
+                processed.add(mathRoot);
+                mathRoot.replaceWith(document.createTextNode(displayRoot ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
+            });
+
+            clone.querySelectorAll('script[type^="math/tex"]').forEach(script => {
+                const tex = script.textContent.trim();
+                if (!tex) return;
+                const isDisplay = /mode=display/.test(script.type);
+                script.replaceWith(document.createTextNode(isDisplay ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
+            });
+        },
+
+        processMedia: (clone) => {
+            clone.querySelectorAll(CONFIG.selectors.media).forEach(el => {
+                const tag = el.tagName.toLowerCase();
+                const alt = el.getAttribute('alt') || el.getAttribute('aria-label') || '';
+                const label = tag === 'img' && alt ? `[Image: ${alt}]` :
+                    tag === 'canvas' ? '[Canvas or chart]' :
+                    tag === 'video' ? '[Video]' :
+                    tag === 'audio' ? '[Audio]' :
+                    '[Media]';
+                el.parentNode.replaceChild(document.createTextNode(label), el);
+            });
+        },
+
+        processLinks: (clone) => {
+            clone.querySelectorAll('a[href]').forEach(link => {
+                if (link.closest('pre, code')) return;
+
+                const href = (link.href || '').trim();
+                const lowerHref = href.toLowerCase();
+                if (!href || lowerHref.startsWith('javascript:') || lowerHref.startsWith('data:') || lowerHref.startsWith('vbscript:') || href.startsWith('#')) return;
+
+                const text = link.textContent.replace(/\s+/g, ' ').trim() || href;
+                const escapedText = text
+                    .replace(/\\/g, '\\\\')
+                    .replace(/([\[\]])/g, '\\$1');
+                const safeHref = href
+                    .replace(/\\/g, '%5C')
+                    .replace(/\)/g, '%29');
+                link.replaceWith(document.createTextNode(`[${escapedText}](${safeHref})`));
+            });
+        },
+
+        tableCellText: (cell) => utils.getText(cell).replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim() || ' ',
+
+        tableToMarkdown: (table) => {
+            const rows = Array.from(table.querySelectorAll('tr'))
+                .map(row => Array.from(row.children)
+                    .filter(cell => ['TH', 'TD'].includes(cell.tagName))
+                    .map(messageProcessor.tableCellText))
+                .filter(cells => cells.length > 0);
+
+            if (rows.length === 0) return utils.getText(table);
+
+            const width = Math.max(...rows.map(row => row.length));
+            const normalizedRows = rows.map(row => row.concat(Array(Math.max(0, width - row.length)).fill(' ')));
+            const header = normalizedRows[0];
+            const separator = header.map(() => '---');
+            const body = normalizedRows.slice(1);
+            const lines = [
+                `| ${header.join(' | ')} |`,
+                `| ${separator.join(' | ')} |`,
+                ...body.map(row => `| ${row.join(' | ')} |`)
+            ];
+
+            return `\n\n${lines.join('\n')}\n\n`;
+        },
+
+        processTables: (clone) => {
+            clone.querySelectorAll('table').forEach(table => {
+                table.replaceWith(document.createTextNode(messageProcessor.tableToMarkdown(table)));
             });
         },
 
@@ -120,7 +231,7 @@
 
         checkDataAttributes: (element) => {
             const role = element.getAttribute('data-message-author-role');
-            return role === 'user' ? 'You' : role === 'model' ? 'Gemini' : null;
+            return role === 'user' ? 'You' : ['model', 'assistant'].includes(role) ? 'Gemini' : null;
         },
 
         checkAvatars: (element) => {

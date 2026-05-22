@@ -9,6 +9,8 @@
 - **Features:**
   - Clean markdown formatting
   - Preserves code blocks with syntax highlighting
+  - Converts rendered tables to Markdown tables
+  - Exports MathJax/KaTeX equations as `$...$` and `$$...$$`
   - Lightweight text format
   - Easy to edit and share
 
@@ -19,6 +21,7 @@
 - **Features:**
   - Works without external libraries (bypasses CSP restrictions)
   - Professional formatting with blue/gray message boxes
+  - Preserves printable code blocks, tables, and equations
   - Automatic page break handling
   - Clear on-screen instructions (hidden in PDF)
   - One-click conversion to PDF via browser print
@@ -29,6 +32,7 @@
 - **File naming:** `{ConversationTitle} (YYYY-MM-DD).html`
 - **Features:**
   - Styled HTML with CSS
+  - Keeps code blocks and tables as structured HTML
   - Can be opened in any browser
   - Print to PDF using browser (Ctrl+P / Cmd+P)
   - Includes formatting and structure
@@ -54,6 +58,7 @@
 - **PDF Exporter:** Downloads an HTML file with clear instructions. Open it and press Ctrl+P to save as PDF
 - **HTML Exporter:** Basic HTML for web viewing. Can also be printed to PDF but without special formatting
 - **File Names:** All exporters now use the conversation title for better organization
+- **Math:** Markdown exports use common MathJax delimiters so compatible viewers can render equations
 
 ## Troubleshooting
 

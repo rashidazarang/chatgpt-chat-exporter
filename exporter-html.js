@@ -12,6 +12,149 @@
             .replace(/'/g, '&#39;');
     }
 
+    function getText(element) {
+        return (element?.innerText ?? element?.textContent ?? '').trim();
+    }
+
+    function removeUiElements(clone) {
+        clone.querySelectorAll('button, svg, [class*="regenerate"], [data-testid*="copy"], [aria-label*="Copy"], [aria-label*="copy"]').forEach(el => el.remove());
+    }
+
+    function extractCodeBlock(pre) {
+        const codeEl = pre.querySelector('code');
+        const langMatch = codeEl?.className?.match(/language-([a-zA-Z0-9_-]+)/);
+        let lang = langMatch ? langMatch[1] : '';
+
+        if (!lang) {
+            const header = pre.querySelector('[class*="sticky"], [class*="code-header"], [data-testid*="code-block"]');
+            const headerText = getText(header).replace(/\b(copy|code|download)\b/gi, '').trim();
+            if (headerText && headerText.length < 30 && !headerText.includes('\n')) {
+                lang = headerText.toLowerCase();
+            }
+            header?.remove();
+        }
+
+        const cmContent = pre.querySelector('.cm-content');
+        if (cmContent) {
+            const cmLines = cmContent.querySelectorAll('.cm-line');
+            if (cmLines.length > 0) {
+                return { lang, code: Array.from(cmLines).map(line => line.textContent).join('\n').trim() };
+            }
+
+            cmContent.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+            return { lang, code: cmContent.textContent.trim() };
+        }
+
+        return { lang, code: getText(codeEl || pre) };
+    }
+
+    function addReplacement(replacements, html) {
+        const marker = `EXPORTER_BLOCK_${replacements.length}`;
+        replacements.push({ marker, html });
+        return marker;
+    }
+
+    function processCodeBlocks(clone, replacements) {
+        clone.querySelectorAll('pre').forEach(pre => {
+            const { lang, code } = extractCodeBlock(pre);
+            const langClass = lang ? ` class="language-${sanitize(lang)}"` : '';
+            const html = `<pre><code${langClass}>${sanitize(code)}</code></pre>`;
+            pre.replaceWith(document.createTextNode(addReplacement(replacements, html)));
+        });
+    }
+
+    function processMath(clone) {
+        const processed = new Set();
+
+        clone.querySelectorAll('annotation[encoding*="tex"]').forEach(annotation => {
+            const tex = annotation.textContent.trim();
+            if (!tex) return;
+
+            const displayRoot = annotation.closest('.katex-display, mjx-container[display="true"], [display="block"]');
+            const mathRoot = displayRoot || annotation.closest('.katex, mjx-container, math');
+            if (!mathRoot || processed.has(mathRoot)) return;
+
+            processed.add(mathRoot);
+            mathRoot.replaceWith(document.createTextNode(displayRoot ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
+        });
+
+        clone.querySelectorAll('script[type^="math/tex"]').forEach(script => {
+            const tex = script.textContent.trim();
+            if (!tex) return;
+            const isDisplay = /mode=display/.test(script.type);
+            script.replaceWith(document.createTextNode(isDisplay ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
+        });
+    }
+
+    function processMedia(clone) {
+        clone.querySelectorAll('img, canvas, video, audio').forEach(el => {
+            const tag = el.tagName.toLowerCase();
+            const alt = el.getAttribute('alt') || el.getAttribute('aria-label') || '';
+            const label = tag === 'img' && alt ? `[Image: ${alt}]` :
+                tag === 'canvas' ? '[Canvas or chart]' :
+                tag === 'video' ? '[Video]' :
+                tag === 'audio' ? '[Audio]' :
+                '[Media]';
+            el.replaceWith(document.createTextNode(label));
+        });
+    }
+
+    function processLinks(clone, replacements) {
+        clone.querySelectorAll('a[href]').forEach(link => {
+            if (link.closest('pre, code')) return;
+
+            const href = (link.href || '').trim();
+            const lowerHref = href.toLowerCase();
+            if (!href || lowerHref.startsWith('javascript:') || lowerHref.startsWith('data:') || lowerHref.startsWith('vbscript:') || href.startsWith('#')) return;
+
+            const text = link.textContent.replace(/\s+/g, ' ').trim() || href;
+            const html = `<a href="${sanitize(href)}">${sanitize(text)}</a>`;
+            link.replaceWith(document.createTextNode(addReplacement(replacements, html)));
+        });
+    }
+
+    function tableToHtml(table) {
+        const rows = Array.from(table.querySelectorAll('tr'))
+            .map(row => Array.from(row.children)
+                .filter(cell => ['TH', 'TD'].includes(cell.tagName))
+                .map(cell => ({ tag: cell.tagName.toLowerCase(), text: getText(cell).replace(/\s+/g, ' ') })))
+            .filter(cells => cells.length > 0);
+
+        if (rows.length === 0) return sanitize(getText(table));
+
+        const renderedRows = rows.map(cells => {
+            const renderedCells = cells.map(cell => `<${cell.tag}>${sanitize(cell.text)}</${cell.tag}>`).join('');
+            return `<tr>${renderedCells}</tr>`;
+        }).join('');
+
+        return `<table>${renderedRows}</table>`;
+    }
+
+    function processTables(clone, replacements) {
+        clone.querySelectorAll('table').forEach(table => {
+            table.replaceWith(document.createTextNode(addReplacement(replacements, tableToHtml(table))));
+        });
+    }
+
+    function restoreReplacements(html, replacements) {
+        return replacements.reduce((result, replacement) => result.replaceAll(replacement.marker, replacement.html), html);
+    }
+
+    function processMessageContent(element) {
+        const clone = element.cloneNode(true);
+        const replacements = [];
+
+        removeUiElements(clone);
+        processCodeBlocks(clone, replacements);
+        processMath(clone);
+        processMedia(clone);
+        processLinks(clone, replacements);
+        processTables(clone, replacements);
+
+        const html = sanitize(getText(clone)).replace(/\n/g, '<br>');
+        return restoreReplacements(html, replacements);
+    }
+
     function findMessages() {
         // More specific selectors to avoid nested elements
         const selectors = [
@@ -191,38 +334,10 @@
 
         messages.forEach((messageElement, index) => {
             const sender = identifySender(messageElement, index, messages);
-            
-            // Remove UI elements that shouldn't be in the export.
-            // Do NOT use [class*="edit"]: matches CodeMirror's "cm-editor" wrapper
-            // that holds the actual code in modern ChatGPT.
-            const clone = messageElement.cloneNode(true);
-            clone.querySelectorAll('button, svg, [class*="regenerate"]').forEach(el => el.remove());
-
-            clone.querySelectorAll('pre').forEach(pre => {
-                pre.querySelector('[class*="sticky"]')?.remove();
-                const cmContent = pre.querySelector('.cm-content');
-                const codeEl = pre.querySelector('code');
-                let raw;
-                if (cmContent) {
-                    // CodeMirror separates lines with <br>. The clone is detached from
-                    // layout so innerText collapses; replace <br> with "\n" and read textContent.
-                    cmContent.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
-                    raw = cmContent.textContent;
-                } else {
-                    raw = codeEl?.innerText ?? pre.innerText;
-                }
-                const code = sanitize(raw.trim());
-                pre.replaceWith(`<pre><code>${code}</code></pre>`);
-            });
-
-            clone.querySelectorAll('img, canvas').forEach(el => {
-                el.replaceWith('[Image or Canvas]');
-            });
-
-            const cleanText = sanitize(clone.innerText.trim()).replace(/\n/g, '<br>');
+            const cleanText = processMessageContent(messageElement);
             
             // Skip if empty or too short
-            if (!cleanText || cleanText.trim().length < 30) {
+            if (!cleanText || cleanText.replace(/<[^>]*>/g, '').trim().length < 30) {
                 console.log(`HTML: Skipping message ${index}: too short or empty`);
                 return;
             }
@@ -344,6 +459,20 @@
         code {
             font-family: 'Consolas', 'Monaco', monospace;
             font-size: 0.9rem;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+        th, td {
+            border: 1px solid #d9dde3;
+            padding: 0.5rem;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background: #eef2f7;
         }
         @media print {
             body { margin: 0; padding: 1rem; }
