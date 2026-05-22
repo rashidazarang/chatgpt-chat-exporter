@@ -397,7 +397,9 @@
         }
 
         function tableCellText(cell) {
-            return normalizeWhitespace(getText(cell)).replace(/\|/g, '\\|') || ' ';
+            return normalizeWhitespace(getText(cell))
+                .replace(/\\/g, '\\\\')
+                .replace(/\|/g, '\\|') || ' ';
         }
 
         function tableToMarkdown(table) {
@@ -580,7 +582,10 @@
             }
 
             if (tag === 'code') {
-                const content = getCodeText(node).replace(/`/g, '\\`').trim();
+                const content = getCodeText(node)
+                    .replace(/\\/g, '\\\\')
+                    .replace(/`/g, '\\`')
+                    .trim();
                 return content ? `\`${content}\`` : '';
             }
 
@@ -762,7 +767,7 @@
                 const content = serializeMessageContent(contentRoot, format);
                 const minLength = queryAll(contentRoot, 'pre, code-block, table, img, canvas, video, audio').length > 0 ? 3 : 10;
 
-                if (!content || content.replace(/<[^>]*>/g, '').trim().length < minLength) return;
+                if (!content || normalizeWhitespace(content).length < minLength) return;
 
                 const hash = contentHash(content);
                 if (seen.has(hash)) return;
