@@ -1,9 +1,9 @@
 # ChatGPT Chat Exporter 
-*Version: v0.6.0*
+*Version: v0.7.0*
 
 Export your full **ChatGPT** conversations as clean, readable **Markdown** or **PDF** files — including all messages, sender labels, and code blocks.
 
-> **🎯 Major Update:** Added **Google Gemini** support! Now exports conversations from both ChatGPT and Gemini with the same high-quality accuracy.
+> **Compatibility Update:** v0.7.0 rewrites extraction around a shared engine informed by a live Chrome/Crawlio audit of current ChatGPT and Gemini rendering. No private live captures are included in this repository.
 
 ![ChatGPT Chat Exporter in action](demo/demo.gif)
 
@@ -11,12 +11,12 @@ Export your full **ChatGPT** conversations as clean, readable **Markdown** or **
 
 ## ✅ Features
 
-- 🆕 **NEW:** **Google Gemini** conversation export support
+- 🆕 **Google Gemini** conversation export support
 - 📝 Captures **all messages** with proper sender attribution
-- 🔧 Preserves **code blocks**, tables, MathJax/KaTeX equations, formatting, and structure
+- 🔧 Preserves **CodeMirror/code blocks**, tables, MathJax/KaTeX equations, formatting, lists, links, media placeholders, and basic file/artifact cards
 - 📄 Supports export as **Markdown** or **Printable PDF**
 - 🚀 Works directly from browser — no install required
-- 🛡️ Future-proof against interface changes
+- 🛡️ Shared provider adapters reduce drift between console exporters and userscripts
   
 ---
 
@@ -76,7 +76,16 @@ This is the safest and most convenient method:
 
 ---
 
-## 🔧 What's New in v0.6.0
+## 🔧 What's New in v0.7.0
+
+**Live Compatibility Rewrite:**
+- 🧭 **Shared Extraction Engine**: ChatGPT console scripts, Gemini console script, and userscripts now embed one canonical extraction engine generated from `src/extraction-engine.js`
+- 🧱 **Provider Adapters**: ChatGPT uses `data-message-author-role` first; Gemini uses current `user-query` / `model-response` custom elements first
+- 🧩 **Modern Rich Content**: Handles CodeMirror, custom `code-block`, tables, links/citations, MathJax/KaTeX/TeX annotations, media placeholders, and basic file/artifact cards
+- 🧪 **Expanded Synthetic Fixtures**: Tests cover live-observed ChatGPT and Gemini DOM shapes without including private authenticated captures
+- 🔒 **Private Audit Boundary**: v0.7.0 is based on a local live Chrome/Crawlio compatibility audit; raw captures remain private and untracked
+
+## 📝 Previous Updates (v0.6.0)
 
 **Stability Improvements:**
 - 🧱 **Modern ChatGPT Code Blocks**: Supports CodeMirror-based code blocks used by current `chatgpt.com`
@@ -110,7 +119,8 @@ This is the safest and most convenient method:
 
 ## 🚀 Version History
 
-- **v0.6.0** (Current) - Modern ChatGPT code blocks, MathJax/KaTeX, tables, Gemini refresh
+- **v0.7.0** (Current) - Shared extraction engine, live Chrome/Crawlio compatibility audit, current ChatGPT/Gemini provider adapters
+- **v0.6.0** - Modern ChatGPT code blocks, MathJax/KaTeX, tables, Gemini refresh
 - **v0.5.0** - Smart file naming, true PDF support, improved duplicate detection
 - **v0.4.0** - Added Google Gemini support, multi-platform architecture
 - **v0.3.0** - Major ChatGPT stability fixes, modern selectors, duplicate prevention

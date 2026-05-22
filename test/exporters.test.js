@@ -3,11 +3,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { JSDOM } = require('jsdom');
+const engine = require('../src/extraction-engine.js');
 
 const repoRoot = path.resolve(__dirname, '..');
 
 function readScript(filename) {
     return fs.readFileSync(path.join(repoRoot, filename), 'utf8');
+}
+
+function readFixture(filename) {
+    return fs.readFileSync(path.join(repoRoot, 'test', 'fixtures', filename), 'utf8');
 }
 
 function chatGptFixture() {
@@ -136,6 +141,39 @@ test('ChatGPT markdown exporter preserves CodeMirror code, MathJax, tables, link
     assert.doesNotMatch(content, /\\\\mu/);
 });
 
+test('shared engine serializes live-observed ChatGPT shapes from synthetic fixture', () => {
+    const dom = new JSDOM(readFixture('chatgpt-live-shapes.html'), {
+        url: 'https://chatgpt.com/c/live-shapes'
+    });
+
+    const result = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(result.provider, 'chatgpt');
+    assert.equal(result.messages.length, 2);
+    assert.equal(result.messages[0].sender, 'You');
+    assert.equal(result.messages[1].sender, 'ChatGPT');
+
+    const content = result.messages[1].content;
+    assert.match(content, /## Audit Heading/);
+    assert.match(content, /\*\*Bold\*\*/);
+    assert.match(content, /\*italic\*/);
+    assert.match(content, /\$\\sigma\^2\$/);
+    assert.match(content, /\$\$y=x\^2\$\$/);
+    assert.match(content, /```typescript\nconst value = 1;\nconsole\.log\(value\);\n```/);
+    assert.match(content, /\| Feature \| Status \| Notes \|/);
+    assert.match(content, /- Parent item/);
+    assert.match(content, /- Child item/);
+    assert.match(content, /> Quoted synthetic result\./);
+    assert.match(content, /\[Doc \\\[A\\\]\]\(https:\/\/example\.com\/a%29b\)/);
+    assert.match(content, /\[File: sample-report\.csv\]/);
+    assert.match(content, /\[Artifact: audit-notes\.md\]/);
+    assert.match(content, /\[Image: synthetic chart\]/);
+});
+
 test('ChatGPT HTML exporter restores structured code and table markup', async () => {
     const { content } = await runExporter('exporter-html.js', chatGptFixture());
 
@@ -166,4 +204,30 @@ test('Gemini markdown exporter uses current selectors and rich content extractio
     assert.match(content, /\| Tool \| Status \|/);
     assert.match(content, /\[Gemini home\]\(https:\/\/gemini\.google\.com\/\)/);
     assert.match(content, /\[Canvas or chart\]/);
+});
+
+test('shared engine serializes live-observed Gemini custom elements from synthetic fixture', () => {
+    const dom = new JSDOM(readFixture('gemini-live-shapes.html'), {
+        url: 'https://gemini.google.com/app/live-shapes'
+    });
+
+    const result = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'gemini',
+        format: 'markdown'
+    });
+
+    assert.equal(result.provider, 'gemini');
+    assert.equal(result.messages.length, 2);
+    assert.equal(result.messages[0].sender, 'You');
+    assert.equal(result.messages[1].sender, 'Gemini');
+
+    const content = result.messages[1].content;
+    assert.match(content, /## Gemini Audit/);
+    assert.match(content, /```javascript\nfunction audit\(\) \{\n  return "gemini";\n\}\n```/);
+    assert.match(content, /\| Provider \| Shape \| Status \|/);
+    assert.match(content, /1\. First ordered item/);
+    assert.match(content, /\[Gemini app\]\(https:\/\/gemini\.google\.com\/app\)/);
+    assert.match(content, /\[Canvas or chart\]/);
+    assert.match(content, /\[File: gemini-notes\.txt\]/);
 });
