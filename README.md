@@ -1,5 +1,5 @@
 # ChatGPT Chat Exporter 
-*Version: v0.5.0*
+*Version: v0.6.0*
 
 Export your full **ChatGPT** conversations as clean, readable **Markdown** or **PDF** files — including all messages, sender labels, and code blocks.
 
@@ -13,7 +13,7 @@ Export your full **ChatGPT** conversations as clean, readable **Markdown** or **
 
 - 🆕 **NEW:** **Google Gemini** conversation export support
 - 📝 Captures **all messages** with proper sender attribution
-- 🔧 Preserves **code blocks**, formatting, and structure
+- 🔧 Preserves **code blocks**, tables, MathJax/KaTeX equations, formatting, and structure
 - 📄 Supports export as **Markdown** or **Printable PDF**
 - 🚀 Works directly from browser — no install required
 - 🛡️ Future-proof against interface changes
@@ -76,7 +76,16 @@ This is the safest and most convenient method:
 
 ---
 
-## 🔧 What's New in v0.5.0
+## 🔧 What's New in v0.6.0
+
+**Stability Improvements:**
+- 🧱 **Modern ChatGPT Code Blocks**: Supports CodeMirror-based code blocks used by current `chatgpt.com`
+- ∑ **MathJax/KaTeX Support**: Exports equations as inline `$...$` or block `$$...$$` Markdown
+- 📊 **Table Export**: Converts rendered tables into Markdown tables and keeps tables in HTML/PDF exports
+- ✨ **Gemini Refresh**: Updated Gemini selectors and rich-content handling for code, tables, links, and media
+- 🧪 **Fixture Tests**: Added `npm test` coverage for ChatGPT and Gemini export regressions
+
+## 📝 Previous Updates (v0.5.0)
 
 **Major Improvements:**
 - 🎯 **Smart File Naming**: Exported files now use conversation titles instead of generic names
@@ -101,7 +110,8 @@ This is the safest and most convenient method:
 
 ## 🚀 Version History
 
-- **v0.5.0** (Current) - Smart file naming, true PDF support, improved duplicate detection
+- **v0.6.0** (Current) - Modern ChatGPT code blocks, MathJax/KaTeX, tables, Gemini refresh
+- **v0.5.0** - Smart file naming, true PDF support, improved duplicate detection
 - **v0.4.0** - Added Google Gemini support, multi-platform architecture
 - **v0.3.0** - Major ChatGPT stability fixes, modern selectors, duplicate prevention
 - **v0.2.0** (Archived) - Original ChatGPT working version

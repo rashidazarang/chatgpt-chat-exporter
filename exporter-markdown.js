@@ -5,8 +5,6 @@
 
     function cleanMarkdown(text) {
         return text
-            // Only escape backslashes that aren't already escaping something
-            .replace(/\\(?![\\*_`])/g, '\\\\')
             // Clean up excessive newlines
             .replace(/\n{3,}/g, '\n\n')
             // Remove any HTML entities that might have leaked through
@@ -15,28 +13,92 @@
             .replace(/&amp;/g, '&');
     }
 
-    function processMessageContent(element) {
-        const clone = element.cloneNode(true);
+    function getText(element) {
+        return (element?.innerText ?? element?.textContent ?? '').trim();
+    }
 
-        // Remove UI elements that shouldn't be in the export
-        clone.querySelectorAll('button, svg, [class*="copy"], [class*="edit"], [class*="regenerate"]').forEach(el => el.remove());
+    function removeUiElements(clone) {
+        // Remove UI elements that shouldn't be in the export.
+        // Do NOT use [class*="edit"]: it matches CodeMirror's "cm-editor" wrapper
+        // that holds the actual code in modern ChatGPT, and would erase code blocks.
+        clone.querySelectorAll('button, svg, [class*="regenerate"], [data-testid*="copy"], [aria-label*="Copy"], [aria-label*="copy"]').forEach(el => el.remove());
+    }
 
-        // Replace <pre><code> blocks with proper markdown
+    function extractCodeBlock(pre) {
+        const codeEl = pre.querySelector('code');
+        const langMatch = codeEl?.className?.match(/language-([a-zA-Z0-9_-]+)/);
+        let lang = langMatch ? langMatch[1] : '';
+
+        if (!lang) {
+            const header = pre.querySelector('[class*="sticky"], [class*="code-header"], [data-testid*="code-block"]');
+            const headerText = getText(header).replace(/\b(copy|code|download)\b/gi, '').trim();
+            if (headerText && headerText.length < 30 && !headerText.includes('\n')) {
+                lang = headerText.toLowerCase();
+            }
+            header?.remove();
+        }
+
+        const cmContent = pre.querySelector('.cm-content');
+        if (cmContent) {
+            const cmLines = cmContent.querySelectorAll('.cm-line');
+            if (cmLines.length > 0) {
+                return { lang, code: Array.from(cmLines).map(line => line.textContent).join('\n').trim() };
+            }
+
+            cmContent.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+            return { lang, code: cmContent.textContent.trim() };
+        }
+
+        return { lang, code: getText(codeEl || pre) };
+    }
+
+    function processCodeBlocks(clone) {
         clone.querySelectorAll('pre').forEach(pre => {
-            const code = pre.innerText.trim();
-            const langMatch = pre.querySelector('code')?.className?.match(/language-([a-zA-Z0-9]+)/);
-            const lang = langMatch ? langMatch[1] : '';
+            const { lang, code } = extractCodeBlock(pre);
             const codeBlock = document.createTextNode(`\n\n\`\`\`${lang}\n${code}\n\`\`\`\n`);
             pre.parentNode.replaceChild(codeBlock, pre);
         });
+    }
 
-        // Replace images and canvas with placeholders
-        clone.querySelectorAll('img, canvas').forEach(el => {
-            const placeholder = document.createTextNode('[Image or Canvas]');
-            el.parentNode.replaceChild(placeholder, el);
+    function processMath(clone) {
+        const processed = new Set();
+
+        clone.querySelectorAll('annotation[encoding*="tex"]').forEach(annotation => {
+            const tex = annotation.textContent.trim();
+            if (!tex) return;
+
+            const displayRoot = annotation.closest('.katex-display, mjx-container[display="true"], [display="block"]');
+            const mathRoot = displayRoot || annotation.closest('.katex, mjx-container, math');
+            if (!mathRoot || processed.has(mathRoot)) return;
+
+            processed.add(mathRoot);
+            const wrapper = displayRoot ? `\n\n$$${tex}$$\n\n` : `$${tex}$`;
+            mathRoot.replaceWith(document.createTextNode(wrapper));
         });
 
-        // Convert links (including reference chips) into Markdown format
+        clone.querySelectorAll('script[type^="math/tex"]').forEach(script => {
+            const tex = script.textContent.trim();
+            if (!tex) return;
+            const isDisplay = /mode=display/.test(script.type);
+            script.replaceWith(document.createTextNode(isDisplay ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
+        });
+    }
+
+    function processMedia(clone) {
+        clone.querySelectorAll('img, canvas, video, audio').forEach(el => {
+            const tag = el.tagName.toLowerCase();
+            const alt = el.getAttribute('alt') || el.getAttribute('aria-label') || '';
+            const label = tag === 'img' && alt ? `[Image: ${alt}]` :
+                tag === 'canvas' ? '[Canvas or chart]' :
+                tag === 'video' ? '[Video]' :
+                tag === 'audio' ? '[Audio]' :
+                '[Media]';
+            const placeholder = document.createTextNode(label);
+            el.parentNode.replaceChild(placeholder, el);
+        });
+    }
+
+    function processLinks(clone) {
         clone.querySelectorAll('a[href]').forEach(link => {
             if (link.closest('pre, code')) return;
 
@@ -54,8 +116,53 @@
             const markdown = `[${escapedText}](${safeHref})`;
             link.parentNode.replaceChild(document.createTextNode(markdown), link);
         });
+    }
+
+    function tableCellText(cell) {
+        return getText(cell).replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim() || ' ';
+    }
+
+    function tableToMarkdown(table) {
+        const rows = Array.from(table.querySelectorAll('tr'))
+            .map(row => Array.from(row.children)
+                .filter(cell => ['TH', 'TD'].includes(cell.tagName))
+                .map(tableCellText))
+            .filter(cells => cells.length > 0);
+
+        if (rows.length === 0) return getText(table);
+
+        const width = Math.max(...rows.map(row => row.length));
+        const normalizedRows = rows.map(row => row.concat(Array(Math.max(0, width - row.length)).fill(' ')));
+        const header = normalizedRows[0];
+        const separator = header.map(() => '---');
+        const body = normalizedRows.slice(1);
+        const lines = [
+            `| ${header.join(' | ')} |`,
+            `| ${separator.join(' | ')} |`,
+            ...body.map(row => `| ${row.join(' | ')} |`)
+        ];
+
+        return `\n\n${lines.join('\n')}\n\n`;
+    }
+
+    function processTables(clone) {
+        clone.querySelectorAll('table').forEach(table => {
+            table.replaceWith(document.createTextNode(tableToMarkdown(table)));
+        });
+    }
+
+    function processMessageContent(element) {
+        const clone = element.cloneNode(true);
+
+        removeUiElements(clone);
+        processCodeBlocks(clone);
+        processMath(clone);
+        processMedia(clone);
+        processLinks(clone);
+        processTables(clone);
+
         // Convert remaining HTML to clean markdown text
-        return cleanMarkdown(clone.innerText.trim());
+        return cleanMarkdown(getText(clone));
     }
 
     function findMessages() {

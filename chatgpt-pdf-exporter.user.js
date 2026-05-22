@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - PDF
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.5.0
+// @version      0.6.0
 // @description  Export ChatGPT conversations to PDF-ready HTML format
 // @author       rashidazarang
 // @match        https://chat.openai.com/*
@@ -26,6 +26,130 @@
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;')
             .trim();
+    }
+
+    function getText(element) {
+        return (element?.innerText ?? element?.textContent ?? '').trim();
+    }
+
+    function extractCodeBlock(pre) {
+        const codeEl = pre.querySelector('code');
+        const langMatch = codeEl?.className?.match(/language-([a-zA-Z0-9_-]+)/);
+        let lang = langMatch ? langMatch[1] : '';
+
+        if (!lang) {
+            const header = pre.querySelector('[class*="sticky"], [class*="code-header"], [data-testid*="code-block"]');
+            const headerText = getText(header).replace(/\b(copy|code|download)\b/gi, '').trim();
+            if (headerText && headerText.length < 30 && !headerText.includes('\n')) {
+                lang = headerText.toLowerCase();
+            }
+            header?.remove();
+        }
+
+        const cmContent = pre.querySelector('.cm-content');
+        if (cmContent) {
+            const cmLines = cmContent.querySelectorAll('.cm-line');
+            if (cmLines.length > 0) {
+                return { lang, code: Array.from(cmLines).map(line => line.textContent).join('\n').trim() };
+            }
+
+            cmContent.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+            return { lang, code: cmContent.textContent.trim() };
+        }
+
+        return { lang, code: getText(codeEl || pre) };
+    }
+
+    function addReplacement(replacements, html) {
+        const marker = `EXPORTER_BLOCK_${replacements.length}`;
+        replacements.push({ marker, html });
+        return marker;
+    }
+
+    function processCodeBlocks(clone, replacements) {
+        clone.querySelectorAll('pre').forEach(pre => {
+            const { lang, code } = extractCodeBlock(pre);
+            const label = lang ? `<div class="code-language">${cleanText(lang)}</div>` : '';
+            const html = `<pre class="code-block">${label}<code>${cleanText(code)}</code></pre>`;
+            pre.replaceWith(document.createTextNode(addReplacement(replacements, html)));
+        });
+    }
+
+    function processMath(clone) {
+        const processed = new Set();
+
+        clone.querySelectorAll('annotation[encoding*="tex"]').forEach(annotation => {
+            const tex = annotation.textContent.trim();
+            if (!tex) return;
+
+            const displayRoot = annotation.closest('.katex-display, mjx-container[display="true"], [display="block"]');
+            const mathRoot = displayRoot || annotation.closest('.katex, mjx-container, math');
+            if (!mathRoot || processed.has(mathRoot)) return;
+
+            processed.add(mathRoot);
+            mathRoot.replaceWith(document.createTextNode(displayRoot ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
+        });
+
+        clone.querySelectorAll('script[type^="math/tex"]').forEach(script => {
+            const tex = script.textContent.trim();
+            if (!tex) return;
+            const isDisplay = /mode=display/.test(script.type);
+            script.replaceWith(document.createTextNode(isDisplay ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
+        });
+    }
+
+    function processMedia(clone) {
+        clone.querySelectorAll('img, canvas, video, audio').forEach(el => {
+            const tag = el.tagName.toLowerCase();
+            const alt = el.getAttribute('alt') || el.getAttribute('aria-label') || '';
+            const label = tag === 'img' && alt ? `[Image: ${alt}]` :
+                tag === 'canvas' ? '[Canvas or chart]' :
+                tag === 'video' ? '[Video]' :
+                tag === 'audio' ? '[Audio]' :
+                '[Media]';
+            el.replaceWith(document.createTextNode(label));
+        });
+    }
+
+    function processLinks(clone, replacements) {
+        clone.querySelectorAll('a[href]').forEach(link => {
+            if (link.closest('pre, code')) return;
+
+            const href = (link.href || '').trim();
+            const lowerHref = href.toLowerCase();
+            if (!href || lowerHref.startsWith('javascript:') || lowerHref.startsWith('data:') || lowerHref.startsWith('vbscript:') || href.startsWith('#')) return;
+
+            const text = link.textContent.replace(/\s+/g, ' ').trim() || href;
+            const html = `<a href="${cleanText(href)}">${cleanText(text)}</a>`;
+            link.replaceWith(document.createTextNode(addReplacement(replacements, html)));
+        });
+    }
+
+    function tableToHtml(table) {
+        const rows = Array.from(table.querySelectorAll('tr'))
+            .map(row => Array.from(row.children)
+                .filter(cell => ['TH', 'TD'].includes(cell.tagName))
+                .map(cell => ({ tag: cell.tagName.toLowerCase(), text: getText(cell).replace(/\s+/g, ' ') })))
+            .filter(cells => cells.length > 0);
+
+        if (rows.length === 0) return cleanText(getText(table));
+
+        const renderedRows = rows.map(cells => {
+            const renderedCells = cells.map(cell => `<${cell.tag}>${cleanText(cell.text)}</${cell.tag}>`).join('');
+            return `<tr>${renderedCells}</tr>`;
+        }).join('');
+
+        return `<table>${renderedRows}</table>`;
+    }
+
+    function processTables(clone, replacements) {
+        clone.querySelectorAll('table').forEach(table => {
+            table.replaceWith(document.createTextNode(addReplacement(replacements, tableToHtml(table))));
+        });
+    }
+
+    function restoreReplacements(html, replacements) {
+        return replacements.reduce((result, replacement) => result.replaceAll(replacement.marker, replacement.html), html);
     }
 
     function findMessages() {
@@ -96,26 +220,18 @@
 
     function processMessageContent(element) {
         const clone = element.cloneNode(true);
-        
-        // Remove UI elements
-        clone.querySelectorAll('button, svg, [class*="copy"], [class*="edit"]').forEach(el => el.remove());
-        
-        // Process code blocks
-        clone.querySelectorAll('pre').forEach(pre => {
-            const code = pre.innerText.trim();
-            const codeBlock = document.createElement('div');
-            codeBlock.className = 'code-block';
-            codeBlock.textContent = code;
-            pre.parentNode.replaceChild(codeBlock, pre);
-        });
-        
-        // Replace images
-        clone.querySelectorAll('img, canvas').forEach(el => {
-            const placeholder = document.createTextNode('[Image]');
-            el.parentNode.replaceChild(placeholder, el);
-        });
-        
-        return clone.innerText.trim();
+        const replacements = [];
+
+        // Do NOT use [class*="edit"]: it matches CodeMirror's "cm-editor" wrapper.
+        clone.querySelectorAll('button, svg, [class*="regenerate"], [data-testid*="copy"], [aria-label*="Copy"], [aria-label*="copy"]').forEach(el => el.remove());
+        processCodeBlocks(clone, replacements);
+        processMath(clone);
+        processMedia(clone);
+        processLinks(clone, replacements);
+        processTables(clone, replacements);
+
+        const html = cleanText(getText(clone)).replace(/\n/g, '<br>');
+        return restoreReplacements(html, replacements);
     }
 
     function extractTitle() {
@@ -238,6 +354,35 @@
             font-size: 14px;
             margin: 10px 0;
         }
+
+        .code-block code {
+            white-space: pre;
+        }
+
+        .code-language {
+            color: #d7dae0;
+            font-size: 12px;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0;
+            font-size: 14px;
+        }
+
+        th, td {
+            border: 1px solid #d9dde3;
+            padding: 8px;
+            text-align: left;
+            vertical-align: top;
+        }
+
+        th {
+            background: #eef2f7;
+        }
         
         .instructions {
             background: #fff3cd;
@@ -291,9 +436,9 @@
             const sender = identifySender(messageElement, index);
             const content = processMessageContent(messageElement);
             
-            if (!content || content.length < 10) return;
+            if (!content || content.replace(/<[^>]*>/g, '').trim().length < 10) return;
             
-            const contentHash = content.substring(0, 100).replace(/\s+/g, ' ');
+            const contentHash = content.replace(/<[^>]*>/g, ' ').substring(0, 100).replace(/\s+/g, ' ');
             if (seenContent.has(contentHash)) return;
             seenContent.add(contentHash);
             
@@ -302,7 +447,7 @@
             htmlContent += `
         <div class="message ${senderClass}">
             <div class="sender">${cleanText(sender)}</div>
-            <div class="content">${cleanText(content).replace(/\[CODE\]([\s\S]*?)\[\/CODE\]/g, '<pre class="code-block">$1</pre>')}</div>
+            <div class="content">${content}</div>
         </div>`;
             
             processedCount++;

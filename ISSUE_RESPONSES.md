@@ -1,5 +1,29 @@
 # Issue Responses for GitHub
 
+## Issue #19: FR: Properly handle tables
+```
+✅ Fixed in v0.6.0!
+
+Rendered HTML tables are now preserved across exporters:
+- Markdown and Gemini Markdown convert tables into pipe-table syntax.
+- HTML and PDF-ready exports keep structured `<table>` markup with basic styling.
+- Complex spans are flattened into readable rows/cells rather than preserving advanced layout.
+
+Thanks for the feature request!
+```
+
+## Issue #18: Mathjax support
+```
+✅ Fixed in v0.6.0!
+
+MathJax/KaTeX output is now exported from the embedded TeX annotations instead of the visual fallback text:
+- Inline math becomes `$...$`
+- Display math becomes `$$...$$`
+- Markdown cleanup no longer doubles LaTeX backslashes
+
+Thanks for the clear repro and expected-output example!
+```
+
 ## Issue #12: Improve the export file names
 ```
 ✅ Fixed in v0.5.0!
