@@ -1,7 +1,7 @@
 {
   "name": "chatgpt-chat-exporter-master",
-  "version": "0.7.0",
-  "description": "*Version: v0.7.0*",
+  "version": "0.7.1",
+  "description": "*Version: v0.7.1*",
   "main": "exporter-html.js",
   "scripts": {
     "build": "node scripts/build-exporters.js",

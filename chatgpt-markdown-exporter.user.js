@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - Markdown
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.7.0
+// @version      0.7.1
 // @description  Export ChatGPT conversations to Markdown format
 // @author       rashidazarang
 // @match        https://chat.openai.com/*
@@ -28,7 +28,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.7.0-live-engine';
+        const ENGINE_VERSION = '0.7.1-security-fix';
         const MARKER_PREFIX = '__CHAT_EXPORTER_BLOCK_';
 
         const PROVIDERS = {
@@ -185,6 +185,16 @@
                 .replace(/\n+$/, '');
         }
 
+        function markdownFenceFor(code) {
+            const runs = String(code ?? '').match(/`{3,}/g) || [];
+            const longest = runs.reduce((max, run) => Math.max(max, run.length), 2);
+            return '`'.repeat(longest + 1);
+        }
+
+        function safeInfoString(lang) {
+            return String(lang || '').replace(/[^a-zA-Z0-9_+#.-]/g, '');
+        }
+
         function createTextNode(reference, text) {
             return reference.ownerDocument.createTextNode(text);
         }
@@ -199,20 +209,43 @@
             return replacements.reduce((result, replacement) => result.replaceAll(replacement.marker, replacement.html), value);
         }
 
-        function cleanMarkdown(markdown) {
-            return String(markdown ?? '')
-                .split(/(```[\s\S]*?```)/g)
-                .map(part => part.startsWith('```')
-                    ? part
-                    : part
-                        .replace(/[ \t]+\n/g, '\n')
-                        .replace(/\n[ \t]+/g, '\n')
-                        .replace(/\n{3,}/g, '\n\n')
-                        .replace(/&lt;/g, '<')
-                        .replace(/&gt;/g, '>')
-                        .replace(/&amp;/g, '&'))
-                .join('')
+        function splitMarkdownFencedBlocks(value) {
+            const source = String(value ?? '');
+            const pattern = /(?:^|\n)(`{3,})[^\n]*\n[\s\S]*?\n\1(?=\n|$)/g;
+            const segments = [];
+            let cursor = 0;
+            let match;
+
+            while ((match = pattern.exec(source)) !== null) {
+                if (match.index > cursor) {
+                    segments.push({ type: 'text', value: source.slice(cursor, match.index) });
+                }
+
+                segments.push({ type: 'code', value: match[0] });
+                cursor = match.index + match[0].length;
+            }
+
+            if (cursor < source.length) {
+                segments.push({ type: 'text', value: source.slice(cursor) });
+            }
+
+            return segments;
+        }
+
+        function cleanMarkdownText(value) {
+            return String(value ?? '')
+                .replace(/[ \t]+\n/g, '\n')
+                .replace(/\n[ \t]+/g, '\n')
                 .replace(/\n{3,}/g, '\n\n')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&amp;/g, '&');
+        }
+
+        function cleanMarkdown(markdown) {
+            return splitMarkdownFencedBlocks(markdown)
+                .map(segment => segment.type === 'code' ? segment.value : cleanMarkdownText(segment.value))
+                .join('')
                 .trim();
         }
 
@@ -326,7 +359,8 @@
             const { lang, code } = extractCodeBlock(block);
 
             if (format === 'markdown') {
-                return `\n\n\`\`\`${lang}\n${code}\n\`\`\`\n\n`;
+                const fence = markdownFenceFor(code);
+                return `\n\n${fence}${safeInfoString(lang)}\n${code}\n${fence}\n\n`;
             }
 
             const langClass = lang ? ` class="language-${sanitizeHtml(lang)}"` : '';
@@ -800,7 +834,7 @@
                 providerLabel: provider.assistantName,
                 sourceLabel: provider.sourceLabel,
                 title: extractConversationTitle(doc, provider),
-                sourceUrl: doc.defaultView?.location?.href || '',
+                sourceUrl: options.includeSourceUrl === true ? doc.defaultView?.location?.href || '' : '',
                 date: formatDate(options.date || new Date()),
                 messages
             };
@@ -820,10 +854,13 @@
         }
 
         function renderMarkdown(conversation) {
+            const source = conversation.sourceUrl
+                ? `**Source:** [${conversation.sourceLabel}](${conversation.sourceUrl})\n`
+                : `**Source:** ${conversation.sourceLabel}\n`;
             const lines = [
                 `# ${conversation.title}\n`,
                 `**Date:** ${conversation.date}`,
-                `**Source:** [${conversation.sourceLabel}](${conversation.sourceUrl})\n`,
+                source,
                 '---\n'
             ];
 
@@ -837,6 +874,9 @@
         function renderHtmlDocument(conversation, options = {}) {
             const isPdf = options.format === 'pdf';
             const source = sanitizeHtml(conversation.sourceUrl);
+            const sourceMarkup = source
+                ? `<a href="${source}">${sanitizeHtml(conversation.sourceLabel)}</a>`
+                : sanitizeHtml(conversation.sourceLabel);
             const title = sanitizeHtml(conversation.title);
             const messages = conversation.messages.map(message => {
                 const senderClass = message.senderType === 'user' ? 'user' : 'assistant';
@@ -961,7 +1001,7 @@
             <h1>${title}</h1>
             <div class="metadata">
                 <div><strong>Date:</strong> ${sanitizeHtml(conversation.date)}</div>
-                <div><strong>Source:</strong> <a href="${source}">${sanitizeHtml(conversation.sourceLabel)}</a></div>
+                <div><strong>Source:</strong> ${sourceMarkup}</div>
                 <div><strong>Messages:</strong> ${conversation.messages.length}</div>
             </div>
         </div>

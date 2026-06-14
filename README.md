@@ -1,5 +1,5 @@
 # ChatGPT Chat Exporter 
-*Version: v0.7.0*
+*Version: v0.7.1*
 
 Export your full **ChatGPT** conversations as clean, readable **Markdown** or **PDF** files — including all messages, sender labels, and code blocks.
 
@@ -76,7 +76,14 @@ This is the safest and most convenient method:
 
 ---
 
-## 🔧 What's New in v0.7.0
+## 🔧 What's New in v0.7.1
+
+**Security and Privacy Fixes:**
+- 🔒 **Private Source Metadata by Default**: Markdown, HTML, and PDF-ready exports now show the provider label without embedding the exact conversation URL unless `includeSourceUrl: true` is explicitly used.
+- 🧱 **Safe Markdown Code Fences**: Code blocks now choose a fence longer than any backtick run in the exported code, preventing premature fence closure when conversations contain triple backticks.
+- 🧪 **Regression Coverage**: Tests cover source URL omission, explicit source URL opt-in, and Markdown fence-injection cases across generated exporters.
+
+## 📝 Previous Updates (v0.7.0)
 
 **Live Compatibility Rewrite:**
 - 🧭 **Shared Extraction Engine**: ChatGPT console scripts, Gemini console script, and userscripts now embed one canonical extraction engine generated from `src/extraction-engine.js`
@@ -119,7 +126,8 @@ This is the safest and most convenient method:
 
 ## 🚀 Version History
 
-- **v0.7.0** (Current) - Shared extraction engine, live Chrome/Crawlio compatibility audit, current ChatGPT/Gemini provider adapters
+- **v0.7.1** (Current) - Source URL privacy by default and safe Markdown code fences
+- **v0.7.0** - Shared extraction engine, live Chrome/Crawlio compatibility audit, current ChatGPT/Gemini provider adapters
 - **v0.6.0** - Modern ChatGPT code blocks, MathJax/KaTeX, tables, Gemini refresh
 - **v0.5.0** - Smart file naming, true PDF support, improved duplicate detection
 - **v0.4.0** - Added Google Gemini support, multi-platform architecture

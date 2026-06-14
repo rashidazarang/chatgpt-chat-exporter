@@ -85,14 +85,29 @@ print("world")</code></pre>
 </html>`;
 }
 
-async function runExporter(filename, html, url = 'https://chatgpt.com/c/test-fixture') {
-    const dom = new JSDOM(html, {
-        url,
-        runScripts: 'outside-only',
-        pretendToBeVisual: true
-    });
+function fenceInjectionFixture() {
+    return `<!DOCTYPE html>
+<html>
+<head><title>Fence Injection Fixture</title></head>
+<body>
+    <main>
+        <div data-message-author-role="user">
+            <p>Please show a code block that contains markdown fences.</p>
+        </div>
+        <div data-message-author-role="assistant">
+            <pre>
+                <div class="code-header">JavaScript \`\`\` bad</div>
+                <code>const start = "ok";
+\`\`\`
+const done = true;</code>
+            </pre>
+        </div>
+    </main>
+</body>
+</html>`;
+}
 
-    const { window } = dom;
+function installInnerText(window) {
     const descriptor = Object.getOwnPropertyDescriptor(window.HTMLElement.prototype, 'innerText');
     if (!descriptor) {
         Object.defineProperty(window.HTMLElement.prototype, 'innerText', {
@@ -104,6 +119,17 @@ async function runExporter(filename, html, url = 'https://chatgpt.com/c/test-fix
             }
         });
     }
+}
+
+async function runExporter(filename, html, url = 'https://chatgpt.com/c/test-fixture') {
+    const dom = new JSDOM(html, {
+        url,
+        runScripts: 'outside-only',
+        pretendToBeVisual: true
+    });
+
+    const { window } = dom;
+    installInnerText(window);
 
     const downloads = [];
     window.URL.createObjectURL = blob => {
@@ -139,6 +165,58 @@ test('ChatGPT markdown exporter preserves CodeMirror code, MathJax, tables, link
     assert.match(content, /\[Example \\\[link\\\]\]\(https:\/\/example\.com\/a%29b\)/);
     assert.match(content, /\[Image: plot\]/);
     assert.doesNotMatch(content, /\\\\mu/);
+});
+
+test('exports omit exact source URLs by default while keeping provider labels', async () => {
+    const sourceUrl = 'https://chatgpt.com/c/private-share?model=gpt-5';
+    const markdown = await runExporter('exporter-markdown.js', chatGptFixture(), sourceUrl);
+    const html = await runExporter('exporter-html.js', chatGptFixture(), sourceUrl);
+    const pdfReady = await runExporter('exporter-pdf.js', chatGptFixture(), sourceUrl);
+
+    assert.equal(markdown.content.includes(sourceUrl), false);
+    assert.match(markdown.content, /\*\*Source:\*\* chatgpt\.com/);
+    assert.doesNotMatch(markdown.content, /\*\*Source:\*\* \[chatgpt\.com\]\(/);
+
+    assert.equal(html.content.includes(sourceUrl), false);
+    assert.match(html.content, /<strong>Source:<\/strong> chatgpt\.com/);
+
+    assert.equal(pdfReady.content.includes(sourceUrl), false);
+    assert.match(pdfReady.content, /<strong>Source:<\/strong> chatgpt\.com/);
+});
+
+test('shared engine includes exact source URL only when explicitly requested', () => {
+    const sourceUrl = 'https://chatgpt.com/c/private-share?model=gpt-5';
+    const dom = new JSDOM(chatGptFixture(), { url: sourceUrl });
+    installInnerText(dom.window);
+
+    const defaultConversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+    const defaultMarkdown = engine.serializers.markdown(defaultConversation);
+
+    assert.equal(defaultConversation.sourceUrl, '');
+    assert.equal(defaultMarkdown.includes(sourceUrl), false);
+    assert.match(defaultMarkdown, /\*\*Source:\*\* chatgpt\.com/);
+
+    const optInConversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        includeSourceUrl: true
+    });
+    const optInMarkdown = engine.serializers.markdown(optInConversation);
+
+    assert.equal(optInConversation.sourceUrl, sourceUrl);
+    assert.equal(optInMarkdown.includes(`**Source:** [chatgpt.com](${sourceUrl})`), true);
+});
+
+test('Markdown code blocks use sanitized info strings and fences longer than code content', async () => {
+    const { content } = await runExporter('exporter-markdown.js', fenceInjectionFixture());
+
+    assert.match(content, /````javascriptbad\nconst start = "ok";\n```\nconst done = true;\n````/);
+    assert.doesNotMatch(content, /```javascript ``` bad/);
 });
 
 test('shared engine serializes live-observed ChatGPT shapes from synthetic fixture', () => {

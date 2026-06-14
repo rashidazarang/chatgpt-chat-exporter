@@ -43,7 +43,7 @@ function userscriptHeader(name, version, description) {
 }
 
 function userscript(provider, format, buttonId, buttonText, right, color, hoverColor, name, description) {
-    return `${userscriptHeader(name, '0.7.0', description)}(() => {
+    return `${userscriptHeader(name, '0.7.1', description)}(() => {
     'use strict';
 
 ${indent(engineSource, 4)}
