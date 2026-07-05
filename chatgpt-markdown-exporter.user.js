@@ -140,12 +140,6 @@
             }
         }
 
-        function getText(element) {
-            if (!element) return '';
-            const innerText = typeof element.innerText === 'string' ? element.innerText : '';
-            return (innerText || element.textContent || '').replace(/\u00a0/g, ' ').trim();
-        }
-
         function collectTextWithBreaks(node) {
             if (!node) return '';
 
@@ -166,16 +160,9 @@
             return before + Array.from(node.childNodes).map(collectTextWithBreaks).join('') + after;
         }
 
-        function getCodeText(element) {
+        function getText(element) {
             if (!element) return '';
-
-            if (typeof element.innerText === 'string' && element.innerText.trim()) {
-                return element.innerText.replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trimEnd();
-            }
-
-            const clone = element.cloneNode(true);
-            queryAll(clone, 'br').forEach(br => br.replaceWith(clone.ownerDocument.createTextNode('\n')));
-            return collectTextWithBreaks(clone).replace(/\n{3,}/g, '\n\n').trimEnd();
+            return collectTextWithBreaks(element).replace(/\u00a0/g, ' ').trim();
         }
 
         function normalizeCodeText(value) {
@@ -183,6 +170,13 @@
                 .replace(/\r\n?/g, '\n')
                 .replace(/^\n+/, '')
                 .replace(/\n+$/, '');
+        }
+
+        function getCodeText(element) {
+            if (!element) return '';
+            const clone = element.cloneNode(true);
+            queryAll(clone, 'br').forEach(br => br.replaceWith(clone.ownerDocument.createTextNode('\n')));
+            return normalizeCodeText(collectTextWithBreaks(clone).replace(/\u00a0/g, ' '));
         }
 
         function markdownFenceFor(code) {
@@ -338,7 +332,7 @@
                 if (cmLines.length > 0) {
                     return {
                         lang: language,
-                        code: normalizeCodeText(cmLines.map(line => line.textContent || '').join('\n'))
+                        code: normalizeCodeText(cmLines.map(line => collectTextWithBreaks(line)).join('\n'))
                     };
                 }
 
