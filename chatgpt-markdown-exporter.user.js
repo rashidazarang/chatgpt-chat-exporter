@@ -335,7 +335,7 @@
                 if (cmLines.length > 0) {
                     return {
                         lang: language,
-                        code: normalizeCodeText(cmLines.map(line => collectTextWithBreaks(line)).join('\n'))
+                        code: normalizeCodeText(cmLines.map(line => collectTextWithBreaks(line)).join(''))
                     };
                 }
 
