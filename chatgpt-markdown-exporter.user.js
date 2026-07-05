@@ -176,9 +176,12 @@
             if (!element) return '';
             const clone = element.cloneNode(true);
             queryAll(clone, 'br').forEach(br => br.replaceWith(clone.ownerDocument.createTextNode('\n')));
-            return normalizeCodeText(collectTextWithBreaks(clone).replace(/\u00a0/g, ' '));
+            return normalizeCodeText(
+                collectTextWithBreaks(clone)
+                    .replace(/\u00a0/g, ' ')
+                    .replace(/\n{3,}/g, '\n\n')
+            );
         }
-
         function markdownFenceFor(code) {
             const runs = String(code ?? '').match(/`{3,}/g) || [];
             const longest = runs.reduce((max, run) => Math.max(max, run.length), 2);
