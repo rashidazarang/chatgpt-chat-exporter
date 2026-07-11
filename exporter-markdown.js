@@ -17,8 +17,10 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.7.1-security-fix';
-        const MARKER_PREFIX = '__CHAT_EXPORTER_BLOCK_';
+        const ENGINE_VERSION = '0.7.2';
+        // Random run token so conversation text can never collide with (or inject
+        // through) the internal block placeholders used during serialization.
+        const MARKER_PREFIX = `__CHAT_EXPORTER_BLOCK_${Math.random().toString(36).slice(2, 10)}_`;
 
         const PROVIDERS = {
             chatgpt: {
@@ -158,20 +160,64 @@
         function getCodeText(element) {
             if (!element) return '';
 
-            if (typeof element.innerText === 'string' && element.innerText.trim()) {
-                return element.innerText.replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trimEnd();
-            }
-
+            // innerText is unreliable here: serialization works on detached clones,
+            // where browsers fall back to textContent and drop the line breaks that
+            // come from element boundaries or <br> tags (issue #25).
             const clone = element.cloneNode(true);
             queryAll(clone, 'br').forEach(br => br.replaceWith(clone.ownerDocument.createTextNode('\n')));
-            return collectTextWithBreaks(clone).replace(/\n{3,}/g, '\n\n').trimEnd();
+            return collectTextWithBreaks(clone).replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trimEnd();
         }
 
         function normalizeCodeText(value) {
             return String(value ?? '')
                 .replace(/\r\n?/g, '\n')
+                .replace(/\u00a0/g, ' ')
                 .replace(/^\n+/, '')
                 .replace(/\n+$/, '');
+        }
+
+        function isPreWrapElement(element) {
+            if (!element || element.nodeType !== 1) return false;
+            if (element.hasAttribute?.('data-chat-exporter-pre-wrap')) return true;
+            if (getClassName(element).includes('whitespace-pre-wrap')) return true;
+            const style = element.getAttribute?.('style') || '';
+            return /white-space\s*:\s*(pre-wrap|break-spaces)/i.test(style);
+        }
+
+        // Clones lose stylesheet-driven formatting, so inspect the live tree and
+        // tag elements whose computed white-space preserves author line breaks.
+        // cloneNode(true) yields an identical tree order, letting both element
+        // lists line up index-for-index.
+        function annotatePreWrapElements(original, clone) {
+            const win = original?.ownerDocument ? getWindow(original.ownerDocument) : null;
+            if (!win || typeof win.getComputedStyle !== 'function') return;
+
+            const originalElements = [original, ...queryAll(original, '*')];
+            const cloneElements = [clone, ...queryAll(clone, '*')];
+
+            originalElements.forEach((element, index) => {
+                const cloneElement = cloneElements[index];
+                if (!cloneElement || typeof cloneElement.setAttribute !== 'function') return;
+
+                try {
+                    const whiteSpace = win.getComputedStyle(element)?.whiteSpace || '';
+                    if (whiteSpace === 'pre-wrap' || whiteSpace === 'break-spaces') {
+                        cloneElement.setAttribute('data-chat-exporter-pre-wrap', '');
+                    }
+                } catch (error) {
+                    // Computed style can fail on foreign elements; class and inline
+                    // style detection in isPreWrapElement still applies.
+                }
+            });
+        }
+
+        function preWrapText(element) {
+            return collectTextWithBreaks(element)
+                .replace(/\u00a0/g, ' ')
+                .replace(/[ \t]+\n/g, '\n')
+                .replace(/\n{3,}/g, '\n\n')
+                .replace(/^\n+/, '')
+                .trimEnd();
         }
 
         function markdownFenceFor(code) {
@@ -188,14 +234,14 @@
             return reference.ownerDocument.createTextNode(text);
         }
 
-        function addReplacement(replacements, html) {
+        function addReplacement(replacements, value) {
             const marker = `${MARKER_PREFIX}${replacements.length}__`;
-            replacements.push({ marker, html });
+            replacements.push({ marker, value });
             return marker;
         }
 
         function restoreReplacements(value, replacements) {
-            return replacements.reduce((result, replacement) => result.replaceAll(replacement.marker, replacement.html), value);
+            return replacements.reduce((result, replacement) => result.replaceAll(replacement.marker, replacement.value), value);
         }
 
         function splitMarkdownFencedBlocks(value) {
@@ -221,14 +267,15 @@
             return segments;
         }
 
+        // Only trims trailing whitespace and collapses blank-line runs. Leading
+        // indentation is intentional (nested lists), and text extracted from the
+        // DOM is already entity-decoded, so un-escaping here would corrupt
+        // conversations that literally discuss &amp;-style entities.
         function cleanMarkdownText(value) {
             return String(value ?? '')
                 .replace(/[ \t]+\n/g, '\n')
-                .replace(/\n[ \t]+/g, '\n')
-                .replace(/\n{3,}/g, '\n\n')
-                .replace(/&lt;/g, '<')
-                .replace(/&gt;/g, '>')
-                .replace(/&amp;/g, '&');
+                .replace(/\n (?=\S)/g, '\n')
+                .replace(/\n{3,}/g, '\n\n');
         }
 
         function cleanMarkdown(markdown) {
@@ -247,7 +294,9 @@
         function escapeMarkdownUrl(value) {
             return String(value ?? '')
                 .replace(/\\/g, '%5C')
-                .replace(/\)/g, '%29');
+                .replace(/\(/g, '%28')
+                .replace(/\)/g, '%29')
+                .replace(/\s/g, '%20');
         }
 
         function isUnsafeHref(href) {
@@ -431,8 +480,10 @@
         }
 
         function tableCellText(cell) {
+            // Escape only the structural pipe character; doubling backslashes here
+            // garbled cells that legitimately contain them, such as paths or
+            // escape sequences (issue #25).
             return normalizeWhitespace(getText(cell))
-                .replace(/\\/g, '\\\\')
                 .replace(/\|/g, '\\|') || ' ';
         }
 
@@ -556,7 +607,10 @@
         function serializeMarkdownNode(node, context = {}) {
             if (node.nodeType === 3) {
                 const value = node.nodeValue || '';
-                if (value.includes('```') || value.includes('| ---') || value.includes(MARKER_PREFIX) || value.match(/^\s*\[[^\]]+\]/)) {
+                // Text nodes generated by earlier processing stages (code fences,
+                // tables, display math, placeholders, protected blocks) carry
+                // intentional layout and must pass through untouched.
+                if (value.includes('```') || value.includes('| ---') || value.includes('$$') || value.includes(MARKER_PREFIX) || value.match(/^\s*\[[^\]]+\]/)) {
                     return value;
                 }
                 return value.replace(/[ \t\r\n]+/g, ' ');
@@ -567,6 +621,17 @@
             const tag = node.tagName.toLowerCase();
             if (['script', 'style', 'button', 'svg'].includes(tag)) return '';
             if (tag === 'br') return '\n';
+
+            // User prompts render inside white-space: pre-wrap containers where
+            // every line break and indent is author input; extract them verbatim
+            // instead of collapsing whitespace (issue #25). Protected behind a
+            // marker so markdown cleanup cannot re-flow the preserved text.
+            if (tag !== 'code' && tag !== 'pre' && isPreWrapElement(node)) {
+                const text = preWrapText(node);
+                if (!text.trim()) return '';
+                const preserved = context.replacements ? addReplacement(context.replacements, text) : text;
+                return `\n\n${preserved}\n\n`;
+            }
 
             if (/^h[1-6]$/.test(tag)) {
                 const level = Number(tag.slice(1));
@@ -589,20 +654,17 @@
                 return `\n${children.map((child, index) => serializeMarkdownNode(child, {
                     ...context,
                     listType: tag,
-                    index,
-                    depth: (context.depth || 0)
+                    index
                 })).join('')}\n`;
             }
 
             if (tag === 'li') {
-                const depth = context.depth || 0;
                 const marker = context.listType === 'ol' ? `${(context.index || 0) + 1}. ` : '- ';
-                const indent = '  '.repeat(depth);
-                const content = serializeMarkdownChildren(node, {
-                    ...context,
-                    depth: depth + 1
-                }).trim();
-                return content ? `${indent}${marker}${content.replace(/\n+/g, `\n${indent}  `)}\n` : '';
+                const content = serializeMarkdownChildren(node, context).trim();
+                // Nested structures are indented once per level here; the marker
+                // width keeps continuation lines aligned for ordered lists too.
+                const continuation = ' '.repeat(marker.length);
+                return content ? `${marker}${content.replace(/\n+/g, `\n${continuation}`)}\n` : '';
             }
 
             if (['strong', 'b'].includes(tag)) {
@@ -616,11 +678,18 @@
             }
 
             if (tag === 'code') {
-                const content = getCodeText(node)
-                    .replace(/\\/g, '\\\\')
-                    .replace(/`/g, '\\`')
-                    .trim();
-                return content ? `\`${content}\`` : '';
+                // Backslash escapes are not processed inside markdown code spans,
+                // so the content must stay verbatim; doubling backslashes turned
+                // `\n` into `\\n` (issue #25). Backtick collisions are handled the
+                // CommonMark way: a longer delimiter plus space padding.
+                const content = getCodeText(node).trim();
+                if (!content) return '';
+
+                const backtickRuns = content.match(/`+/g) || [];
+                const longestRun = backtickRuns.reduce((max, run) => Math.max(max, run.length), 0);
+                const delimiter = '`'.repeat(longestRun + 1);
+                const pad = content.startsWith('`') || content.endsWith('`') ? ' ' : '';
+                return `${delimiter}${pad}${content}${pad}${delimiter}`;
             }
 
             const content = serializeMarkdownChildren(node, context);
@@ -673,6 +742,7 @@
             const clone = element.cloneNode(true);
             const replacements = [];
 
+            annotatePreWrapElements(element, clone);
             removeUiElements(clone);
             processCards(clone, format, replacements);
             processCodeBlocks(clone, format, replacements);
@@ -682,7 +752,12 @@
             processTables(clone, format, replacements);
 
             if (format === 'markdown') {
-                return cleanMarkdown(serializeMarkdownChildren(clone));
+                if (isPreWrapElement(clone)) {
+                    return preWrapText(clone).trim();
+                }
+
+                const markdown = cleanMarkdown(serializeMarkdownChildren(clone, { replacements }));
+                return restoreReplacements(markdown, replacements).trim();
             }
 
             const html = serializeHtmlChildren(clone, replacements)
@@ -1009,8 +1084,9 @@
 
         function filenameFor(conversation, format, doc) {
             const safeTitle = normalizeWhitespace(doc.title || conversation.title)
-                .replace(/[<>:"/\\|?*]/g, '')
-                .slice(0, 120);
+                .replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '')
+                .slice(0, 120)
+                .replace(/[. ]+$/, '');
 
             if (format === 'markdown') {
                 return safeTitle ? `${safeTitle} (${conversation.date}).md` : `${conversation.providerLabel}_Conversation_${conversation.date}.md`;
@@ -1040,7 +1116,15 @@
             doc.body.appendChild(anchor);
             anchor.click();
             doc.body.removeChild(anchor);
-            urlApi.revokeObjectURL(url);
+
+            // Revoking synchronously can abort the download in Firefox-based
+            // browsers; give the browser a moment to grab the blob first.
+            const revoke = () => urlApi.revokeObjectURL(url);
+            if (typeof win?.setTimeout === 'function') {
+                win.setTimeout(revoke, 2000);
+            } else {
+                revoke();
+            }
         }
 
         function exportConversation(options = {}) {

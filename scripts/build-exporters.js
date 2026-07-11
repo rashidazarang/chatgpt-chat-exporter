@@ -3,6 +3,7 @@ const path = require('node:path');
 
 const repoRoot = path.resolve(__dirname, '..');
 const engineSource = fs.readFileSync(path.join(repoRoot, 'src', 'extraction-engine.js'), 'utf8').trim();
+const { version } = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
 const checkOnly = process.argv.includes('--check');
 
 const GENERATED_NOTICE = `// Generated from src/extraction-engine.js by scripts/build-exporters.js.
@@ -43,7 +44,7 @@ function userscriptHeader(name, version, description) {
 }
 
 function userscript(provider, format, buttonId, buttonText, right, color, hoverColor, name, description) {
-    return `${userscriptHeader(name, '0.7.1', description)}(() => {
+    return `${userscriptHeader(name, version, description)}(() => {
     'use strict';
 
 ${indent(engineSource, 4)}

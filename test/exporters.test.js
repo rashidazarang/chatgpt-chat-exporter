@@ -107,6 +107,36 @@ const done = true;</code>
 </html>`;
 }
 
+function issue25Fixture() {
+    return `<!DOCTYPE html>
+<html>
+<head><title>Newline character example</title></head>
+<body>
+    <main>
+        <div data-message-author-role="user">
+            <div class="whitespace-pre-wrap">What is \\n ?
+Show me a 5-line example.
+
+Make no mistakes.
+    return indented;</div>
+        </div>
+        <div data-message-author-role="assistant">
+            <div class="markdown prose">
+                <p><code>\\n</code> is the <strong>newline character</strong> (also called a <strong>line feed</strong>, LF).</p>
+                <p>Inline backticks like <code>a\`b</code> need longer delimiters.</p>
+                <p>Escape &amp;amp; as <code>&amp;amp;</code> and &amp;lt;div&amp;gt; stays literal.</p>
+                <pre><code><span>Line 1</span><br><span>Line 2</span><br><span>Line 3</span></code></pre>
+                <table>
+                    <tr><th>Sequence</th><th>Path</th></tr>
+                    <tr><td>\\n</td><td>C:\\temp | D:\\data</td></tr>
+                </table>
+            </div>
+        </div>
+    </main>
+</body>
+</html>`;
+}
+
 function installInnerText(window) {
     const descriptor = Object.getOwnPropertyDescriptor(window.HTMLElement.prototype, 'innerText');
     if (!descriptor) {
@@ -165,6 +195,51 @@ test('ChatGPT markdown exporter preserves CodeMirror code, MathJax, tables, link
     assert.match(content, /\[Example \\\[link\\\]\]\(https:\/\/example\.com\/a%29b\)/);
     assert.match(content, /\[Image: plot\]/);
     assert.doesNotMatch(content, /\\\\mu/);
+});
+
+test('markdown export preserves prompt line breaks and never doubles backslashes (issue #25)', async () => {
+    const { content } = await runExporter('exporter-markdown.js', issue25Fixture());
+
+    // User prompt: newlines, blank lines, and indentation survive verbatim.
+    assert.ok(content.includes('What is \\n ?\nShow me a 5-line example.\n\nMake no mistakes.\n    return indented;'),
+        `pre-wrap prompt should keep its line structure, got:\n${content}`);
+
+    // Inline code keeps backslashes verbatim.
+    assert.ok(content.includes('`\\n` is the **newline character**'));
+    assert.equal(content.includes('\\\\n'), false, 'backslashes must not be doubled anywhere');
+
+    // Inline code containing backticks uses a longer delimiter, not fake escapes.
+    assert.ok(content.includes('``a`b``'));
+    assert.equal(content.includes('\\`'), false);
+
+    // Code blocks built from <br>-separated lines keep one line per line.
+    assert.match(content, /```\nLine 1\nLine 2\nLine 3\n```/);
+
+    // Literal entity text is not un-escaped into different characters.
+    assert.ok(content.includes('Escape &amp; as `&amp;`'));
+    assert.ok(content.includes('&lt;div&gt; stays literal'));
+
+    // Table cells escape pipes but leave backslashes alone.
+    assert.ok(content.includes('| \\n | C:\\temp \\| D:\\data |'));
+});
+
+test('shared engine preserves pre-wrap prompts routed through inline styles', () => {
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head><title>Styled fixture</title></head><body><main>
+    <div data-message-author-role="user">
+        <div style="white-space: pre-wrap">first line
+second line</div>
+    </div>
+    <div data-message-author-role="assistant"><p>Understood, exporting both lines now.</p></div>
+</main></body></html>`, { url: 'https://chatgpt.com/c/styled' });
+
+    const result = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(result.messages[0].content, 'first line\nsecond line');
 });
 
 test('exports omit exact source URLs by default while keeping provider labels', async () => {
@@ -244,7 +319,7 @@ test('shared engine serializes live-observed ChatGPT shapes from synthetic fixtu
     assert.match(content, /```typescript\nconst value = 1;\nconsole\.log\(value\);\n```/);
     assert.match(content, /\| Feature \| Status \| Notes \|/);
     assert.match(content, /- Parent item/);
-    assert.match(content, /- Child item/);
+    assert.match(content, /\n  - Child item/);
     assert.match(content, /> Quoted synthetic result\./);
     assert.match(content, /\[Doc \\\[A\\\]\]\(https:\/\/example\.com\/a%29b\)/);
     assert.match(content, /\[File: sample-report\.csv\]/);
