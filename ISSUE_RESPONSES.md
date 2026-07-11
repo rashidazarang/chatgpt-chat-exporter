@@ -1,5 +1,19 @@
 # Issue Responses for GitHub
 
+## Issue #25: Markdown format export mismatch
+```
+✅ Fixed in v0.7.2!
+
+Thank you for the exceptionally clear report — the before/after test case made this straightforward to verify.
+
+All three symptoms are fixed in the shared engine and every generated exporter:
+- Prompt whitespace: `white-space: pre-wrap` user messages keep their line breaks, blank lines, and indentation (detected via class, inline style, and computed style, then protected from Markdown cleanup).
+- Backslashes: inline code and table cells are no longer backslash-escaped, so `\n` stays `\n`. Inline code with backticks now uses longer CommonMark delimiters instead of invalid escapes.
+- Code block lines: extraction no longer trusts `innerText` on detached clones (it degrades to `textContent` there and drops line breaks that come from element/`<br>` boundaries in Firefox-based browsers like LibreWolf).
+
+The exporter now reproduces your `patched.md` byte-for-byte from a fixture mirroring your conversation, and each symptom has a regression test. Also deferred `revokeObjectURL` so Firefox-family browsers can't abort the download.
+```
+
 ## Issue #19: FR: Properly handle tables
 ```
 ✅ Fixed in v0.6.0!

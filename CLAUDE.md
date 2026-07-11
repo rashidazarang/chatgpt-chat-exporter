@@ -4,54 +4,63 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ChatGPT Chat Exporter is a browser-based tool for exporting ChatGPT and Google Gemini conversations to Markdown or PDF format. The project uses pure JavaScript that runs directly in the browser console or as userscripts.
+ChatGPT Chat Exporter is a browser-based tool for exporting ChatGPT and Google Gemini conversations to Markdown, HTML, or print-ready PDF. Pure JavaScript that runs in the browser console or as userscripts — no runtime dependencies.
 
 ## Architecture
 
-### Core Modules (`/core/`)
-- **dom-analyzer.js**: Analyzes DOM structure using multiple selector strategies (data attributes, ARIA roles, semantic HTML, content-based) to locate conversation elements
-- **message-detector.js**: Unified message detection system that extracts messages, identifies senders, and processes content with formatting preservation
-- **selector-cascade.js**: Implements a cascade of selector strategies for robust element detection across different ChatGPT/Gemini UI versions
+**Single source of truth:** `src/extraction-engine.js`. Every shipped exporter is generated from it by `scripts/build-exporters.js`:
 
-### Main Exporters
-- **exporter-markdown.js**: ChatGPT markdown export - processes messages and formats as clean markdown
-- **exporter-pdf.js**: ChatGPT PDF export - similar to markdown but outputs as downloadable PDF
-- **gemini-exporter-markdown.js**: Google Gemini markdown export with platform-specific handling
+- `exporter-markdown.js`, `exporter-html.js`, `exporter-pdf.js` — ChatGPT console scripts
+- `gemini-exporter-markdown.js` — Gemini console script
+- `chatgpt-markdown-exporter.user.js`, `chatgpt-pdf-exporter.user.js` — userscripts with an export button
 
-### Key Design Patterns
-1. **Selector Cascade Strategy**: Uses prioritized selector strategies (data attributes → ARIA → semantic HTML → content-based) for resilient DOM element detection
-2. **Confidence Scoring**: Each detection method returns confidence scores to determine reliability
-3. **Multi-Strategy Sender Detection**: Identifies message senders through data attributes, avatars, textual indicators, structural patterns, and content analysis
-4. **Content Processing Pipeline**: Preserves code blocks, handles media, processes links, and maintains formatting through markdown conversion
+**Never edit the generated files directly.** Change the engine or the build script, then run `npm run build`. `npm test` fails if the generated files are stale.
 
-## Development Guidelines
+Userscript `@version` headers come from `package.json`'s `version` field.
 
-### Testing Exporters
-To test the exporters:
-1. Open a ChatGPT or Gemini conversation in your browser
-2. Open Developer Tools Console (F12)
-3. Paste the contents of the appropriate exporter file
-4. Press Enter to execute and download the export
+Legacy directories `core/` and `archived/` are historical prototypes; they are not part of the build.
 
-### Selector Strategy Updates
-When ChatGPT/Gemini UI changes, update selectors in this priority order:
-1. Data attributes (`[data-testid*="..."]`)
-2. ARIA roles (`[role="..."]`) 
+### Engine design
+
+- **Provider adapters** (`PROVIDERS`): per-platform selector cascades for messages, content roots, and titles, tried in priority order (data attributes → ARIA/custom elements → semantic HTML → class heuristics)
+- **Content pipeline** (`serializeMessageContent`): clone the message, annotate `white-space: pre-wrap` regions from computed style, strip UI chrome, then process cards → code blocks → math → media → links → tables before serializing to Markdown or HTML
+- **Verbatim protection**: code fences, display math, and pre-wrap prompt text bypass Markdown whitespace cleanup; pre-wrap text travels through collision-proof randomized placeholders (`MARKER_PREFIX`)
+- **Fidelity rules**: never backslash-escape inside code spans or code fences; inline backtick collisions use longer CommonMark delimiters; table cells escape only `|`
+- **Sender detection**: role attributes first, then class/aria hints, then content heuristics, alternating fallback last (`identifySender`)
+
+## Development
+
+```bash
+npm install     # jsdom (tests only)
+npm run build   # regenerate exporters from src/extraction-engine.js
+npm test        # build --check + node --test (jsdom-based suite in test/)
+```
+
+Tests live in `test/exporters.test.js` with synthetic DOM fixtures (`test/fixtures/`) mirroring live-observed ChatGPT/Gemini shapes. Every bug fix gets a regression test. Note: jsdom lacks `innerText`; the engine intentionally avoids relying on it (it degrades to `textContent` on detached clones in real browsers too).
+
+### Manual testing
+
+1. Open a ChatGPT or Gemini conversation
+2. DevTools Console (F12) → paste the built exporter file → Enter
+3. Verify the downloaded export against the rendered conversation
+
+### Selector updates
+
+When ChatGPT/Gemini UI changes, update the provider's selector list in this priority order:
+1. Data attributes (`[data-testid*="..."]`, `data-message-author-role`)
+2. ARIA roles / custom elements (`user-query`, `model-response`)
 3. Semantic HTML elements
 4. Class-based selectors (least preferred)
 
-### Message Detection Flow
-1. DOM analysis to understand page structure
-2. Find conversation container
-3. Locate individual message containers
-4. Extract sender, content, and metadata for each message
-5. Post-process to fix detection issues
-6. Calculate confidence scores
+## Release checklist
+
+1. Bump `version` in `package.json`
+2. `npm run build && npm test`
+3. Update README (What's New, Version History) and add `temporal/release-notes-vX.Y.Z.md`
+4. Commit, tag `vX.Y.Z`, push, create the GitHub release
 
 ## Important Notes
 
-- No build process required - pure JavaScript for browser execution
-- Works directly from browser console or as userscripts
-- Future-proof design using multiple fallback strategies
-- Handles code blocks, formatting, links, and media elements
-- Supports both ChatGPT and Google Gemini platforms
+- Exports omit the exact conversation URL unless `includeSourceUrl: true` is passed
+- HTML/PDF output escapes all conversation content; unsafe link schemes are dropped
+- No private live captures may be committed (`private-research/` is gitignored)
