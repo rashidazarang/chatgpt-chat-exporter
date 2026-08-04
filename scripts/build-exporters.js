@@ -18,10 +18,10 @@ function runner(provider, format) {
 
 ${indent(engineSource, 4)}
 
-    globalThis.ChatExporterEngine.exportConversation({
+    globalThis.ChatExporterEngine.exportConversationFull({
         provider: '${provider}',
         format: '${format}'
-    });
+    }).catch(error => console.error('[Chat Exporter] Export failed.', error));
 })();
 `;
 }

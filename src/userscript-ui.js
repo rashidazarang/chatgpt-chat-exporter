@@ -16,6 +16,7 @@
     const INSTALL_FLAG = '__CHAT_EXPORTER_UI_INSTALLED__';
 
     const ICONS = {
+        share: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>',
         link: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.1.1l2-2A5 5 0 0 0 12 4l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>',
         markdown: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16v12H4z"/><path d="M7 15V9l3 3 3-3v6"/><path d="m16 12 2 2 2-2"/></svg>',
         pdf: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/><path d="M9 16h6M9 12h3"/></svg>'
@@ -75,6 +76,10 @@
         ].join(';');
 
         menu.append(
+            createMenuItem(doc, 'Share…', ICONS.share, () => {
+                closeShareMenu(doc);
+                actions.openNativeShare();
+            }),
             createMenuItem(doc, 'Copy link', ICONS.link, async item => {
                 try {
                     await actions.copyLink();
@@ -151,7 +156,10 @@
             if (menu.querySelector(`[${NATIVE_ITEM_ATTRIBUTE}]`)) continue;
 
             const candidates = Array.from(menu.querySelectorAll('button, [role="menuitem"], a, div'));
-            const shareItem = candidates.find(item => isVisible(item) && normalizeText(item) === 'Share');
+            const shareItem = candidates.find(item => isVisible(item) && (
+                (item.getAttribute?.('data-testid') || '').toLowerCase().includes('share') ||
+                normalizeText(item) === 'Share'
+            ));
             if (!shareItem) continue;
 
             const markdownItem = cloneNativeItem(
@@ -173,11 +181,16 @@
         }
     }
 
+    // The data-testid hook works on every ChatGPT locale; the English text
+    // match is a fallback for DOM revisions that drop the testid.
     function isHeaderShareButton(element) {
         const button = element?.closest?.('button');
-        if (!button || normalizeText(button) !== 'Share') return null;
+        if (!button) return null;
         if (button.closest('[role="menu"], [data-radix-menu-content]')) return null;
-        return button;
+
+        const testId = (button.getAttribute('data-testid') || '').toLowerCase();
+        if (testId.includes('share')) return button;
+        return normalizeText(button) === 'Share' ? button : null;
     }
 
     function install(options = {}) {
@@ -186,15 +199,36 @@
         if (!doc || !engine || doc.defaultView[INSTALL_FLAG]) return false;
 
         doc.defaultView[INSTALL_FLAG] = true;
+
+        // ChatGPT's Share dialog creates real share links server-side, which
+        // "Copy link" cannot replace. The bypass flag lets our "Share…" item
+        // re-click the native button without being intercepted again.
+        let bypassNativeShare = false;
+        let lastShareButton = null;
+
+        const runExport = format => (engine.exportConversationFull || engine.exportConversation).call(engine, {
+            provider: 'chatgpt',
+            format
+        });
         const actions = {
             copyLink: options.copyLink || (() => doc.defaultView.navigator.clipboard.writeText(doc.defaultView.location.href)),
-            exportMarkdown: options.exportMarkdown || (() => engine.exportConversation({ provider: 'chatgpt', format: 'markdown' })),
-            exportPdf: options.exportPdf || (() => engine.exportConversation({ provider: 'chatgpt', format: 'pdf' }))
+            exportMarkdown: options.exportMarkdown || (() => Promise.resolve(runExport('markdown')).catch(error => console.error('[Chat Exporter] Export failed.', error))),
+            exportPdf: options.exportPdf || (() => Promise.resolve(runExport('pdf')).catch(error => console.error('[Chat Exporter] Export failed.', error))),
+            openNativeShare: options.openNativeShare || (() => {
+                if (!lastShareButton) return;
+                bypassNativeShare = true;
+                lastShareButton.click();
+            })
         };
 
         doc.addEventListener('click', event => {
             const shareButton = isHeaderShareButton(event.target);
             if (shareButton) {
+                if (bypassNativeShare) {
+                    bypassNativeShare = false;
+                    return;
+                }
+                lastShareButton = shareButton;
                 event.preventDefault();
                 event.stopImmediatePropagation();
                 doc.getElementById(MENU_ID)

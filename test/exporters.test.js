@@ -177,6 +177,10 @@ async function runExporter(filename, html, url = 'https://chatgpt.com/c/test-fix
 
     window.eval(readScript(filename));
 
+    // Runners export through the async full-extraction path; let its promise
+    // chain settle before checking the download.
+    await new Promise(resolve => setTimeout(resolve, 0));
+
     assert.ok(downloads.length > 0, `${filename} should create a downloadable blob`);
     const latest = downloads[downloads.length - 1];
     return {
@@ -257,27 +261,58 @@ test('userscript injects into a previously mounted menu when ChatGPT reveals it'
     assert.equal(window.document.querySelectorAll('#native-share').length, 1);
 });
 
-test('userscript replaces the header Share dialog with copy, Markdown, and PDF actions', async () => {
+test('userscript turns the header Share into a menu with native share, copy, Markdown, and PDF', async () => {
     const { window, calls } = installUserscriptUi();
     window.document.querySelector('#header-share').click();
 
     const menu = window.document.querySelector('#chat-exporter-share-menu');
     assert.ok(menu);
     const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
-    assert.deepEqual(items.map(item => item.textContent), ['Copy link', 'Export to Markdown', 'Export to PDF']);
+    assert.deepEqual(items.map(item => item.textContent), ['Share…', 'Copy link', 'Export to Markdown', 'Export to PDF']);
 
-    items[0].click();
+    items[1].click();
     await Promise.resolve();
     assert.deepEqual(calls, ['copy']);
 
     window.document.body.click();
     window.document.querySelector('#header-share').click();
-    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(2)').click();
+    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(3)').click();
     assert.deepEqual(calls, ['copy', 'markdown']);
 
     window.document.querySelector('#header-share').click();
-    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(3)').click();
+    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(4)').click();
     assert.deepEqual(calls, ['copy', 'markdown', 'pdf']);
+});
+
+test('userscript Share… item passes the click through to ChatGPT\'s native share', () => {
+    const { window } = installUserscriptUi();
+    const shareButton = window.document.querySelector('#header-share');
+    let nativeClicks = 0;
+    shareButton.addEventListener('click', () => {
+        nativeClicks += 1;
+    });
+
+    shareButton.click();
+    assert.equal(nativeClicks, 0, 'intercepted click must not reach the native handler');
+    assert.ok(window.document.querySelector('#chat-exporter-share-menu'));
+
+    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]').click();
+    assert.equal(nativeClicks, 1, 'Share… must re-click the native button unintercepted');
+    assert.equal(window.document.querySelector('#chat-exporter-share-menu'), null);
+});
+
+test('userscript finds the header share button by data-testid regardless of locale', () => {
+    const { window } = installUserscriptUi();
+    const localized = window.document.createElement('button');
+    localized.id = 'localized-share';
+    localized.setAttribute('data-testid', 'share-chat-button');
+    localized.innerHTML = '<span>Compartir</span>';
+    window.document.body.appendChild(localized);
+
+    localized.click();
+    assert.ok(window.document.querySelector('#chat-exporter-share-menu'),
+        'share menu should open from the localized button via its data-testid');
+    window.document.body.click();
 });
 
 test('ChatGPT markdown exporter preserves CodeMirror code, MathJax, tables, links, and media', async () => {
@@ -479,4 +514,155 @@ test('shared engine serializes live-observed Gemini custom elements from synthet
     assert.match(content, /\[Gemini app\]\(https:\/\/gemini\.google\.com\/app\)/);
     assert.match(content, /\[Canvas or chart\]/);
     assert.match(content, /\[File: gemini-notes\.txt\]/);
+});
+
+function citationsFixture() {
+    return `<!DOCTYPE html>
+<html>
+<head><title>Citations Fixture</title></head>
+<body>
+    <main>
+        <div data-message-author-role="user">
+            <p>Summarize the coverage and include your sources for everything please.</p>
+        </div>
+        <div data-message-author-role="assistant">
+            <p>Recent reporting from
+                <a href="https://news.example.com/story?utm_source=chatgpt.com" target="_blank">news.example.com</a>
+                confirms the change, echoed in the paper below.
+            </p>
+            <div class="citation-list">
+                <a href="https://research.example.org/paper">Deep Research Paper</a>
+                <a href="https://news.example.com/story?utm_source=chatgpt.com">duplicate pill</a>
+            </div>
+            <p>Unrelated inline links like <a href="https://plain.example.net/docs">plain docs</a> stay inline-only.</p>
+        </div>
+    </main>
+</body>
+</html>`;
+}
+
+test('assistant citations are appended as a References list (issue #27)', () => {
+    const dom = new JSDOM(citationsFixture(), { url: 'https://chatgpt.com/c/citations' });
+    const result = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    const content = result.messages[1].content;
+    assert.match(content, /\*\*References:\*\*/);
+    assert.match(content, /1\. \[news\.example\.com\]\(https:\/\/news\.example\.com\/story\?utm_source=chatgpt\.com\)/);
+    assert.match(content, /2\. \[Deep Research Paper\]\(https:\/\/research\.example\.org\/paper\)/);
+    assert.equal(content.match(/news\.example\.com\/story/g).length, 3,
+        'inline pill, duplicate pill inline, and one reference entry');
+    assert.doesNotMatch(content, /3\. \[/);
+    assert.doesNotMatch(content, /References:[\s\S]*plain\.example\.net/,
+        'ordinary links must not be promoted to references');
+
+    const userContent = result.messages[0].content;
+    assert.doesNotMatch(userContent, /References:/);
+});
+
+test('citation references render as an ordered list in HTML exports', () => {
+    const dom = new JSDOM(citationsFixture(), { url: 'https://chatgpt.com/c/citations' });
+    const result = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'html'
+    });
+
+    const content = result.messages[1].content;
+    assert.match(content, /<div class="references"><strong>References:<\/strong><ol>/);
+    assert.match(content, /<li><a href="https:\/\/research\.example\.org\/paper">Deep Research Paper<\/a><\/li>/);
+});
+
+function installVirtualizedConversation(window, totalMessages) {
+    const { document } = window;
+    const scroller = document.createElement('div');
+    scroller.id = 'scroller';
+    scroller.style.overflowY = 'auto';
+    document.body.appendChild(scroller);
+
+    const MESSAGE_HEIGHT = 100;
+    const CLIENT_HEIGHT = 300;
+    let scrollTop = 0;
+
+    const render = () => {
+        scroller.innerHTML = '';
+        for (let i = 0; i < totalMessages; i++) {
+            const top = i * MESSAGE_HEIGHT;
+            const visible = top < scrollTop + CLIENT_HEIGHT && top + MESSAGE_HEIGHT > scrollTop;
+            if (!visible) continue;
+
+            const message = document.createElement('div');
+            message.setAttribute('data-message-author-role', i % 2 === 0 ? 'user' : 'assistant');
+            message.setAttribute('data-message-id', `msg-${i}`);
+            const paragraph = document.createElement('p');
+            paragraph.textContent = `Message number ${i} with enough body text to pass the export filters.`;
+            message.appendChild(paragraph);
+            scroller.appendChild(message);
+        }
+    };
+
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => totalMessages * MESSAGE_HEIGHT });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => CLIENT_HEIGHT });
+    Object.defineProperty(scroller, 'scrollTop', {
+        get: () => scrollTop,
+        set(value) {
+            scrollTop = Math.max(0, Math.min(value, totalMessages * MESSAGE_HEIGHT - CLIENT_HEIGHT));
+            render();
+        }
+    });
+
+    render();
+    return scroller;
+}
+
+test('full extraction sweeps virtualized conversations end to end (issues #28, #29)', async () => {
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Virtualized Fixture</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/virtualized',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 30;
+    installVirtualizedConversation(dom.window, totalMessages);
+
+    const truncated = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+    assert.ok(truncated.messages.length < totalMessages,
+        'single-pass extraction only sees the rendered window');
+
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(full.messages.length, totalMessages);
+    full.messages.forEach((message, index) => {
+        assert.match(message.content, new RegExp(`Message number ${index} `),
+            'messages must stay in conversation order');
+        assert.equal(message.senderType, index % 2 === 0 ? 'user' : 'assistant');
+        assert.equal(message.reliableSender, true);
+    });
+});
+
+test('full extraction without a scrollable container matches single-pass output', async () => {
+    const dom = new JSDOM(chatGptFixture(), { url: 'https://chatgpt.com/c/static' });
+    const single = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.deepEqual(full.messages.map(m => m.content), single.messages.map(m => m.content));
 });

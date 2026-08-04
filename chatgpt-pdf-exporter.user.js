@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - PDF
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.7.2
+// @version      0.8.0
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @match        https://chat.openai.com/*
@@ -28,7 +28,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.7.2';
+        const ENGINE_VERSION = '0.8.0';
         // Random run token so conversation text can never collide with (or inject
         // through) the internal block placeholders used during serialization.
         const MARKER_PREFIX = `__CHAT_EXPORTER_BLOCK_${Math.random().toString(36).slice(2, 10)}_`;
@@ -749,11 +749,69 @@
             return content;
         }
 
+        // ChatGPT web-search citations carry a utm_source=chatgpt.com tracking
+        // parameter and/or live inside citation-marked wrappers. Ordinary links in
+        // conversation text match neither signal, so they stay inline-only.
+        function isCitationLink(link, href) {
+            if (/[?&]utm_source=chatgpt\.com/i.test(href)) return true;
+            return Boolean(link.closest?.('[class*="citation"], [data-testid*="citation"], [data-test-id*="citation"], [data-testid*="sources"], [data-test-id*="sources"]'));
+        }
+
+        function citationLabel(link, href) {
+            const label = normalizeWhitespace(
+                link.getAttribute?.('aria-label') ||
+                link.getAttribute?.('title') ||
+                link.textContent ||
+                ''
+            );
+            // Numeric pills ("1", "2") and empty labels read poorly in a reference
+            // list; fall back to the source hostname instead.
+            if (label && !/^\[?\d{1,3}\]?$/.test(label)) return label;
+
+            try {
+                return new URL(href).hostname.replace(/^www\./, '') || href;
+            } catch (error) {
+                return href;
+            }
+        }
+
+        // Collected before UI stripping and link flattening so citation pills that
+        // render as buttons or inside removable chrome are still seen (issue #27).
+        function collectCitations(clone) {
+            const citations = [];
+            const seenHrefs = new Set();
+
+            queryAll(clone, 'a[href]').forEach(link => {
+                const href = String(link.href || link.getAttribute('href') || '').trim();
+                if (isUnsafeHref(href) || !isCitationLink(link, href)) return;
+                if (seenHrefs.has(href)) return;
+                seenHrefs.add(href);
+                citations.push({ href, label: citationLabel(link, href) });
+            });
+
+            return citations;
+        }
+
+        function renderReferences(citations, format) {
+            if (!citations.length) return '';
+
+            if (format === 'markdown') {
+                const lines = citations.map((citation, index) =>
+                    `${index + 1}. [${escapeMarkdownLinkText(citation.label)}](${escapeMarkdownUrl(citation.href)})`);
+                return `\n\n**References:**\n\n${lines.join('\n')}`;
+            }
+
+            const items = citations.map(citation =>
+                `<li><a href="${sanitizeHtml(citation.href)}">${sanitizeHtml(citation.label)}</a></li>`).join('');
+            return `\n<div class="references"><strong>References:</strong><ol>${items}</ol></div>`;
+        }
+
         function serializeMessageContent(element, format) {
             const clone = element.cloneNode(true);
             const replacements = [];
 
             annotatePreWrapElements(element, clone);
+            const citations = collectCitations(clone);
             removeUiElements(clone);
             processCards(clone, format, replacements);
             processCodeBlocks(clone, format, replacements);
@@ -768,13 +826,13 @@
                 }
 
                 const markdown = cleanMarkdown(serializeMarkdownChildren(clone, { replacements }));
-                return restoreReplacements(markdown, replacements).trim();
+                return (restoreReplacements(markdown, replacements) + renderReferences(citations, format)).trim();
             }
 
             const html = serializeHtmlChildren(clone, replacements)
                 .replace(/\n{3,}/g, '\n\n')
                 .trim();
-            return restoreReplacements(html, replacements);
+            return restoreReplacements(html, replacements) + renderReferences(citations, format);
         }
 
         function detectProvider(doc) {
@@ -874,35 +932,29 @@
             return normalizeWhitespace(String(content || '').replace(/<[^>]+>/g, ' ')).slice(0, 160);
         }
 
-        function extractConversation(options = {}) {
-            const doc = resolveDocument(options.document);
-            const provider = providerFor(options.provider, doc);
-            const format = options.format || 'markdown';
-            const rawMessages = findMessages(doc, provider);
-            const seen = new Set();
-            const messages = [];
+        function captureMessage(state, messageElement, provider, format) {
+            const contentRoot = selectContentRoot(messageElement, provider);
+            const content = serializeMessageContent(contentRoot, format);
+            const minLength = queryAll(contentRoot, 'pre, code-block, table, img, canvas, video, audio').length > 0 ? 3 : 10;
 
-            rawMessages.forEach((messageElement, index) => {
-                const contentRoot = selectContentRoot(messageElement, provider);
-                const content = serializeMessageContent(contentRoot, format);
-                const minLength = queryAll(contentRoot, 'pre, code-block, table, img, canvas, video, audio').length > 0 ? 3 : 10;
+            if (!content || normalizeWhitespace(content).length < minLength) return;
 
-                if (!content || normalizeWhitespace(content).length < minLength) return;
+            const hash = contentHash(content);
+            if (state.seen.has(hash)) return;
+            state.seen.add(hash);
 
-                const hash = contentHash(content);
-                if (seen.has(hash)) return;
-                seen.add(hash);
-
-                const sender = identifySender(messageElement, index, provider);
-                messages.push({
-                    sender: sender.sender,
-                    senderType: sender.sender === 'You' ? 'user' : 'assistant',
-                    reliableSender: sender.reliable,
-                    content,
-                    index
-                });
+            const index = state.messages.length;
+            const sender = identifySender(messageElement, index, provider);
+            state.messages.push({
+                sender: sender.sender,
+                senderType: sender.sender === 'You' ? 'user' : 'assistant',
+                reliableSender: sender.reliable,
+                content,
+                index
             });
+        }
 
+        function buildConversation(doc, provider, options, messages) {
             return {
                 version: ENGINE_VERSION,
                 provider: provider.id,
@@ -913,6 +965,115 @@
                 date: formatDate(options.date || new Date()),
                 messages
             };
+        }
+
+        function extractConversation(options = {}) {
+            const doc = resolveDocument(options.document);
+            const provider = providerFor(options.provider, doc);
+            const format = options.format || 'markdown';
+            const state = { seen: new Set(), messages: [] };
+
+            findMessages(doc, provider).forEach(messageElement => captureMessage(state, messageElement, provider, format));
+
+            return buildConversation(doc, provider, options, state.messages);
+        }
+
+        // ─── Virtualized (lazy-loaded) conversations ─────────────────────────────
+        // ChatGPT windows long conversations: messages scrolled out of view are
+        // removed from the DOM entirely, so a single findMessages pass exports only
+        // the visible fragment (issues #28, #29). The async path below sweeps the
+        // scroll container from top to bottom, capturing and serializing each
+        // message while its DOM nodes exist.
+
+        function findScrollContainer(doc, provider) {
+            const win = getWindow(doc);
+            const probe = findMessages(doc, provider)[0];
+            let node = probe ? probe.parentElement : null;
+
+            while (node && node !== doc.body && node !== doc.documentElement) {
+                if (node.scrollHeight > node.clientHeight + 10) {
+                    let overflowY = '';
+                    try {
+                        overflowY = win?.getComputedStyle?.(node)?.overflowY || '';
+                    } catch (error) {
+                        // Fall through: a scrollable-looking node is still usable.
+                    }
+                    if (!overflowY || /(auto|scroll|overlay)/.test(overflowY)) return node;
+                }
+                node = node.parentElement;
+            }
+
+            const root = doc.scrollingElement || doc.documentElement;
+            return root && root.scrollHeight > root.clientHeight + 10 ? root : null;
+        }
+
+        // Stable identity across scroll snapshots. Message ids are the reliable
+        // signal; text prefix plus length covers providers without ids. Streaming
+        // partials that slip through are still collapsed by contentHash dedupe.
+        function messageKey(element) {
+            const id = element.getAttribute?.('data-message-id') || element.getAttribute?.('data-message-uuid');
+            if (id) return `id:${id}`;
+
+            const testId = element.getAttribute?.('data-testid') || element.getAttribute?.('data-test-id') || '';
+            const text = normalizeWhitespace(element.textContent);
+            return `text:${testId}:${text.length}:${text.slice(0, 200)}`;
+        }
+
+        async function extractConversationFull(options = {}) {
+            const doc = resolveDocument(options.document);
+            const provider = providerFor(options.provider, doc);
+            const format = options.format || 'markdown';
+            const scrollDelay = options.scrollDelay ?? 350;
+            const maxScrollSteps = options.maxScrollSteps ?? 400;
+            const win = getWindow(doc);
+            const wait = ms => new Promise(resolve => (win?.setTimeout || setTimeout)(resolve, ms));
+
+            const state = { seen: new Set(), messages: [] };
+            const seenKeys = new Set();
+            const capture = () => {
+                findMessages(doc, provider).forEach(messageElement => {
+                    const key = messageKey(messageElement);
+                    if (seenKeys.has(key)) return;
+                    seenKeys.add(key);
+                    captureMessage(state, messageElement, provider, format);
+                });
+            };
+
+            const container = options.scroll === false ? null : findScrollContainer(doc, provider);
+
+            if (container) {
+                const originalTop = container.scrollTop;
+
+                // Pin to the top until the container stops growing so providers
+                // that lazily prepend older history finish loading it.
+                let previousHeight = -1;
+                let guard = 0;
+                while (container.scrollHeight !== previousHeight && guard++ < maxScrollSteps) {
+                    previousHeight = container.scrollHeight;
+                    container.scrollTop = 0;
+                    await wait(scrollDelay);
+                }
+
+                capture();
+
+                // Sweep down in overlapping steps, capturing whatever the
+                // virtualizer renders at each stop, until scrolling makes no
+                // further progress (bottom reached).
+                guard = 0;
+                while (guard++ < maxScrollSteps) {
+                    const before = container.scrollTop;
+                    container.scrollTop = before + Math.max(container.clientHeight * 0.75, 200);
+                    await wait(scrollDelay);
+                    capture();
+                    if (container.scrollTop <= before) break;
+                }
+
+                container.scrollTop = originalTop;
+            } else {
+                capture();
+            }
+
+            return buildConversation(doc, provider, options, state.messages);
         }
 
         function extractConversationTitle(doc, provider) {
@@ -1138,15 +1299,7 @@
             }
         }
 
-        function exportConversation(options = {}) {
-            const doc = resolveDocument(options.document);
-            const format = options.format || 'markdown';
-            const conversation = extractConversation({
-                ...options,
-                document: doc,
-                format
-            });
-
+        function finishExport(doc, conversation, format, options) {
             if (conversation.messages.length === 0) {
                 const message = 'No messages found. The page structure may have changed.';
                 const win = getWindow(doc);
@@ -1166,12 +1319,38 @@
             return { conversation, content, filename };
         }
 
+        function exportConversation(options = {}) {
+            const doc = resolveDocument(options.document);
+            const format = options.format || 'markdown';
+            const conversation = extractConversation({
+                ...options,
+                document: doc,
+                format
+            });
+
+            return finishExport(doc, conversation, format, options);
+        }
+
+        async function exportConversationFull(options = {}) {
+            const doc = resolveDocument(options.document);
+            const format = options.format || 'markdown';
+            const conversation = await extractConversationFull({
+                ...options,
+                document: doc,
+                format
+            });
+
+            return finishExport(doc, conversation, format, options);
+        }
+
         return {
             version: ENGINE_VERSION,
             providers: PROVIDERS,
             detectProvider,
             extractConversation,
+            extractConversationFull,
             exportConversation,
+            exportConversationFull,
             serializers: {
                 markdown: renderMarkdown,
                 html: conversation => renderHtmlDocument(conversation, { format: 'html' }),
@@ -1181,7 +1360,10 @@
                 serializeMessageContent,
                 extractCodeBlock,
                 tableToMarkdown,
-                tableToHtml
+                tableToHtml,
+                collectCitations,
+                findScrollContainer,
+                messageKey
             }
         };
     });
@@ -1204,6 +1386,7 @@
         const INSTALL_FLAG = '__CHAT_EXPORTER_UI_INSTALLED__';
 
         const ICONS = {
+            share: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>',
             link: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.1.1l2-2A5 5 0 0 0 12 4l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>',
             markdown: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16v12H4z"/><path d="M7 15V9l3 3 3-3v6"/><path d="m16 12 2 2 2-2"/></svg>',
             pdf: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/><path d="M9 16h6M9 12h3"/></svg>'
@@ -1263,6 +1446,10 @@
             ].join(';');
 
             menu.append(
+                createMenuItem(doc, 'Share…', ICONS.share, () => {
+                    closeShareMenu(doc);
+                    actions.openNativeShare();
+                }),
                 createMenuItem(doc, 'Copy link', ICONS.link, async item => {
                     try {
                         await actions.copyLink();
@@ -1339,7 +1526,10 @@
                 if (menu.querySelector(`[${NATIVE_ITEM_ATTRIBUTE}]`)) continue;
 
                 const candidates = Array.from(menu.querySelectorAll('button, [role="menuitem"], a, div'));
-                const shareItem = candidates.find(item => isVisible(item) && normalizeText(item) === 'Share');
+                const shareItem = candidates.find(item => isVisible(item) && (
+                    (item.getAttribute?.('data-testid') || '').toLowerCase().includes('share') ||
+                    normalizeText(item) === 'Share'
+                ));
                 if (!shareItem) continue;
 
                 const markdownItem = cloneNativeItem(
@@ -1361,11 +1551,16 @@
             }
         }
 
+        // The data-testid hook works on every ChatGPT locale; the English text
+        // match is a fallback for DOM revisions that drop the testid.
         function isHeaderShareButton(element) {
             const button = element?.closest?.('button');
-            if (!button || normalizeText(button) !== 'Share') return null;
+            if (!button) return null;
             if (button.closest('[role="menu"], [data-radix-menu-content]')) return null;
-            return button;
+
+            const testId = (button.getAttribute('data-testid') || '').toLowerCase();
+            if (testId.includes('share')) return button;
+            return normalizeText(button) === 'Share' ? button : null;
         }
 
         function install(options = {}) {
@@ -1374,15 +1569,36 @@
             if (!doc || !engine || doc.defaultView[INSTALL_FLAG]) return false;
 
             doc.defaultView[INSTALL_FLAG] = true;
+
+            // ChatGPT's Share dialog creates real share links server-side, which
+            // "Copy link" cannot replace. The bypass flag lets our "Share…" item
+            // re-click the native button without being intercepted again.
+            let bypassNativeShare = false;
+            let lastShareButton = null;
+
+            const runExport = format => (engine.exportConversationFull || engine.exportConversation).call(engine, {
+                provider: 'chatgpt',
+                format
+            });
             const actions = {
                 copyLink: options.copyLink || (() => doc.defaultView.navigator.clipboard.writeText(doc.defaultView.location.href)),
-                exportMarkdown: options.exportMarkdown || (() => engine.exportConversation({ provider: 'chatgpt', format: 'markdown' })),
-                exportPdf: options.exportPdf || (() => engine.exportConversation({ provider: 'chatgpt', format: 'pdf' }))
+                exportMarkdown: options.exportMarkdown || (() => Promise.resolve(runExport('markdown')).catch(error => console.error('[Chat Exporter] Export failed.', error))),
+                exportPdf: options.exportPdf || (() => Promise.resolve(runExport('pdf')).catch(error => console.error('[Chat Exporter] Export failed.', error))),
+                openNativeShare: options.openNativeShare || (() => {
+                    if (!lastShareButton) return;
+                    bypassNativeShare = true;
+                    lastShareButton.click();
+                })
             };
 
             doc.addEventListener('click', event => {
                 const shareButton = isHeaderShareButton(event.target);
                 if (shareButton) {
+                    if (bypassNativeShare) {
+                        bypassNativeShare = false;
+                        return;
+                    }
+                    lastShareButton = shareButton;
                     event.preventDefault();
                     event.stopImmediatePropagation();
                     doc.getElementById(MENU_ID)

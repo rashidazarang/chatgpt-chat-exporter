@@ -28,6 +28,8 @@ Legacy directories `core/` and `archived/` are historical prototypes; they are n
 - **Verbatim protection**: code fences, display math, and pre-wrap prompt text bypass Markdown whitespace cleanup; pre-wrap text travels through collision-proof randomized placeholders (`MARKER_PREFIX`)
 - **Fidelity rules**: never backslash-escape inside code spans or code fences; inline backtick collisions use longer CommonMark delimiters; table cells escape only `|`
 - **Sender detection**: role attributes first, then class/aria hints, then content heuristics, alternating fallback last (`identifySender`)
+- **Virtualized conversations** (`extractConversationFull`): ChatGPT drops off-screen messages from the DOM, so the async path scrolls the conversation container top-to-bottom, serializing each message while it exists (keys: `data-message-id`, then text fingerprint; content-hash dedupe). All runners and userscripts export through it; pass `scroll: false` or no scrollable container to get the single-pass behavior
+- **Citations** (`collectCitations`): links with `utm_source=chatgpt.com` or inside citation/sources containers are collected before UI stripping and appended per-message as a numbered References list (issue #27)
 
 ## Development
 
