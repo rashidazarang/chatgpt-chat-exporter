@@ -4,6 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { JSDOM } = require('jsdom');
 const engine = require('../src/extraction-engine.js');
+const userscriptUi = require('../src/userscript-ui.js');
 
 const repoRoot = path.resolve(__dirname, '..');
 
@@ -183,6 +184,101 @@ async function runExporter(filename, html, url = 'https://chatgpt.com/c/test-fix
         content: await latest.blob.text()
     };
 }
+
+function installUserscriptUi() {
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html>
+<body>
+    <header><button id="header-share"><span>Share</span></button></header>
+    <div id="conversation-menu" role="menu">
+        <button role="menuitem"><svg aria-hidden="true"></svg><span>Share</span></button>
+        <button role="menuitem"><span>Rename</span></button>
+    </div>
+</body>
+</html>`, {
+        url: 'https://chatgpt.com/c/ui-fixture',
+        pretendToBeVisual: true
+    });
+    const { window } = dom;
+    window.HTMLElement.prototype.getClientRects = () => [{ width: 100, height: 30 }];
+    window.HTMLElement.prototype.getBoundingClientRect = () => ({
+        top: 10,
+        right: 200,
+        bottom: 40,
+        left: 100,
+        width: 100,
+        height: 30
+    });
+
+    const calls = [];
+    userscriptUi.install({
+        document: window.document,
+        engine: {},
+        copyLink: async () => calls.push('copy'),
+        exportMarkdown: () => calls.push('markdown'),
+        exportPdf: () => calls.push('pdf')
+    });
+    window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+    return { dom, window, calls };
+}
+
+test('userscript integrates Markdown and PDF actions into ChatGPT conversation menus', () => {
+    const { window, calls } = installUserscriptUi();
+    const menu = window.document.querySelector('#conversation-menu');
+    const labels = Array.from(menu.querySelectorAll('[role="menuitem"]')).map(item => item.textContent.trim());
+
+    assert.deepEqual(labels, ['Share', 'Export to Markdown', 'Export to PDF', 'Rename']);
+    assert.equal(window.document.querySelector('#chatgpt-export-markdown-btn'), null);
+    assert.equal(window.document.querySelector('#chatgpt-export-pdf-btn'), null);
+
+    menu.querySelector('[data-chat-exporter-item="markdown"]').click();
+    menu.querySelector('[data-chat-exporter-item="pdf"]').click();
+    assert.deepEqual(calls, ['markdown', 'pdf']);
+});
+
+test('userscript injects into a previously mounted menu when ChatGPT reveals it', async () => {
+    const { window } = installUserscriptUi();
+    const menu = window.document.createElement('div');
+    menu.id = 'lazy-conversation-menu';
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    menu.innerHTML = '<button id="native-share" role="menuitem" aria-haspopup="dialog" aria-controls="share-dialog"><span>Share</span></button>';
+    menu.getClientRects = () => menu.hidden ? [] : [{ width: 100, height: 30 }];
+    window.document.body.appendChild(menu);
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    assert.equal(menu.querySelector('[data-chat-exporter-item]'), null);
+    menu.hidden = false;
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    const exportItems = Array.from(menu.querySelectorAll('[data-chat-exporter-item]'));
+    assert.deepEqual(exportItems.map(item => item.textContent), ['Export to Markdown', 'Export to PDF']);
+    assert.ok(exportItems.every(item => !item.id && !item.hasAttribute('aria-controls') && !item.hasAttribute('aria-haspopup')));
+    assert.equal(window.document.querySelectorAll('#native-share').length, 1);
+});
+
+test('userscript replaces the header Share dialog with copy, Markdown, and PDF actions', async () => {
+    const { window, calls } = installUserscriptUi();
+    window.document.querySelector('#header-share').click();
+
+    const menu = window.document.querySelector('#chat-exporter-share-menu');
+    assert.ok(menu);
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    assert.deepEqual(items.map(item => item.textContent), ['Copy link', 'Export to Markdown', 'Export to PDF']);
+
+    items[0].click();
+    await Promise.resolve();
+    assert.deepEqual(calls, ['copy']);
+
+    window.document.body.click();
+    window.document.querySelector('#header-share').click();
+    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(2)').click();
+    assert.deepEqual(calls, ['copy', 'markdown']);
+
+    window.document.querySelector('#header-share').click();
+    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(3)').click();
+    assert.deepEqual(calls, ['copy', 'markdown', 'pdf']);
+});
 
 test('ChatGPT markdown exporter preserves CodeMirror code, MathJax, tables, links, and media', async () => {
     const { content } = await runExporter('exporter-markdown.js', chatGptFixture());

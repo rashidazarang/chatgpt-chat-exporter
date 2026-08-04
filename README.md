@@ -20,7 +20,8 @@ No install, no server, no account: everything runs locally in your browser.
 - 📄 Exports to **Markdown**, **HTML**, or **printable PDF**
 - 🆕 **Google Gemini** conversation export support
 - 🔒 **Private by default**: exports show the provider label without embedding your exact conversation URL
-- 🚀 Works directly from the browser console — or install as a one-click userscript
+- 🧩 Integrates with ChatGPT's native conversation and Share menus instead of adding floating controls
+- 🚀 Works directly from the browser console — or install as a userscript
 - 🛡️ One shared, tested extraction engine powers every exporter, with multiple selector fallbacks to survive UI changes
 
 ---
@@ -34,7 +35,7 @@ No install, no server, no account: everything runs locally in your browser.
    - [Violentmonkey](https://violentmonkey.github.io/) (Chrome, Firefox)
    - [Greasemonkey](https://addons.mozilla.org/en-US/firefox/addon/greasemonkey/) (Firefox)
 
-2. Install the script:
+2. Install either userscript. Both installers expose Markdown and PDF export actions, so existing installations keep working without needing both scripts:
 
    **From GreasyFork (Recommended):**
    - [Markdown Exporter](https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown)
@@ -44,7 +45,9 @@ No install, no server, no account: everything runs locally in your browser.
    - [Markdown Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/chatgpt-markdown-exporter.user.js)
    - [PDF Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/chatgpt-pdf-exporter.user.js)
 
-3. Open ChatGPT and click the **Export as Markdown** or **Export as PDF** button that appears in the corner of the page.
+3. Open a ChatGPT conversation, then either:
+   - Open the conversation's **•••** menu and choose **Export to Markdown** or **Export to PDF**.
+   - Click the header **Share** button and choose **Copy link**, **Export to Markdown**, or **Export to PDF**.
 
 ### Method 2: Browser Console
 
@@ -131,13 +134,14 @@ All exporters are generated from a single, tested engine:
 
 ```
 src/extraction-engine.js     ← canonical source (edit this)
+src/userscript-ui.js         ← native ChatGPT menu integration
 scripts/build-exporters.js   ← generates the files below
 ├── exporter-markdown.js         ChatGPT → Markdown (console)
 ├── exporter-html.js             ChatGPT → HTML (console)
 ├── exporter-pdf.js              ChatGPT → print-ready HTML (console)
 ├── gemini-exporter-markdown.js  Gemini → Markdown (console)
-├── chatgpt-markdown-exporter.user.js   userscript + export button
-└── chatgpt-pdf-exporter.user.js        userscript + export button
+├── chatgpt-markdown-exporter.user.js   userscript + native export menus
+└── chatgpt-pdf-exporter.user.js        userscript + native export menus
 ```
 
 The engine finds messages through a cascade of selector strategies (data attributes → ARIA → semantic HTML → content heuristics), so it keeps working across ChatGPT and Gemini UI revisions. Rich content — code, tables, math, links, media — is converted through a processing pipeline that protects verbatim regions (code, pre-wrap prompts) from whitespace cleanup.
@@ -150,7 +154,7 @@ npm run build   # regenerate all exporters from src/extraction-engine.js
 npm test        # verify generated files are current + run the jsdom test suite
 ```
 
-Never edit the generated exporter files directly — change `src/extraction-engine.js` (or the build script) and run `npm run build`.
+Never edit the generated exporter files directly — change `src/extraction-engine.js`, `src/userscript-ui.js`, or the build script and run `npm run build`.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md) for details.
 
@@ -163,7 +167,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 ## ❓ Troubleshooting
 
 - **"No messages found"** — the site's DOM may have changed. Update to the latest exporter version; if it persists, [open an issue](https://github.com/rashidazarang/chatgpt-chat-exporter/issues) with your browser and a description of the page.
-- **Export button doesn't appear** — confirm the userscript is enabled for `chatgpt.com` and reload the page.
+- **Export actions don't appear** — confirm the userscript is enabled for `chatgpt.com`, reload the page, and open a conversation's **•••** or header **Share** menu.
 - **Downloads blocked in the console** — some browsers require you to allow downloads/popups triggered from DevTools; the userscript method avoids this.
 
 ---

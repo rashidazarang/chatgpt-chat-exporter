@@ -2,7 +2,7 @@
 
 ## Available Exporters
 
-All shipped exporters are generated from the shared engine in `src/extraction-engine.js`. The console scripts remain self-contained and pasteable; the userscripts embed the same engine at build time.
+All shipped exporters are generated from the shared engine in `src/extraction-engine.js`. The console scripts remain self-contained and pasteable; the userscripts embed the same engine plus the native ChatGPT menu integration from `src/userscript-ui.js` at build time.
 
 ### 1. **exporter-markdown.js** - Markdown Export
 - **Output:** `.md` files
@@ -65,6 +65,7 @@ Use `gemini-exporter-markdown.js` from a conversation at `gemini.google.com/app`
 ## Notes
 
 - **PDF Exporter:** Downloads an HTML file with clear instructions. Open it and press Ctrl+P to save as PDF
+- **Userscripts:** Add Markdown and PDF actions beneath Share in conversation menus and replace the header Share dialog with Copy link, Markdown, and PDF actions
 - **HTML Exporter:** Basic HTML for web viewing. Can also be printed to PDF but without special formatting
 - **File Names:** All exporters now use the conversation title for better organization
 - **Math:** Markdown exports use common MathJax delimiters so compatible viewers can render equations

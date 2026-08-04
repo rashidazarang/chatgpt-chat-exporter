@@ -12,7 +12,8 @@ ChatGPT Chat Exporter is a browser-based tool for exporting ChatGPT and Google G
 
 - `exporter-markdown.js`, `exporter-html.js`, `exporter-pdf.js` — ChatGPT console scripts
 - `gemini-exporter-markdown.js` — Gemini console script
-- `chatgpt-markdown-exporter.user.js`, `chatgpt-pdf-exporter.user.js` — userscripts with an export button
+- `src/userscript-ui.js` — native ChatGPT conversation-menu and Share-menu integration
+- `chatgpt-markdown-exporter.user.js`, `chatgpt-pdf-exporter.user.js` — generated userscripts with Markdown and PDF menu actions
 
 **Never edit the generated files directly.** Change the engine or the build script, then run `npm run build`. `npm test` fails if the generated files are stale.
 
