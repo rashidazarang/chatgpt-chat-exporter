@@ -189,8 +189,7 @@ async function runExporter(filename, html, url = 'https://chatgpt.com/c/test-fix
     };
 }
 
-function installUserscriptUi() {
-    const dom = new JSDOM(`<!DOCTYPE html>
+const SHARE_UI_FIXTURE = `<!DOCTYPE html>
 <html>
 <body>
     <header><button id="header-share"><span>Share</span></button></header>
@@ -198,8 +197,27 @@ function installUserscriptUi() {
         <button role="menuitem"><svg aria-hidden="true"></svg><span>Share</span></button>
         <button role="menuitem"><span>Rename</span></button>
     </div>
+    <div data-message-author-role="user"><div class="markdown"><p>Hello</p></div></div>
 </body>
-</html>`, {
+</html>`;
+
+// An account with sharing disabled by policy: no header share control and no
+// Share entry in the conversation menu (issue #31).
+const NO_SHARE_UI_FIXTURE = `<!DOCTYPE html>
+<html>
+<body>
+    <header><button id="header-menu"><span>Open menu</span></button></header>
+    <div id="conversation-menu" role="menu">
+        <button role="menuitem" data-testid="rename-chat-menu-item"><span>Rename</span></button>
+        <button role="menuitem" data-testid="delete-chat-menu-item"><span>Delete</span></button>
+    </div>
+    <div data-message-author-role="user"><div class="markdown"><p>Hello</p></div></div>
+    <div data-message-author-role="assistant"><div class="markdown"><p>Hi there</p></div></div>
+</body>
+</html>`;
+
+function installUserscriptUi(options = {}) {
+    const dom = new JSDOM(options.markup || SHARE_UI_FIXTURE, {
         url: 'https://chatgpt.com/c/ui-fixture',
         pretendToBeVisual: true
     });
@@ -218,6 +236,8 @@ function installUserscriptUi() {
     userscriptUi.install({
         document: window.document,
         engine: {},
+        launcherDelay: 0,
+        syncInterval: 0,
         copyLink: async () => calls.push('copy'),
         exportMarkdown: () => calls.push('markdown'),
         exportPdf: () => calls.push('pdf')
@@ -313,6 +333,218 @@ test('userscript finds the header share button by data-testid regardless of loca
     assert.ok(window.document.querySelector('#chat-exporter-share-menu'),
         'share menu should open from the localized button via its data-testid');
     window.document.body.click();
+});
+
+test('userscript mounts a floating launcher when the account exposes no share control (issue #31)', () => {
+    const { window, calls } = installUserscriptUi({ markup: NO_SHARE_UI_FIXTURE });
+    const launcher = window.document.querySelector('#chat-exporter-launcher');
+
+    assert.ok(launcher, 'accounts without a share control still need an export entry point');
+    assert.notEqual(launcher.style.display, 'none');
+
+    launcher.click();
+    const menu = window.document.querySelector('#chat-exporter-share-menu');
+    assert.ok(menu, 'the launcher opens the export menu');
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    assert.deepEqual(items.map(item => item.textContent), ['Copy link', 'Export to Markdown', 'Export to PDF'],
+        'Share… is omitted when there is no native share dialog to hand off to');
+
+    items[1].click();
+    assert.deepEqual(calls, ['markdown']);
+    assert.equal(window.document.querySelector('#chat-exporter-share-menu'), null);
+});
+
+test('userscript launcher toggles its menu closed on a second click', () => {
+    const { window } = installUserscriptUi({ markup: NO_SHARE_UI_FIXTURE });
+    const launcher = window.document.querySelector('#chat-exporter-launcher');
+
+    launcher.click();
+    assert.ok(window.document.querySelector('#chat-exporter-share-menu'));
+    launcher.click();
+    assert.equal(window.document.querySelector('#chat-exporter-share-menu'), null);
+});
+
+test('userscript keeps the launcher hidden while ChatGPT shows its own share control', async () => {
+    const { window } = installUserscriptUi();
+    assert.equal(window.document.querySelector('#chat-exporter-launcher'), null,
+        'the native menus are enough while a share control exists');
+
+    window.document.querySelector('#header-share').remove();
+    window.document.querySelector('#conversation-menu').remove();
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    const launcher = window.document.querySelector('#chat-exporter-launcher');
+    assert.ok(launcher, 'the launcher appears once the share control disappears');
+
+    const restored = window.document.createElement('button');
+    restored.setAttribute('data-testid', 'share-chat-button');
+    restored.appendChild(window.document.createTextNode('Compartir'));
+    window.document.body.appendChild(restored);
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    assert.equal(launcher.style.display, 'none', 'the launcher steps aside when the native control returns');
+});
+
+test('userscript builds menu icons without innerHTML so strict CSP pages keep working', () => {
+    const { window } = installUserscriptUi({ markup: NO_SHARE_UI_FIXTURE });
+    const launcher = window.document.querySelector('#chat-exporter-launcher');
+
+    assert.ok(launcher.querySelector('svg'), 'the launcher renders a parsed SVG icon');
+    launcher.click();
+    const icons = window.document.querySelectorAll('#chat-exporter-share-menu [role="menuitem"] svg');
+    assert.equal(icons.length, 3);
+    assert.ok(Array.from(icons).every(icon => icon.namespaceURI === 'http://www.w3.org/2000/svg'));
+});
+
+test('cloned conversation-menu items are relabelled and drop ChatGPT test ids', () => {
+    // A localized menu: the share item is found by data-testid, and its label
+    // must still be replaced rather than repeated three times.
+    const { window } = installUserscriptUi({ markup: `<!DOCTYPE html>
+<html>
+<body>
+    <div id="conversation-menu" role="menu">
+        <button role="menuitem" data-testid="share-chat-menu-item"><span data-testid="share-label">Compartir</span></button>
+    </div>
+</body>
+</html>` });
+
+    const clones = Array.from(window.document.querySelectorAll('[data-chat-exporter-item]'));
+    assert.deepEqual(clones.map(item => item.textContent), ['Export to Markdown', 'Export to PDF']);
+    assert.equal(window.document.querySelectorAll('[data-testid="share-chat-menu-item"]').length, 1);
+    assert.equal(window.document.querySelectorAll('[data-testid="share-label"]').length, 1);
+});
+
+test('userscript exposes a console fallback for exporting', () => {
+    const { window, calls } = installUserscriptUi({ markup: NO_SHARE_UI_FIXTURE });
+
+    assert.equal(typeof window.ChatExporter.markdown, 'function');
+    window.ChatExporter.markdown();
+    window.ChatExporter.pdf();
+    assert.deepEqual(calls, ['markdown', 'pdf']);
+});
+
+test('userscript leaves an empty chat page alone until it has messages', async () => {
+    const { window } = installUserscriptUi({ markup: `<!DOCTYPE html>
+<html><body><header><button id="new-chat"><span>New chat</span></button></header></body></html>` });
+
+    assert.equal(window.document.querySelector('#chat-exporter-launcher'), null,
+        'nothing to export yet, so no launcher');
+
+    const message = window.document.createElement('div');
+    message.setAttribute('data-message-author-role', 'user');
+    window.document.body.appendChild(message);
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    assert.ok(window.document.querySelector('#chat-exporter-launcher'),
+        'the launcher appears as soon as the conversation has messages');
+});
+
+test('ChatExporter.showLauncher() forces the launcher on even next to a native share control', async () => {
+    const { window } = installUserscriptUi();
+    assert.equal(window.document.querySelector('#chat-exporter-launcher'), null);
+
+    const launcher = window.ChatExporter.showLauncher();
+    assert.ok(launcher);
+
+    window.document.body.appendChild(window.document.createElement('span'));
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+    assert.notEqual(window.document.querySelector('#chat-exporter-launcher').style.display, 'none',
+        'a forced launcher survives later DOM churn');
+});
+
+// An enterprise-style page: a real conversation, but no share control anywhere
+// because the account has sharing disabled by policy.
+const ENTERPRISE_PAGE = `<!DOCTYPE html>
+<html>
+<head><title>Enterprise Conversation</title></head>
+<body>
+    <header><button id="new-chat"><span>New chat</span></button></header>
+    <main>
+        <div data-message-author-role="user"><p>Does the export button still work here?</p></div>
+        <div data-message-author-role="assistant"><p>It should, through the floating launcher.</p></div>
+    </main>
+</body>
+</html>`;
+
+async function runUserscript(html, options = {}) {
+    const dom = new JSDOM(html, {
+        url: 'https://chatgpt.com/c/enterprise-fixture',
+        runScripts: 'outside-only',
+        pretendToBeVisual: true
+    });
+
+    const { window } = dom;
+    installInnerText(window);
+    window.HTMLElement.prototype.getClientRects = () => [{ width: 100, height: 30 }];
+    window.HTMLElement.prototype.getBoundingClientRect = () => ({
+        top: 10, right: 200, bottom: 40, left: 100, width: 100, height: 30
+    });
+
+    const downloads = [];
+    window.URL.createObjectURL = blob => {
+        downloads.push({ blob, filename: null });
+        return `blob:download-${downloads.length}`;
+    };
+    window.URL.revokeObjectURL = () => {};
+    window.alert = () => {};
+    window.console = console;
+    window.HTMLAnchorElement.prototype.click = function click() {
+        const latest = downloads[downloads.length - 1];
+        if (latest) latest.filename = this.download;
+    };
+
+    // Pages that enforce `require-trusted-types-for 'script'` turn every HTML
+    // sink into a throwing setter; the userscript must never touch one.
+    if (options.trustedTypes) {
+        const blocked = () => {
+            throw new TypeError("This document requires 'TrustedHTML' assignment.");
+        };
+        Object.defineProperty(window.Element.prototype, 'innerHTML', { set: blocked, get: () => '' });
+        Object.defineProperty(window.Element.prototype, 'outerHTML', { set: blocked, get: () => '' });
+        window.Element.prototype.insertAdjacentHTML = blocked;
+        window.document.write = blocked;
+    }
+
+    window.eval(readScript(options.script || 'chatgpt-markdown-exporter.user.js'));
+
+    // The launcher waits for ChatGPT's header to settle before deciding that no
+    // native share control exists.
+    const deadline = Date.now() + 5000;
+    let launcher = null;
+    while (!launcher && Date.now() < deadline) {
+        await new Promise(resolve => window.setTimeout(resolve, 50));
+        launcher = window.document.querySelector('#chat-exporter-launcher');
+    }
+    return { window, downloads, launcher };
+}
+
+async function exportFromLauncher(window, launcher) {
+    launcher.click();
+    window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(2)').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+}
+
+test('built userscript exports end to end on an account with no share control (issue #31)', async () => {
+    const { window, downloads, launcher } = await runUserscript(ENTERPRISE_PAGE);
+    assert.ok(launcher, 'the userscript must expose an export control without ChatGPT sharing');
+
+    await exportFromLauncher(window, launcher);
+
+    assert.equal(downloads.length, 1, 'clicking Export to Markdown downloads the conversation');
+    const content = await downloads[0].blob.text();
+    assert.match(content, /Does the export button still work here\?/);
+    assert.match(content, /It should, through the floating launcher\./);
+    assert.match(downloads[0].filename, /\.md$/);
+});
+
+test('built userscript installs and exports on a page that enforces Trusted Types', async () => {
+    const { window, downloads, launcher } = await runUserscript(ENTERPRISE_PAGE, { trustedTypes: true });
+    assert.ok(launcher, 'strict CSP must not stop the export UI from mounting');
+
+    await exportFromLauncher(window, launcher);
+
+    assert.equal(downloads.length, 1);
+    assert.match(await downloads[0].blob.text(), /Does the export button still work here\?/);
 });
 
 test('ChatGPT markdown exporter preserves CodeMirror code, MathJax, tables, links, and media', async () => {

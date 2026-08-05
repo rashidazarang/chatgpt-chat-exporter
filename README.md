@@ -22,7 +22,7 @@ No install, no server, no account: everything runs locally in your browser.
 - 📄 Exports to **Markdown**, **HTML**, or **printable PDF**
 - 🆕 **Google Gemini** conversation export support
 - 🔒 **Private by default**: exports show the provider label without embedding your exact conversation URL
-- 🧩 Integrates with ChatGPT's native conversation and Share menus instead of adding floating controls
+- 🧩 Integrates with ChatGPT's native conversation and Share menus — and falls back to a floating **Export** button when your account has no Share control (e.g. enterprise policies)
 - 🚀 Works directly from the browser console — or install as a userscript
 - 🛡️ One shared, tested extraction engine powers every exporter, with multiple selector fallbacks to survive UI changes
 
@@ -49,7 +49,8 @@ No install, no server, no account: everything runs locally in your browser.
 
 3. Open a ChatGPT conversation, then either:
    - Open the conversation's **•••** menu and choose **Export to Markdown** or **Export to PDF**.
-   - Click the header **Share** button and choose **Copy link**, **Export to Markdown**, or **Export to PDF**.
+   - Click the header **Share** button and choose **Share…**, **Copy link**, **Export to Markdown**, or **Export to PDF**.
+   - If your account has no Share control at all (sharing disabled by an enterprise policy, for example), a floating **Export** button appears in the bottom-right corner with the same options.
 
 ### Method 2: Browser Console
 
@@ -77,16 +78,26 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.8.0
+## 🔧 What's New in v0.8.1
+
+**The Export UI No Longer Depends on ChatGPT's Share Button** ([#31](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/31), thanks [@n8henrie](https://github.com/n8henrie)):
+
+- 🎯 **Floating Export button is back — as a fallback**: v0.8.0 moved exports into ChatGPT's native menus, which left accounts with sharing disabled (enterprise policies) with no export control at all. A floating **Export** button now appears whenever no Share control exists on the page, and steps aside automatically when one does.
+- 🧯 **Console escape hatch**: the userscript exposes `ChatExporter.markdown()`, `ChatExporter.pdf()`, and `ChatExporter.showLauncher()` so an export is always reachable, whatever ChatGPT's UI does next.
+- 🛡️ **Strict-CSP safe**: the UI builds its icons and menu items through DOM APIs instead of `innerHTML`, so pages that enforce Trusted Types can't block it. No shipped code touches an HTML injection sink — covered by a regression test.
+- 🌍 **Localized menus labelled correctly**: export entries cloned into a non-English **•••** menu now get their own label instead of repeating ChatGPT's.
+- 🧹 Cloned menu entries no longer carry ChatGPT's own `data-testid`s, so its internal queries never pick up our copies.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.8.0
 
 **Full Captures for Long Conversations** ([#28](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/28), [#29](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/29)):
 
 - 📜 **Lazy-loading handled**: ChatGPT virtualizes long conversations — messages scrolled out of view are removed from the DOM, so a single DOM pass could only ever export a fragment. The engine now auto-scrolls the conversation container from top to bottom, serializing each message while it exists, then restores your scroll position. Manual pre-scrolling is no longer needed (and never worked, since the DOM forgets what you scrolled past).
 - 🔗 **References exported** ([#27](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/27)): web-search citations in a response (recognized by their `utm_source=chatgpt.com` links or citation containers) are appended to that message as a numbered **References** list in Markdown, HTML, and PDF exports.
 - 🧩 **Native menu polish**: the header Share menu now includes a **Share…** item that opens ChatGPT's real share dialog, and share controls are recognized by `data-testid` so the integration works on non-English ChatGPT locales.
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.7.2
 
@@ -178,14 +189,15 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 - **"No messages found"** — the site's DOM may have changed. Update to the latest exporter version; if it persists, [open an issue](https://github.com/rashidazarang/chatgpt-chat-exporter/issues) with your browser and a description of the page.
 - **Long conversation exports only a fragment** — update to v0.8.0+, which auto-scrolls through lazily-loaded conversations. Leave the tab in the foreground while the sweep runs; the export downloads when it finishes.
-- **Export actions don't appear** — confirm the userscript is enabled for `chatgpt.com`, reload the page, and open a conversation's **•••** or header **Share** menu.
+- **Export actions don't appear** — confirm the userscript is enabled for `chatgpt.com`, reload the page, and open a conversation's **•••** or header **Share** menu. On accounts with no Share control (v0.8.1+), look for the floating **Export** button in the bottom-right corner instead; you can also force it on from the console with `ChatExporter.showLauncher()`, or export directly with `ChatExporter.markdown()` / `ChatExporter.pdf()`.
 - **Downloads blocked in the console** — some browsers require you to allow downloads/popups triggered from DevTools; the userscript method avoids this.
 
 ---
 
 ## 🚀 Version History
 
-- **v0.8.0** (Current) - Full export of virtualized long conversations via auto-scroll (#28, #29), References list for web-search citations (#27), native menu export integration with locale-safe share detection (#26)
+- **v0.8.1** (Current) - Floating **Export** fallback for accounts with no Share control, console API, and Trusted-Types-safe UI (#31)
+- **v0.8.0** - Full export of virtualized long conversations via auto-scroll (#28, #29), References list for web-search citations (#27), native menu export integration with locale-safe share detection (#26)
 - **v0.7.2** - Markdown fidelity: preserved prompt whitespace, no doubled backslashes, correct code-span/list/entity handling (#25)
 - **v0.7.1** - Source URL privacy by default and safe Markdown code fences
 - **v0.7.0** - Shared extraction engine, live compatibility audit, current ChatGPT/Gemini provider adapters
