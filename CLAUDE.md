@@ -28,6 +28,7 @@ Legacy directories `core/` and `archived/` are historical prototypes; they are n
 - **Verbatim protection**: code fences, display math, and pre-wrap prompt text bypass Markdown whitespace cleanup; pre-wrap text travels through collision-proof randomized placeholders (`MARKER_PREFIX`)
 - **Fidelity rules**: never backslash-escape inside code spans or code fences; inline backtick collisions use longer CommonMark delimiters; table cells escape only `|`
 - **Sender detection**: role attributes first, then class/aria hints, then content heuristics, alternating fallback last (`identifySender`)
+- **Capture order is not conversation order** (`sortByConversationOrder`): the sweep sees messages in whatever order the virtualizer mounts them — a capture taken at the top still sees the bottom turns ChatGPT hasn't unmounted yet. Every message records `rect.top + container.scrollTop` and the list is sorted by it before rendering. Never append-and-ship from a sweep
 - **Virtualized conversations** (`extractConversationFull`): ChatGPT drops off-screen messages from the DOM, so the async path scrolls the conversation container top-to-bottom, serializing each message while it exists (keys: `data-message-id`, then text fingerprint; content-hash dedupe). All runners and userscripts export through it; pass `scroll: false` or no scrollable container to get the single-pass behavior
 - **Citations** (`collectCitations`): links with `utm_source=chatgpt.com` or inside citation/sources containers are collected before UI stripping and appended per-message as a numbered References list (issue #27)
 
@@ -55,6 +56,29 @@ Tests live in `test/exporters.test.js` with synthetic DOM fixtures (`test/fixtur
 1. Open a ChatGPT or Gemini conversation
 2. DevTools Console (F12) → paste the built exporter file → Enter
 3. Verify the downloaded export against the rendered conversation
+
+### Live ChatGPT DOM notes (observed 2026-08-05, desktop Chrome)
+
+Verified by running the built userscript against a real conversation. Re-check
+before trusting any of it — but do not assume a fixture reflects these:
+
+- Header: `button[data-testid="share-chat-button"]` and
+  `button[data-testid="conversation-options-button"]` inside
+  `div[data-testid="thread-header-right-actions"]`
+- ••• menu: `div[role="menu"][data-radix-menu-content]`, items are
+  `div[role="menuitem"].__menu-item` with an `svg.icon` (no `viewBox`).
+  Its Share row (`data-testid="share-chat-menu-item"`) carries **`sm:hidden`** —
+  `display:none` on desktop, so never require it to be *visible*
+- Every user turn carries `button[data-testid="share-prompt-link-turn-action-button"]`
+  ("Share prompt"), which shares that message, not the conversation
+- Turns are `section[data-testid="conversation-turn-N"]`; N is the ground truth
+  for conversation order and is **not contiguous** in the DOM (virtualized)
+- Messages have `data-message-id`; the scroll container is the first scrollable
+  ancestor and keeps a constant `scrollHeight` while turns are swapped
+- CSP: `script-src` has no `'unsafe-eval'`, `connect-src` blocks localhost, and
+  framing localhost is blocked — a userscript manager is the only sane way to
+  load the exporter; for ad-hoc testing, CDP-evaluated *synchronous* `eval`
+  works but anything after an `await` is subject to page CSP
 
 ### Selector updates
 

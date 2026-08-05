@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - PDF
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.8.1
+// @version      0.8.2
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @match        https://chat.openai.com/*
@@ -28,7 +28,14 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.8.0';
+        const ENGINE_VERSION = '0.8.2';
+
+        // Pixels of slack when deciding the scroll container has reached its end.
+        const BOTTOM_TOLERANCE = 4;
+
+        // Scroll steps that neither advance nor capture anything before the sweep
+        // gives up, so a virtualizer that drags scrollTop backwards gets retries.
+        const MAX_SCROLL_STALLS = 5;
         // Random run token so conversation text can never collide with (or inject
         // through) the internal block placeholders used during serialization.
         const MARKER_PREFIX = `__CHAT_EXPORTER_BLOCK_${Math.random().toString(36).slice(2, 10)}_`;
@@ -950,8 +957,39 @@
                 senderType: sender.sender === 'You' ? 'user' : 'assistant',
                 reliableSender: sender.reliable,
                 content,
-                index
+                index,
+                order: conversationOffset(messageElement, state.container)
             });
+        }
+
+        // Where a message sits in the whole conversation, not in the viewport: the
+        // sweep visits messages in whatever order the virtualizer mounts them, so
+        // capture order is not conversation order.
+        function conversationOffset(element, container) {
+            const rect = element.getBoundingClientRect?.();
+            if (!rect) return 0;
+            const scrolled = container ? container.scrollTop : (getWindow(element.ownerDocument)?.scrollY || 0);
+            return rect.top + scrolled;
+        }
+
+        // A capture that starts at the top can still see turns the virtualizer left
+        // mounted from the previous scroll position, which lands them in the export
+        // ahead of the turns that actually precede them.
+        function sortByConversationOrder(messages, provider) {
+            messages.sort((a, b) => a.order - b.order || a.index - b.index);
+            messages.forEach((message, index) => {
+                message.index = index;
+                delete message.order;
+
+                // Providers without role markers fall back to alternating senders,
+                // which was decided in capture order — redo it in reading order.
+                const previous = messages[index - 1];
+                if (message.reliableSender || !previous) return;
+                const flipped = previous.senderType === 'user';
+                message.sender = flipped ? provider.assistantName : 'You';
+                message.senderType = flipped ? 'assistant' : 'user';
+            });
+            return messages;
         }
 
         function buildConversation(doc, provider, options, messages) {
@@ -971,9 +1009,13 @@
             const doc = resolveDocument(options.document);
             const provider = providerFor(options.provider, doc);
             const format = options.format || 'markdown';
-            const state = { seen: new Set(), messages: [] };
+            const state = { seen: new Set(), messages: [], container: null };
 
             findMessages(doc, provider).forEach(messageElement => captureMessage(state, messageElement, provider, format));
+
+            // A single pass reads the DOM in document order already; drop the
+            // ordering key so the message shape stays the same.
+            state.messages.forEach(message => delete message.order);
 
             return buildConversation(doc, provider, options, state.messages);
         }
@@ -1028,7 +1070,9 @@
             const win = getWindow(doc);
             const wait = ms => new Promise(resolve => (win?.setTimeout || setTimeout)(resolve, ms));
 
-            const state = { seen: new Set(), messages: [] };
+            const container = options.scroll === false ? null : findScrollContainer(doc, provider);
+
+            const state = { seen: new Set(), messages: [], container };
             const seenKeys = new Set();
             const capture = () => {
                 findMessages(doc, provider).forEach(messageElement => {
@@ -1039,41 +1083,58 @@
                 });
             };
 
-            const container = options.scroll === false ? null : findScrollContainer(doc, provider);
-
             if (container) {
                 const originalTop = container.scrollTop;
 
                 // Pin to the top until the container stops growing so providers
-                // that lazily prepend older history finish loading it.
+                // that lazily prepend older history finish loading it. Two stable
+                // rounds, because a virtualizer can pause between batches.
                 let previousHeight = -1;
+                let stableHeights = 0;
                 let guard = 0;
-                while (container.scrollHeight !== previousHeight && guard++ < maxScrollSteps) {
-                    previousHeight = container.scrollHeight;
+                while (stableHeights < 2 && guard++ < maxScrollSteps) {
                     container.scrollTop = 0;
                     await wait(scrollDelay);
+                    stableHeights = container.scrollHeight === previousHeight ? stableHeights + 1 : 0;
+                    previousHeight = container.scrollHeight;
                 }
 
                 capture();
 
                 // Sweep down in overlapping steps, capturing whatever the
-                // virtualizer renders at each stop, until scrolling makes no
-                // further progress (bottom reached).
+                // virtualizer renders at each stop. Progress is judged by messages
+                // captured and by reaching the bottom — never by scrollTop alone,
+                // because swapping rendered turns for shorter placeholders can drag
+                // scrollTop backwards mid-sweep and would end the sweep early,
+                // exporting only the fragment captured so far.
+                let stalls = 0;
                 guard = 0;
                 while (guard++ < maxScrollSteps) {
-                    const before = container.scrollTop;
-                    container.scrollTop = before + Math.max(container.clientHeight * 0.75, 200);
+                    const beforeTop = container.scrollTop;
+                    const beforeCount = state.messages.length;
+                    container.scrollTop = beforeTop + Math.max(container.clientHeight * 0.75, 200);
                     await wait(scrollDelay);
                     capture();
-                    if (container.scrollTop <= before) break;
+
+                    if (container.scrollTop > beforeTop || state.messages.length > beforeCount) {
+                        stalls = 0;
+                        continue;
+                    }
+                    if (container.scrollTop + container.clientHeight >= container.scrollHeight - BOTTOM_TOLERANCE) break;
+                    if (++stalls >= MAX_SCROLL_STALLS) break;
                 }
+
+                // The virtualizer may still have been mounting turns as the last
+                // step landed.
+                await wait(scrollDelay);
+                capture();
 
                 container.scrollTop = originalTop;
             } else {
                 capture();
             }
 
-            return buildConversation(doc, provider, options, state.messages);
+            return buildConversation(doc, provider, options, sortByConversationOrder(state.messages, provider));
         }
 
         function extractConversationTitle(doc, provider) {
@@ -1542,11 +1603,30 @@
             });
         }
 
+        // The cloned row keeps ChatGPT's own <svg> element — and its sizing and
+        // colour classes — while carrying our glyph.
+        function replaceItemIcon(doc, item, markup) {
+            const target = item.querySelector('svg');
+            const icon = renderIcon(doc, markup);
+            if (!target || !icon) return false;
+
+            while (target.firstChild) target.removeChild(target.firstChild);
+            target.setAttribute('viewBox', icon.getAttribute('viewBox') || '0 0 24 24');
+            target.setAttribute('fill', 'none');
+            target.setAttribute('stroke', 'currentColor');
+            target.setAttribute('stroke-width', '2');
+            for (const child of Array.from(icon.childNodes)) {
+                target.appendChild(child);
+            }
+            return true;
+        }
+
         function cloneNativeItem(doc, template, label, format, action) {
             const item = template.cloneNode(true);
             item.setAttribute(NATIVE_ITEM_ATTRIBUTE, format);
             stripIdentity(item);
             replaceItemLabel(doc, item, label);
+            replaceItemIcon(doc, item, format === 'pdf' ? ICONS.pdf : ICONS.markdown);
             item.addEventListener('click', event => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -1575,16 +1655,31 @@
             return testId(item).includes('share') || normalizeText(item) === 'Share';
         }
 
-        // Exports are cloned from the Share entry so they inherit ChatGPT's own
-        // styling. Menus without one are left alone on purpose: every menu that
-        // reaches here (including per-conversation sidebar menus) would export the
-        // conversation that is currently open, so we only extend menus where
-        // ChatGPT itself offers a whole-conversation action. Accounts with no Share
-        // entry at all reach exports through the floating launcher (issue #31).
-        function findMenuTemplate(menu) {
+        // A Share entry marks a menu that acts on a whole conversation, so it is
+        // what qualifies a menu for export items. Visibility is deliberately NOT
+        // required: live ChatGPT ships the entry with `sm:hidden`, hiding it on wide
+        // viewports where the header Share button takes over.
+        function findShareItem(menu) {
             return Array.from(menu.querySelectorAll('button, [role="menuitem"], a, div'))
-                .filter(isVisible)
                 .find(isShareItem) || null;
+        }
+
+        // Clone a row that actually renders — cloning the hidden Share entry would
+        // inherit `sm:hidden` and produce export items nobody can see.
+        function findCloneTemplate(menu, shareItem) {
+            if (isVisible(shareItem)) return shareItem;
+            const items = Array.from(menu.querySelectorAll('[role="menuitem"]')).filter(isVisible);
+            return items[0] || null;
+        }
+
+        // Sidebar rows open their own conversation menu, but an export always reads
+        // the conversation that is currently open — so those menus are left alone
+        // rather than offering to export someone else's chat.
+        function isSidebarMenu(doc, menu) {
+            const labelledBy = menu.getAttribute('aria-labelledby');
+            const trigger = (labelledBy && doc.getElementById(labelledBy))
+                || doc.querySelector('[aria-haspopup="menu"][aria-expanded="true"]');
+            return Boolean(trigger?.closest('nav, aside, [role="navigation"]'));
         }
 
         function injectConversationMenuItems(doc, root, actions) {
@@ -1592,7 +1687,11 @@
             for (const menu of menus) {
                 if (menu.querySelector(`[${NATIVE_ITEM_ATTRIBUTE}]`)) continue;
 
-                const template = findMenuTemplate(menu);
+                const shareItem = findShareItem(menu);
+                if (!shareItem) continue;
+                if (isSidebarMenu(doc, menu)) continue;
+
+                const template = findCloneTemplate(menu, shareItem);
                 if (!template) continue;
 
                 const markdownItem = cloneNativeItem(
@@ -1609,10 +1708,18 @@
                     'pdf',
                     actions.exportPdf
                 );
-                template.insertAdjacentElement('afterend', pdfItem);
-                template.insertAdjacentElement('afterend', markdownItem);
+                // Anchored to Share so exports keep their place in the list even
+                // when Share itself is hidden.
+                shareItem.insertAdjacentElement('afterend', pdfItem);
+                shareItem.insertAdjacentElement('afterend', markdownItem);
             }
         }
+
+        // Message turns carry their own share controls — live ChatGPT renders
+        // `share-prompt-link-turn-action-button` inside
+        // `section[data-testid="conversation-turn-N"]`. Those share the current
+        // message, not the conversation, and must keep their native behaviour.
+        const TURN_CONTAINER = '[data-message-author-role], [data-testid^="conversation-turn"], [data-testid^="conversation_turn"], article';
 
         // The data-testid hook works on every ChatGPT locale; the English text
         // match is a fallback for DOM revisions that drop the testid.
@@ -1621,6 +1728,7 @@
             if (!button) return null;
             if (button.closest('[role="menu"], [data-radix-menu-content]')) return null;
             if (button.closest(`#${MENU_ID}, #${LAUNCHER_ID}`)) return null;
+            if (button.closest(TURN_CONTAINER)) return null;
 
             if (testId(button).includes('share')) return button;
             return normalizeText(button) === 'Share' ? button : null;
@@ -1846,6 +1954,8 @@
                 injectConversationMenuItems,
                 isHeaderShareButton,
                 findHeaderShareButton,
+                findShareItem,
+                findCloneTemplate,
                 syncLauncher
             }
         };

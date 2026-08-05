@@ -78,7 +78,20 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.8.1
+## 🔧 What's New in v0.8.2
+
+**Fixes found by testing against a live ChatGPT conversation** — each one ships with a regression test that fails on v0.8.1:
+
+- 🔢 **Long exports were out of order** (critical): the auto-scroll sweep appended messages as it captured them, so a 12-turn conversation exported from the bottom came out as turns `1, 2, 8, 9, 10, 11, 12, 3, 4, 5, 6, 7` — ChatGPT hadn't unmounted the bottom turns yet when the sweep jumped to the top. Messages now carry their offset in the conversation and are sorted into reading order.
+- ✂️ **Sweeps could stop after the first screenful**: a virtualizer swapping turns for placeholders can drag `scrollTop` backwards, which the old loop read as "reached the bottom" and exported a fragment. Progress is now judged by messages captured and by actually reaching the end.
+- 🧩 **Export entries never appeared in the ••• menu on desktop**: ChatGPT hides that menu's Share row (`sm:hidden`) when the header Share button is present, and the entries were cloned from it. They now clone a row that actually renders.
+- 🔗 **"Share prompt" on a message stays native**: per-message share buttons were being intercepted by the export menu.
+- 📋 **Sidebar conversation menus are left alone** — they belong to other chats, but an export always reads the open one.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.8.1
 
 **The Export UI No Longer Depends on ChatGPT's Share Button** ([#31](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/31), thanks [@n8henrie](https://github.com/n8henrie)):
 
@@ -87,9 +100,6 @@ No install, no server, no account: everything runs locally in your browser.
 - 🛡️ **Strict-CSP safe**: the UI builds its icons and menu items through DOM APIs instead of `innerHTML`, so pages that enforce Trusted Types can't block it. No shipped code touches an HTML injection sink — covered by a regression test.
 - 🌍 **Localized menus labelled correctly**: export entries cloned into a non-English **•••** menu now get their own label instead of repeating ChatGPT's.
 - 🧹 Cloned menu entries no longer carry ChatGPT's own `data-testid`s, so its internal queries never pick up our copies.
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.8.0
 
@@ -188,7 +198,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 ## ❓ Troubleshooting
 
 - **"No messages found"** — the site's DOM may have changed. Update to the latest exporter version; if it persists, [open an issue](https://github.com/rashidazarang/chatgpt-chat-exporter/issues) with your browser and a description of the page.
-- **Long conversation exports only a fragment** — update to v0.8.0+, which auto-scrolls through lazily-loaded conversations. Leave the tab in the foreground while the sweep runs; the export downloads when it finishes.
+- **Long conversation exports only a fragment, or turns come out in the wrong order** — update to v0.8.2+. v0.8.0 added the auto-scroll sweep for lazily-loaded conversations; v0.8.2 fixed sweeps that ended early and exports that were ordered by capture rather than by conversation. Leave the tab in the foreground while the sweep runs; the export downloads when it finishes.
 - **Export actions don't appear** — confirm the userscript is enabled for `chatgpt.com`, reload the page, and open a conversation's **•••** or header **Share** menu. On accounts with no Share control (v0.8.1+), look for the floating **Export** button in the bottom-right corner instead; you can also force it on from the console with `ChatExporter.showLauncher()`, or export directly with `ChatExporter.markdown()` / `ChatExporter.pdf()`.
 - **Downloads blocked in the console** — some browsers require you to allow downloads/popups triggered from DevTools; the userscript method avoids this.
 
@@ -196,7 +206,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.8.1** (Current) - Floating **Export** fallback for accounts with no Share control, console API, and Trusted-Types-safe UI (#31)
+- **v0.8.2** (Current) - Conversation order preserved in long exports, sweeps no longer stop early, ••• menu entries visible on desktop, per-message "Share prompt" left native
+- **v0.8.1** - Floating **Export** fallback for accounts with no Share control, console API, and Trusted-Types-safe UI (#31)
 - **v0.8.0** - Full export of virtualized long conversations via auto-scroll (#28, #29), References list for web-search citations (#27), native menu export integration with locale-safe share detection (#26)
 - **v0.7.2** - Markdown fidelity: preserved prompt whitespace, no doubled backslashes, correct code-span/list/entity handling (#25)
 - **v0.7.1** - Source URL privacy by default and safe Markdown code fences

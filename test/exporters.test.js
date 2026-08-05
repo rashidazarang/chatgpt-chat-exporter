@@ -233,6 +233,7 @@ function installUserscriptUi(options = {}) {
     });
 
     const calls = [];
+    options.beforeInstall?.(window.document);
     userscriptUi.install({
         document: window.document,
         engine: {},
@@ -333,6 +334,123 @@ test('userscript finds the header share button by data-testid regardless of loca
     assert.ok(window.document.querySelector('#chat-exporter-share-menu'),
         'share menu should open from the localized button via its data-testid');
     window.document.body.click();
+});
+
+// Live ChatGPT (observed 2026-08-05): the header carries
+// `share-chat-button` next to `conversation-options-button`, while every user
+// turn carries its own `share-prompt-link-turn-action-button`.
+const LIVE_CHATGPT_FIXTURE = `<!DOCTYPE html>
+<html>
+<body>
+    <header>
+        <div data-testid="thread-header-right-actions">
+            <button data-testid="share-chat-button"><span>Share</span></button>
+            <button data-testid="conversation-options-button"><span>More</span></button>
+        </div>
+    </header>
+    <main>
+        <section data-testid="conversation-turn-1">
+            <div data-message-author-role="user"><div class="markdown"><p>Hello</p></div></div>
+            <button data-testid="share-prompt-link-turn-action-button" aria-label="Share prompt"></button>
+        </section>
+        <section data-testid="conversation-turn-2">
+            <div data-message-author-role="assistant"><div class="markdown"><p>Hi there</p></div></div>
+        </section>
+    </main>
+</body>
+</html>`;
+
+// Live ChatGPT hides the conversation menu's Share row on wide viewports
+// (class "sm:hidden") because the header Share button takes over there.
+const HIDDEN_SHARE_MENU_FIXTURE = `<!DOCTYPE html>
+<html>
+<body>
+    <header>
+        <button data-testid="share-chat-button"><span>Share</span></button>
+        <div id="menu-trigger" aria-haspopup="menu" aria-expanded="true">More</div>
+    </header>
+    <div id="conversation-menu" role="menu" aria-labelledby="menu-trigger" data-radix-menu-content>
+        <div role="menuitem" class="__menu-item sm:hidden" data-testid="share-chat-menu-item"><svg class="icon"></svg><span>Share</span></div>
+        <div role="menuitem" class="__menu-item"><svg class="icon"></svg><span>View files in chat</span></div>
+        <div role="menuitem" class="__menu-item"><svg class="icon"></svg><span>Archive</span></div>
+        <div role="menuitem" class="__menu-item" data-testid="delete-chat-menu-item"><svg class="icon"></svg><span>Delete</span></div>
+    </div>
+    <div data-message-author-role="user"><div class="markdown"><p>Hello</p></div></div>
+</body>
+</html>`;
+
+function hideElement(element) {
+    element.getClientRects = () => [];
+}
+
+test('export items reach a conversation menu whose Share row is hidden on desktop', () => {
+    const { window, calls } = installUserscriptUi({
+        markup: HIDDEN_SHARE_MENU_FIXTURE,
+        beforeInstall: doc => hideElement(doc.querySelector('[data-testid="share-chat-menu-item"]'))
+    });
+
+    const menu = window.document.querySelector('#conversation-menu');
+    const labels = Array.from(menu.querySelectorAll('[role="menuitem"]')).map(item => item.textContent.trim());
+    assert.deepEqual(labels, ['Share', 'Export to Markdown', 'Export to PDF', 'View files in chat', 'Archive', 'Delete']);
+
+    const clones = Array.from(menu.querySelectorAll('[data-chat-exporter-item]'));
+    assert.ok(clones.every(clone => !clone.className.includes('sm:hidden')),
+        'clones must come from a row that renders, not from the hidden Share entry');
+    assert.ok(clones.every(clone => clone.querySelector('svg')?.getAttribute('viewBox') === '0 0 24 24'),
+        'cloned rows carry our glyph inside ChatGPT\'s own svg element');
+
+    clones[0].click();
+    clones[1].click();
+    assert.deepEqual(calls, ['markdown', 'pdf']);
+});
+
+test('sidebar conversation menus are left alone', () => {
+    const { window } = installUserscriptUi({
+        markup: `<!DOCTYPE html>
+<html>
+<body>
+    <nav>
+        <a href="/c/other-conversation">Another chat</a>
+        <div id="sidebar-trigger" aria-haspopup="menu" aria-expanded="true">More</div>
+    </nav>
+    <div id="sidebar-menu" role="menu" aria-labelledby="sidebar-trigger">
+        <div role="menuitem" data-testid="share-chat-menu-item"><span>Share</span></div>
+        <div role="menuitem" data-testid="delete-chat-menu-item"><span>Delete</span></div>
+    </div>
+    <div data-message-author-role="user"><div class="markdown"><p>Hello</p></div></div>
+</body>
+</html>`
+    });
+
+    assert.equal(window.document.querySelector('[data-chat-exporter-item]'), null,
+        'a sidebar row\'s menu would export the open conversation, not its own');
+});
+
+test('per-turn share buttons keep their native behaviour', () => {
+    const { window } = installUserscriptUi({ markup: LIVE_CHATGPT_FIXTURE });
+    const turnShare = window.document.querySelector('[data-testid="share-prompt-link-turn-action-button"]');
+    let nativeClicks = 0;
+    turnShare.addEventListener('click', () => {
+        nativeClicks += 1;
+    });
+
+    turnShare.click();
+    assert.equal(nativeClicks, 1, '"Share prompt" shares that message, not the conversation — never intercept it');
+    assert.equal(window.document.querySelector('#chat-exporter-share-menu'), null);
+
+    window.document.querySelector('[data-testid="share-chat-button"]').click();
+    assert.ok(window.document.querySelector('#chat-exporter-share-menu'),
+        'the header share button still opens the export menu');
+});
+
+test('per-turn share buttons do not count as a native share control', async () => {
+    const { window } = installUserscriptUi({ markup: LIVE_CHATGPT_FIXTURE });
+    window.document.querySelector('[data-testid="share-chat-button"]').remove();
+    window.document.body.appendChild(window.document.createElement('span'));
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    assert.ok(window.document.querySelector('#chat-exporter-launcher'),
+        'a turn-level share button must not suppress the launcher');
 });
 
 test('userscript mounts a floating launcher when the account exposes no share control (issue #31)', () => {
@@ -808,7 +926,7 @@ test('citation references render as an ordered list in HTML exports', () => {
     assert.match(content, /<li><a href="https:\/\/research\.example\.org\/paper">Deep Research Paper<\/a><\/li>/);
 });
 
-function installVirtualizedConversation(window, totalMessages) {
+function installVirtualizedConversation(window, totalMessages, options = {}) {
     const { document } = window;
     const scroller = document.createElement('div');
     scroller.id = 'scroller';
@@ -819,16 +937,24 @@ function installVirtualizedConversation(window, totalMessages) {
     const CLIENT_HEIGHT = 300;
     let scrollTop = 0;
 
+    let renders = 0;
     const render = () => {
+        renders += 1;
         scroller.innerHTML = '';
         for (let i = 0; i < totalMessages; i++) {
             const top = i * MESSAGE_HEIGHT;
-            const visible = top < scrollTop + CLIENT_HEIGHT && top + MESSAGE_HEIGHT > scrollTop;
-            if (!visible) continue;
+            const inWindow = top < scrollTop + CLIENT_HEIGHT && top + MESSAGE_HEIGHT > scrollTop;
+            // ChatGPT leaves the turns from the previous scroll position mounted
+            // for a moment after jumping to the top.
+            const stale = options.staleBottomRenders
+                && renders <= options.staleBottomRenders
+                && i >= totalMessages - 3;
+            if (!inWindow && !stale) continue;
 
             const message = document.createElement('div');
             message.setAttribute('data-message-author-role', i % 2 === 0 ? 'user' : 'assistant');
             message.setAttribute('data-message-id', `msg-${i}`);
+            message.getBoundingClientRect = () => ({ top: top - scrollTop, bottom: top - scrollTop + MESSAGE_HEIGHT, height: MESSAGE_HEIGHT, left: 0, right: 100, width: 100 });
             const paragraph = document.createElement('p');
             paragraph.textContent = `Message number ${i} with enough body text to pass the export filters.`;
             message.appendChild(paragraph);
@@ -838,10 +964,17 @@ function installVirtualizedConversation(window, totalMessages) {
 
     Object.defineProperty(scroller, 'scrollHeight', { get: () => totalMessages * MESSAGE_HEIGHT });
     Object.defineProperty(scroller, 'clientHeight', { get: () => CLIENT_HEIGHT });
+    // Real virtualizers swap rendered turns for shorter placeholders, which can
+    // drag scrollTop backwards after a programmatic scroll (scroll anchoring).
+    let writes = 0;
     Object.defineProperty(scroller, 'scrollTop', {
         get: () => scrollTop,
         set(value) {
-            scrollTop = Math.max(0, Math.min(value, totalMessages * MESSAGE_HEIGHT - CLIENT_HEIGHT));
+            const clamped = Math.max(0, Math.min(value, totalMessages * MESSAGE_HEIGHT - CLIENT_HEIGHT));
+            writes += 1;
+            scrollTop = options.anchorJumpEvery && writes % options.anchorJumpEvery === 0
+                ? Math.max(0, clamped - (options.anchorJumpBy || MESSAGE_HEIGHT * 2))
+                : clamped;
             render();
         }
     });
@@ -849,6 +982,63 @@ function installVirtualizedConversation(window, totalMessages) {
     render();
     return scroller;
 }
+
+test('full extraction keeps conversation order when the tail is still mounted', async () => {
+    // Observed on live ChatGPT while exporting from the bottom of a 12-turn
+    // chat: the first capture (taken at the top) also saw the last turns, which
+    // the virtualizer had not unmounted yet, so the export came out as
+    // 1, 2, 8, 9, 10, 11, 12, 3, 4, 5, 6, 7.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Tail Fixture</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/tail',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 20;
+    installVirtualizedConversation(dom.window, totalMessages, { staleBottomRenders: 4 });
+
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(full.messages.length, totalMessages);
+    const order = full.messages.map(message => Number(message.content.match(/Message number (\d+)/)[1]));
+    assert.deepEqual(order, Array.from({ length: totalMessages }, (unused, index) => index),
+        'messages must be exported in conversation order, not in capture order');
+    full.messages.forEach((message, index) => {
+        assert.equal(message.index, index, 'indices are renumbered after sorting');
+        assert.equal(message.sender, index % 2 === 0 ? 'You' : 'ChatGPT');
+        assert.equal(Object.prototype.hasOwnProperty.call(message, 'order'), false,
+            'the internal ordering key never reaches the export');
+    });
+});
+
+test('full extraction survives a virtualizer that drags scrollTop backwards', async () => {
+    // Observed on live ChatGPT: a sweep ended after the first screenful and
+    // exported 6 of the conversation's 12 turns, because the step that swapped
+    // rendered turns for placeholders left scrollTop lower than where it
+    // started, which the old sweep read as "bottom reached".
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Anchored Fixture</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/anchored',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 30;
+    installVirtualizedConversation(dom.window, totalMessages, { anchorJumpEvery: 3, anchorJumpBy: 260 });
+
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(full.messages.length, totalMessages,
+        'every turn is captured even when the container scrolls back on its own');
+    full.messages.forEach((message, index) => {
+        assert.match(message.content, new RegExp(`Message number ${index}\\b`), `message ${index} is in order`);
+    });
+});
 
 test('full extraction sweeps virtualized conversations end to end (issues #28, #29)', async () => {
     const dom = new JSDOM('<!DOCTYPE html><html><head><title>Virtualized Fixture</title></head><body></body></html>', {
