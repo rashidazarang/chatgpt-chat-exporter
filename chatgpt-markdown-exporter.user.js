@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - Markdown
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.8.3
+// @version      0.9.0
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @match        https://chat.openai.com/*
@@ -28,7 +28,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.8.3';
+        const ENGINE_VERSION = '0.9.0';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -36,6 +36,10 @@
         // Scroll steps that neither advance nor capture anything before the sweep
         // gives up, so a virtualizer that drags scrollTop backwards gets retries.
         const MAX_SCROLL_STALLS = 5;
+
+        // Wall-clock budget for a full sweep. Step counts alone can't bound it —
+        // a provider that keeps changing height would hold the page for minutes.
+        const DEFAULT_MAX_DURATION = 120000;
         // Random run token so conversation text can never collide with (or inject
         // through) the internal block placeholders used during serialization.
         const MARKER_PREFIX = `__CHAT_EXPORTER_BLOCK_${Math.random().toString(36).slice(2, 10)}_`;
@@ -102,6 +106,11 @@
 
         function getWindow(doc) {
             return doc.defaultView || (typeof window !== 'undefined' ? window : null);
+        }
+
+        function now(win) {
+            const clock = win?.performance || (typeof performance !== 'undefined' ? performance : null);
+            return typeof clock?.now === 'function' ? clock.now() : Date.now();
         }
 
         function formatDate(date = new Date()) {
@@ -318,7 +327,10 @@
         }
 
         function isUnsafeHref(href) {
-            const lower = String(href || '').trim().toLowerCase();
+            // Browsers ignore whitespace and control characters inside a scheme, so
+            // "java\tscript:…" navigates just fine — strip them before testing or
+            // the check is trivially bypassed.
+            const lower = String(href || '').replace(/[\s\u0000-\u001f]/g, '').toLowerCase();
             return !lower ||
                 lower.startsWith('javascript:') ||
                 lower.startsWith('data:') ||
@@ -952,8 +964,18 @@
             return { sender: index % 2 === 0 ? 'You' : provider.assistantName, reliable: false };
         }
 
+        // Dedupe key for a serialized message. This has to cover the whole message:
+        // a prefix would collapse two different turns that open the same way — a
+        // conversation full of redrafts of one letter does exactly that, and the
+        // loser silently vanishes from the export.
         function contentHash(content) {
-            return normalizeWhitespace(String(content || '').replace(/<[^>]+>/g, ' ')).slice(0, 160);
+            const text = normalizeWhitespace(String(content || '').replace(/<[^>]+>/g, ' '));
+            let hash = 0x811c9dc5;
+            for (let index = 0; index < text.length; index++) {
+                hash ^= text.charCodeAt(index);
+                hash = Math.imul(hash, 0x01000193) >>> 0;
+            }
+            return `${text.length}:${hash.toString(36)}`;
         }
 
         function captureMessage(state, messageElement, provider, format) {
@@ -1115,75 +1137,115 @@
                 });
             };
 
+            // An export must not be able to hang the page: every phase runs against
+            // one wall-clock budget, however slow the provider is.
+            const deadline = now(win) + (options.maxDuration ?? DEFAULT_MAX_DURATION);
+            const outOfTime = () => now(win) >= deadline;
+
+            // A hidden tab gets its timers throttled and its off-screen rendering
+            // suspended, so the sweep crawls and the provider may never mount the
+            // turns being scrolled to. Waiting beats exporting a fragment.
+            const awaitVisible = async () => {
+                if (!doc.hidden) return true;
+                console.warn('[Chat Exporter] This tab is in the background — the export is waiting for you to bring it to the front. A hidden tab throttles the scroll sweep.');
+                while (doc.hidden && !outOfTime()) {
+                    await wait(200);
+                }
+                return !doc.hidden;
+            };
+
             if (container) {
                 const originalTop = container.scrollTop;
+                let scroller = container;
 
-                // A hidden tab gets its timers throttled and its off-screen
-                // rendering suspended, so the sweep crawls and the provider may
-                // never mount the turns it is scrolling to.
-                if (doc.hidden) {
-                    console.warn('[Chat Exporter] This tab is in the background. Bring it to the front — a hidden tab throttles the scroll sweep and the export may come out incomplete.');
-                }
+                try {
+                    await awaitVisible();
 
-                // Pin to the top until the container stops growing so providers
-                // that lazily prepend older history finish loading it. Two stable
-                // rounds, because a virtualizer can pause between batches.
-                let previousHeight = -1;
-                let stableHeights = 0;
-                let guard = 0;
-                while (stableHeights < 2 && guard++ < maxScrollSteps) {
-                    container.scrollTop = 0;
-                    await wait(scrollDelay);
-                    stableHeights = container.scrollHeight === previousHeight ? stableHeights + 1 : 0;
-                    previousHeight = container.scrollHeight;
-                }
+                    // Pin to the top until the container stops growing so providers
+                    // that lazily prepend older history finish loading it. Two stable
+                    // rounds, because a virtualizer can pause between batches.
+                    let previousHeight = -1;
+                    let stableHeights = 0;
+                    let guard = 0;
+                    while (stableHeights < 2 && guard++ < maxScrollSteps && !outOfTime()) {
+                        scroller.scrollTop = 0;
+                        await wait(scrollDelay);
+                        stableHeights = scroller.scrollHeight === previousHeight ? stableHeights + 1 : 0;
+                        previousHeight = scroller.scrollHeight;
+                    }
 
-                capture();
-
-                // Sweep down in overlapping steps, capturing whatever the
-                // virtualizer renders at each stop. Progress is judged by messages
-                // captured and by reaching the bottom — never by scrollTop alone,
-                // because swapping rendered turns for shorter placeholders can drag
-                // scrollTop backwards mid-sweep and would end the sweep early,
-                // exporting only the fragment captured so far.
-                let stalls = 0;
-                guard = 0;
-                while (guard++ < maxScrollSteps) {
-                    const beforeTop = container.scrollTop;
-                    const beforeCount = state.messages.length;
-                    container.scrollTop = beforeTop + Math.max(container.clientHeight * 0.75, 200);
-                    await wait(scrollDelay);
                     capture();
 
-                    // Turns mount before their text renders. Give the ones that were
-                    // not ready a moment and look again here, while they are still on
-                    // screen — once the sweep moves on they are gone, and providers
-                    // that snap back to the newest message make a return trip
-                    // impossible.
-                    if (pendingKeys.size > 0) {
+                    // Sweep down in overlapping steps, capturing whatever the
+                    // virtualizer renders at each stop. Progress is judged by messages
+                    // captured and by reaching the bottom — never by scrollTop alone,
+                    // because swapping rendered turns for shorter placeholders can drag
+                    // scrollTop backwards mid-sweep and would end the sweep early,
+                    // exporting only the fragment captured so far.
+                    let stalls = 0;
+                    guard = 0;
+                    while (guard++ < maxScrollSteps && !outOfTime()) {
+                        await awaitVisible();
+
+                        // Client-side navigation can swap the whole thread out from
+                        // under us; writes to a detached node go nowhere.
+                        if (scroller.isConnected === false) {
+                            const replacement = findScrollContainer(doc, provider);
+                            if (!replacement) break;
+                            scroller = replacement;
+                            state.container = replacement;
+                        }
+
+                        const beforeTop = scroller.scrollTop;
+                        const beforeCount = state.messages.length;
+                        scroller.scrollTop = beforeTop + Math.max(scroller.clientHeight * 0.75, 200);
                         await wait(scrollDelay);
                         capture();
+
+                        // Turns mount before their text renders. Give the ones that were
+                        // not ready a moment and look again here, while they are still on
+                        // screen — once the sweep moves on they are gone, and providers
+                        // that snap back to the newest message make a return trip
+                        // impossible.
+                        if (pendingKeys.size > 0 && !outOfTime()) {
+                            await wait(scrollDelay);
+                            capture();
+                        }
+
+                        if (scroller.scrollTop > beforeTop || state.messages.length > beforeCount) {
+                            stalls = 0;
+                            continue;
+                        }
+                        if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - BOTTOM_TOLERANCE) break;
+                        if (++stalls >= MAX_SCROLL_STALLS) break;
                     }
 
-                    if (container.scrollTop > beforeTop || state.messages.length > beforeCount) {
-                        stalls = 0;
-                        continue;
+                    // The virtualizer may still have been mounting turns as the last
+                    // step landed.
+                    if (!outOfTime()) await wait(scrollDelay);
+                    capture();
+                } finally {
+                    // Whatever happened, the reader gets their scroll position back.
+                    try {
+                        scroller.scrollTop = originalTop;
+                    } catch (error) {
+                        // The container went away; nothing to restore.
                     }
-                    if (container.scrollTop + container.clientHeight >= container.scrollHeight - BOTTOM_TOLERANCE) break;
-                    if (++stalls >= MAX_SCROLL_STALLS) break;
                 }
-
-                // The virtualizer may still have been mounting turns as the last
-                // step landed.
-                await wait(scrollDelay);
-                capture();
-
-                container.scrollTop = originalTop;
             } else {
                 capture();
             }
 
-            return buildConversation(doc, provider, options, sortByConversationOrder(state.messages, provider));
+            const conversation = buildConversation(doc, provider, options, sortByConversationOrder(state.messages, provider));
+
+            // Turns that were on screen but never became readable. Saying so beats
+            // handing over a short file that looks complete.
+            conversation.missedMessages = pendingKeys.size;
+            conversation.complete = pendingKeys.size === 0 && !outOfTime();
+            if (!conversation.complete) {
+                console.warn(`[Chat Exporter] Export may be incomplete: ${conversation.messages.length} messages captured, ${pendingKeys.size} turn(s) never finished rendering${outOfTime() ? ', and the sweep ran out of time' : ''}. Keep the tab in the foreground and try again.`);
+            }
+            return conversation;
         }
 
         function extractConversationTitle(doc, provider) {
@@ -1424,6 +1486,16 @@
             if (options.download !== false) {
                 downloadFile(doc, content, filename, mimeFor(format));
                 console.log(`[Chat Exporter] Exported ${conversation.messages.length} messages to ${filename}`);
+            }
+
+            // A short file that looks whole is worse than a warning: say so, once,
+            // where the reader will see it.
+            if (conversation.complete === false && options.notify !== false) {
+                const win = getWindow(doc);
+                const message = `Chat Exporter: this export may be incomplete — ${conversation.messages.length} messages captured` +
+                    (conversation.missedMessages ? `, ${conversation.missedMessages} turn(s) never finished rendering` : '') +
+                    '.\n\nKeep the ChatGPT tab in the foreground while exporting, then try again.';
+                if (typeof win?.alert === 'function') win.alert(message);
             }
 
             return { conversation, content, filename };
@@ -1872,9 +1944,24 @@
                 provider: 'chatgpt',
                 format
             });
-            const exportSafely = format => Promise.resolve()
-                .then(() => runExport(format))
-                .catch(error => console.error('[Chat Exporter] Export failed.', error));
+
+            // A full export scrolls the whole conversation, which takes seconds.
+            // Say so on the launcher, and don't let a second click start a second
+            // sweep fighting the first one for the scroll position.
+            let exportInFlight = false;
+            const setBusy = busy => {
+                exportInFlight = busy;
+                const label = doc.getElementById(LAUNCHER_ID)?.querySelector('span');
+                if (label) label.textContent = busy ? 'Exporting…' : 'Export';
+            };
+            const exportSafely = format => {
+                if (exportInFlight) return Promise.resolve();
+                setBusy(true);
+                return Promise.resolve()
+                    .then(() => runExport(format))
+                    .catch(error => console.error('[Chat Exporter] Export failed.', error))
+                    .then(() => setBusy(false), () => setBusy(false));
+            };
             const actions = {
                 copyLink: options.copyLink || (() => doc.defaultView.navigator.clipboard.writeText(doc.defaultView.location.href)),
                 exportMarkdown: options.exportMarkdown || (() => exportSafely('markdown')),

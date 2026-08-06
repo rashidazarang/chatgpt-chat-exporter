@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.8.3-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -78,15 +78,26 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.8.3
+## 🔧 What's New in v0.9.0
+
+**An audit pass over the whole engine** (see [release notes](temporal/release-notes-v0.9.0.md)). Two of these were silent data loss:
+
+- 🧬 **Messages sharing a long opening are no longer collapsed** (critical): deduplication keyed on the first 160 characters, so a conversation of redrafts — every answer opening with the same letterhead or preamble — lost all but the first, without a word. Messages are now keyed by a hash of their whole text.
+- 📣 **Truncated exports say so**: a sweep that couldn't read every turn used to save a short file that looked complete. The export now reports `complete` / `missedMessages` and puts a dialog in front of you.
+- ⏱️ **An export can't hang the page**: the sweep runs against a wall-clock budget (`maxDuration`, default 120s) instead of an unbounded step count.
+- 🙈 **A backgrounded tab is waited for**, not fought — the sweep pauses while the tab is hidden and resumes when it returns (v0.8.3 only warned).
+- ↩️ **Your scroll position always comes back**, even if the sweep throws midway; a container that disappears mid-sweep is re-resolved.
+- ⏳ The launcher shows **Exporting…** while a sweep runs, and a second click won't start a competing one.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.8.3
 
 **Follow-up fixes from live testing** (see [release notes](temporal/release-notes-v0.8.3.md)):
 
 - ⏳ **Turns caught mid-render are no longer dropped**: ChatGPT mounts a turn before its text renders, and the sweep was retiring those turns before it managed to read them. It now retries them in place, and only marks a turn done once it has actually been captured.
 - 🙈 **Hidden-tab warning**: Chrome throttles timers and suspends rendering in a background tab, which truncates exports. Starting an export on a hidden tab now warns you to bring it to the front.
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.8.2
 
@@ -213,7 +224,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.8.3** (Current) - Turns caught mid-render are retried instead of dropped; hidden-tab warning
+- **v0.9.0** (Current) - Whole-text dedupe (redrafts no longer collapse), incomplete-export reporting, sweep deadline, hidden-tab wait, scroll restored on failure
+- **v0.8.3** - Turns caught mid-render are retried instead of dropped; hidden-tab warning
 - **v0.8.2** - Conversation order preserved in long exports, sweeps no longer stop early, ••• menu entries visible on desktop, per-message "Share prompt" left native
 - **v0.8.1** - Floating **Export** fallback for accounts with no Share control, console API, and Trusted-Types-safe UI (#31)
 - **v0.8.0** - Full export of virtualized long conversations via auto-scroll (#28, #29), References list for web-search citations (#27), native menu export integration with locale-safe share detection (#26)

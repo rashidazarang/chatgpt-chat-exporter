@@ -234,14 +234,19 @@ function installUserscriptUi(options = {}) {
 
     const calls = [];
     options.beforeInstall?.(window.document);
-    userscriptUi.install({
-        document: window.document,
-        engine: {},
-        launcherDelay: 0,
-        syncInterval: 0,
+    // With a real engine the install uses its own export actions, which is what
+    // the busy-state behaviour is about; otherwise record the calls.
+    const stubActions = options.engine ? {} : {
         copyLink: async () => calls.push('copy'),
         exportMarkdown: () => calls.push('markdown'),
         exportPdf: () => calls.push('pdf')
+    };
+    userscriptUi.install({
+        document: window.document,
+        engine: options.engine || {},
+        launcherDelay: 0,
+        syncInterval: 0,
+        ...stubActions
     });
     window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
     return { dom, window, calls };
@@ -530,6 +535,36 @@ test('cloned conversation-menu items are relabelled and drop ChatGPT test ids', 
     assert.deepEqual(clones.map(item => item.textContent), ['Export to Markdown', 'Export to PDF']);
     assert.equal(window.document.querySelectorAll('[data-testid="share-chat-menu-item"]').length, 1);
     assert.equal(window.document.querySelectorAll('[data-testid="share-label"]').length, 1);
+});
+
+test('a running export says so and refuses to start a second sweep', async () => {
+    let started = 0;
+    let release;
+    const engineStub = {
+        exportConversationFull: () => {
+            started += 1;
+            return new Promise(resolve => { release = resolve; });
+        }
+    };
+    const { window } = installUserscriptUi({ markup: NO_SHARE_UI_FIXTURE, engine: engineStub });
+
+    const launcher = window.document.querySelector('#chat-exporter-launcher');
+    const clickExport = async () => {
+        launcher.click();
+        window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(2)').click();
+        await new Promise(resolve => window.setTimeout(resolve, 0));
+    };
+
+    await clickExport();
+    assert.equal(started, 1);
+    assert.equal(launcher.querySelector('span').textContent, 'Exporting…', 'the launcher shows the sweep is running');
+
+    await clickExport();
+    assert.equal(started, 1, 'a second click does not start a competing sweep');
+
+    release({});
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+    assert.equal(launcher.querySelector('span').textContent, 'Export', 'the label goes back when the export finishes');
 });
 
 test('userscript exposes a console fallback for exporting', () => {
@@ -992,8 +1027,8 @@ function installVirtualizedConversation(window, totalMessages, options = {}) {
         }
     };
 
-    Object.defineProperty(scroller, 'scrollHeight', { get: () => totalMessages * MESSAGE_HEIGHT });
-    Object.defineProperty(scroller, 'clientHeight', { get: () => CLIENT_HEIGHT });
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => totalMessages * MESSAGE_HEIGHT, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => CLIENT_HEIGHT, configurable: true });
     // Real virtualizers swap rendered turns for shorter placeholders, which can
     // drag scrollTop backwards after a programmatic scroll (scroll anchoring).
     let writes = 0;
@@ -1012,6 +1047,58 @@ function installVirtualizedConversation(window, totalMessages, options = {}) {
     render();
     return scroller;
 }
+
+test('messages sharing a long opening are both kept', () => {
+    // Dedupe used to key on the first 160 characters, so a conversation of
+    // redrafts — every one opening with the same letter boilerplate — lost all
+    // but the first, silently.
+    const opening = 'Asunto: Solicitud de revision de calificacion. Estimados senores del comite academico, me dirijo a ustedes con el fin de solicitar formalmente la revision de la evaluacion correspondiente al periodo actual, conforme al reglamento vigente.';
+    assert.ok(opening.length > 160);
+
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head><title>Redrafts</title></head><body><main>
+    <div data-message-author-role="user"><p>Draft the letter for me please</p></div>
+    <div data-message-author-role="assistant"><p>${opening} Version one, please review the first paragraph.</p></div>
+    <div data-message-author-role="user"><p>Rewrite the closing paragraph</p></div>
+    <div data-message-author-role="assistant"><p>${opening} Version two, with the closing paragraph rewritten.</p></div>
+</main></body></html>`, { url: 'https://chatgpt.com/c/redrafts' });
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(conversation.messages.length, 4, 'two answers with the same opening are different messages');
+    assert.match(conversation.messages[1].content, /Version one/);
+    assert.match(conversation.messages[3].content, /Version two/);
+});
+
+test('links whose scheme hides behind control characters are dropped', () => {
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head><title>Scheme</title></head><body><main>
+    <div data-message-author-role="user"><p>Check these links please</p></div>
+    <div data-message-author-role="assistant"><p>
+        <a href="java&#9;script:alert(1)">tabbed</a>
+        <a href="java&#10;script:alert(2)">newlined</a>
+        <a href=" JavaScript:alert(3)">spaced</a>
+        <a href="https://example.com/safe">safe</a>
+    </p></div>
+</main></body></html>`, { url: 'https://chatgpt.com/c/scheme' });
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+    const answer = conversation.messages[1].content;
+
+    assert.doesNotMatch(answer, /script:/i, 'no scripting scheme survives as a link target');
+    assert.match(answer, /\[safe\]\(https:\/\/example\.com\/safe\)/);
+    ['tabbed', 'newlined', 'spaced'].forEach(label => {
+        assert.match(answer, new RegExp(label), `${label} keeps its text`);
+    });
+});
 
 test('full extraction retries turns that mount before their text renders', async () => {
     // Observed on live ChatGPT: an export contained turns 1, 6, 7, 8, 9, 10, 11,
@@ -1124,6 +1211,119 @@ test('full extraction sweeps virtualized conversations end to end (issues #28, #
         assert.equal(message.senderType, index % 2 === 0 ? 'user' : 'assistant');
         assert.equal(message.reliableSender, true);
     });
+});
+
+test('a sweep cannot run forever, and says so when it gives up', async () => {
+    // A provider whose container never stops growing would hold the page for as
+    // long as the step budget allows.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Endless</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/endless',
+        pretendToBeVisual: true
+    });
+    const scroller = installVirtualizedConversation(dom.window, 40);
+    let growth = 0;
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => 4000 + (growth += 100), configurable: true });
+
+    const started = Date.now();
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 1,
+        maxDuration: 250
+    });
+
+    assert.ok(Date.now() - started < 5000, 'the sweep honours its wall-clock budget');
+    assert.equal(conversation.complete, false, 'an export cut short is reported as incomplete');
+});
+
+test('an export that never read every turn is flagged and announced', async () => {
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Stuck</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/stuck',
+        pretendToBeVisual: true
+    });
+    installVirtualizedConversation(dom.window, 12);
+    const { window } = dom;
+    installInnerText(window);
+
+    // One turn never renders its text, however long the sweep waits. It lives
+    // outside the scroller so the fixture's re-render cannot sweep it away.
+    const stuck = window.document.createElement('div');
+    stuck.setAttribute('data-message-author-role', 'assistant');
+    stuck.setAttribute('data-message-id', 'msg-stuck');
+    window.document.body.appendChild(stuck);
+
+    const alerts = [];
+    window.alert = message => alerts.push(message);
+    window.URL.createObjectURL = () => 'blob:x';
+    window.URL.revokeObjectURL = () => {};
+    window.HTMLAnchorElement.prototype.click = function click() {};
+
+    const result = await engine.exportConversationFull({
+        document: window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(result.conversation.complete, false);
+    assert.ok(result.conversation.missedMessages >= 1, 'the unread turn is counted');
+    assert.equal(alerts.length, 1, 'the reader is told the file may be short');
+    assert.match(alerts[0], /may be incomplete/);
+    assert.ok(result.conversation.messages.length >= 12, 'everything readable is still exported');
+});
+
+test('the reader gets their scroll position back even when a sweep throws', async () => {
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Boom</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/boom',
+        pretendToBeVisual: true
+    });
+    const scroller = installVirtualizedConversation(dom.window, 20);
+    scroller.scrollTop = 900;
+    const parked = scroller.scrollTop;
+
+    let reads = 0;
+    Object.defineProperty(scroller, 'clientHeight', {
+        get() {
+            if (++reads > 4) throw new Error('container went away mid-sweep');
+            return 300;
+        },
+        configurable: true
+    });
+
+    await assert.rejects(() => engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    }), /went away mid-sweep/);
+
+    assert.equal(scroller.scrollTop, parked, 'the conversation is left where the reader had it');
+});
+
+test('a sweep waits for a hidden tab to come back before scrolling', async () => {
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Hidden</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/hidden',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 20;
+    installVirtualizedConversation(dom.window, totalMessages);
+
+    let hidden = true;
+    Object.defineProperty(dom.window.document, 'hidden', { get: () => hidden, configurable: true });
+    dom.window.setTimeout(() => { hidden = false; }, 400);
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0,
+        maxDuration: 8000
+    });
+
+    assert.equal(hidden, false);
+    assert.equal(conversation.messages.length, totalMessages, 'nothing is lost to a backgrounded tab');
+    assert.equal(conversation.complete, true);
 });
 
 test('full extraction without a scrollable container matches single-pass output', async () => {

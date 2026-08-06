@@ -392,9 +392,24 @@
             provider: 'chatgpt',
             format
         });
-        const exportSafely = format => Promise.resolve()
-            .then(() => runExport(format))
-            .catch(error => console.error('[Chat Exporter] Export failed.', error));
+
+        // A full export scrolls the whole conversation, which takes seconds.
+        // Say so on the launcher, and don't let a second click start a second
+        // sweep fighting the first one for the scroll position.
+        let exportInFlight = false;
+        const setBusy = busy => {
+            exportInFlight = busy;
+            const label = doc.getElementById(LAUNCHER_ID)?.querySelector('span');
+            if (label) label.textContent = busy ? 'Exporting…' : 'Export';
+        };
+        const exportSafely = format => {
+            if (exportInFlight) return Promise.resolve();
+            setBusy(true);
+            return Promise.resolve()
+                .then(() => runExport(format))
+                .catch(error => console.error('[Chat Exporter] Export failed.', error))
+                .then(() => setBusy(false), () => setBusy(false));
+        };
         const actions = {
             copyLink: options.copyLink || (() => doc.defaultView.navigator.clipboard.writeText(doc.defaultView.location.href)),
             exportMarkdown: options.exportMarkdown || (() => exportSafely('markdown')),
