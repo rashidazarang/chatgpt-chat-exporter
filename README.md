@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.7.2-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.8.3-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -78,7 +78,17 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.8.2
+## 🔧 What's New in v0.8.3
+
+**Follow-up fixes from live testing** (see [release notes](temporal/release-notes-v0.8.3.md)):
+
+- ⏳ **Turns caught mid-render are no longer dropped**: ChatGPT mounts a turn before its text renders, and the sweep was retiring those turns before it managed to read them. It now retries them in place, and only marks a turn done once it has actually been captured.
+- 🙈 **Hidden-tab warning**: Chrome throttles timers and suspends rendering in a background tab, which truncates exports. Starting an export on a hidden tab now warns you to bring it to the front.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.8.2
 
 **Fixes found by testing against a live ChatGPT conversation** — each one ships with a regression test that fails on v0.8.1:
 
@@ -87,9 +97,6 @@ No install, no server, no account: everything runs locally in your browser.
 - 🧩 **Export entries never appeared in the ••• menu on desktop**: ChatGPT hides that menu's Share row (`sm:hidden`) when the header Share button is present, and the entries were cloned from it. They now clone a row that actually renders.
 - 🔗 **"Share prompt" on a message stays native**: per-message share buttons were being intercepted by the export menu.
 - 📋 **Sidebar conversation menus are left alone** — they belong to other chats, but an export always reads the open one.
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.8.1
 
@@ -198,7 +205,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 ## ❓ Troubleshooting
 
 - **"No messages found"** — the site's DOM may have changed. Update to the latest exporter version; if it persists, [open an issue](https://github.com/rashidazarang/chatgpt-chat-exporter/issues) with your browser and a description of the page.
-- **Long conversation exports only a fragment, or turns come out in the wrong order** — update to v0.8.2+. v0.8.0 added the auto-scroll sweep for lazily-loaded conversations; v0.8.2 fixed sweeps that ended early and exports that were ordered by capture rather than by conversation. Leave the tab in the foreground while the sweep runs; the export downloads when it finishes.
+- **Long conversation exports only a fragment, or turns come out in the wrong order** — **keep the ChatGPT tab visible while the export runs**: Chrome throttles timers and suspends rendering in a background tab, so the auto-scroll sweep can't load the turns it scrolls to (v0.8.3+ warns you in the console when this happens). Otherwise, update to v0.8.2+. v0.8.0 added the auto-scroll sweep for lazily-loaded conversations; v0.8.2 fixed sweeps that ended early and exports that were ordered by capture rather than by conversation. Leave the tab in the foreground while the sweep runs; the export downloads when it finishes.
 - **Export actions don't appear** — confirm the userscript is enabled for `chatgpt.com`, reload the page, and open a conversation's **•••** or header **Share** menu. On accounts with no Share control (v0.8.1+), look for the floating **Export** button in the bottom-right corner instead; you can also force it on from the console with `ChatExporter.showLauncher()`, or export directly with `ChatExporter.markdown()` / `ChatExporter.pdf()`.
 - **Downloads blocked in the console** — some browsers require you to allow downloads/popups triggered from DevTools; the userscript method avoids this.
 
@@ -206,7 +213,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.8.2** (Current) - Conversation order preserved in long exports, sweeps no longer stop early, ••• menu entries visible on desktop, per-message "Share prompt" left native
+- **v0.8.3** (Current) - Turns caught mid-render are retried instead of dropped; hidden-tab warning
+- **v0.8.2** - Conversation order preserved in long exports, sweeps no longer stop early, ••• menu entries visible on desktop, per-message "Share prompt" left native
 - **v0.8.1** - Floating **Export** fallback for accounts with no Share control, console API, and Trusted-Types-safe UI (#31)
 - **v0.8.0** - Full export of virtualized long conversations via auto-scroll (#28, #29), References list for web-search citations (#27), native menu export integration with locale-safe share detection (#26)
 - **v0.7.2** - Markdown fidelity: preserved prompt whitespace, no doubled backslashes, correct code-span/list/entity handling (#25)

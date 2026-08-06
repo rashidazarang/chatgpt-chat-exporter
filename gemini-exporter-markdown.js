@@ -17,7 +17,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.8.2';
+        const ENGINE_VERSION = '0.8.3';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -875,6 +875,23 @@
             return topLevelElements(queryAll(container, ':scope > article, :scope > section, :scope > div')).filter(isValidMessage);
         }
 
+        // The selector that currently matches at least one real message, or null.
+        function resolveMessageSelector(doc, provider) {
+            for (const selector of provider.messageSelectors) {
+                if (topLevelElements(queryAll(doc, selector)).some(isValidMessage)) return selector;
+            }
+            return null;
+        }
+
+        // Every element the message selector matches, including turns the provider
+        // has mounted but not filled in yet — isValidMessage hides those, and a
+        // sweep needs to know they exist so it can wait for them. The selector is
+        // passed in because a screenful can be entirely mid-mount, and rediscovering
+        // it from that snapshot would find nothing at all.
+        function findMessageCandidates(doc, selector) {
+            return selector ? topLevelElements(queryAll(doc, selector)) : [];
+        }
+
         function selectContentRoot(messageElement, provider) {
             const candidates = [messageElement];
 
@@ -933,10 +950,12 @@
             const content = serializeMessageContent(contentRoot, format);
             const minLength = queryAll(contentRoot, 'pre, code-block, table, img, canvas, video, audio').length > 0 ? 3 : 10;
 
-            if (!content || normalizeWhitespace(content).length < minLength) return;
+            // Not captured — the caller must be free to try this element again once
+            // the provider has filled it in.
+            if (!content || normalizeWhitespace(content).length < minLength) return false;
 
             const hash = contentHash(content);
-            if (state.seen.has(hash)) return;
+            if (state.seen.has(hash)) return true;
             state.seen.add(hash);
 
             const index = state.messages.length;
@@ -949,6 +968,7 @@
                 index,
                 order: conversationOffset(messageElement, state.container)
             });
+            return true;
         }
 
         // Where a message sits in the whole conversation, not in the viewport: the
@@ -1063,17 +1083,36 @@
 
             const state = { seen: new Set(), messages: [], container };
             const seenKeys = new Set();
+            // Turns that were on screen but had nothing to serialize yet. They are
+            // the reason for the return pass below.
+            const pendingKeys = new Set();
+            let messageSelector = null;
             const capture = () => {
-                findMessages(doc, provider).forEach(messageElement => {
+                messageSelector = messageSelector || resolveMessageSelector(doc, provider);
+                findMessageCandidates(doc, messageSelector).forEach(messageElement => {
                     const key = messageKey(messageElement);
                     if (seenKeys.has(key)) return;
-                    seenKeys.add(key);
-                    captureMessage(state, messageElement, provider, format);
+                    // A virtualizer mounts the turn before it fills in the text, so
+                    // a message seen empty must stay eligible for a later pass —
+                    // marking it seen here would drop it from the export for good.
+                    if (isValidMessage(messageElement) && captureMessage(state, messageElement, provider, format)) {
+                        seenKeys.add(key);
+                        pendingKeys.delete(key);
+                        return;
+                    }
+                    pendingKeys.add(key);
                 });
             };
 
             if (container) {
                 const originalTop = container.scrollTop;
+
+                // A hidden tab gets its timers throttled and its off-screen
+                // rendering suspended, so the sweep crawls and the provider may
+                // never mount the turns it is scrolling to.
+                if (doc.hidden) {
+                    console.warn('[Chat Exporter] This tab is in the background. Bring it to the front — a hidden tab throttles the scroll sweep and the export may come out incomplete.');
+                }
 
                 // Pin to the top until the container stops growing so providers
                 // that lazily prepend older history finish loading it. Two stable
@@ -1104,6 +1143,16 @@
                     container.scrollTop = beforeTop + Math.max(container.clientHeight * 0.75, 200);
                     await wait(scrollDelay);
                     capture();
+
+                    // Turns mount before their text renders. Give the ones that were
+                    // not ready a moment and look again here, while they are still on
+                    // screen — once the sweep moves on they are gone, and providers
+                    // that snap back to the newest message make a return trip
+                    // impossible.
+                    if (pendingKeys.size > 0) {
+                        await wait(scrollDelay);
+                        capture();
+                    }
 
                     if (container.scrollTop > beforeTop || state.messages.length > beforeCount) {
                         stalls = 0;

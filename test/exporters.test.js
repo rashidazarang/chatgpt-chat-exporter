@@ -934,13 +934,51 @@ function installVirtualizedConversation(window, totalMessages, options = {}) {
     document.body.appendChild(scroller);
 
     const MESSAGE_HEIGHT = 100;
-    const CLIENT_HEIGHT = 300;
+    // Steps of 0.75 * clientHeight overlap, so a narrow viewport is what makes
+    // each stop show a fresh set of turns — as a long ChatGPT answer does.
+    const CLIENT_HEIGHT = options.clientHeight || 300;
     let scrollTop = 0;
 
     let renders = 0;
+    // Node identity survives being scrolled out of view, as it does in a real
+    // virtualizer — content rendered once stays rendered.
+    const nodes = new Map();
+    const seenOnce = new Set();
+
+    const nodeFor = i => {
+        if (!nodes.has(i)) {
+            const message = document.createElement('div');
+            message.setAttribute('data-message-author-role', i % 2 === 0 ? 'user' : 'assistant');
+            message.setAttribute('data-message-id', `msg-${i}`);
+            const top = i * MESSAGE_HEIGHT;
+            message.getBoundingClientRect = () => ({ top: top - scrollTop, bottom: top - scrollTop + MESSAGE_HEIGHT, height: MESSAGE_HEIGHT, left: 0, right: 100, width: 100 });
+            nodes.set(i, message);
+        }
+        const message = nodes.get(i);
+
+        const fill = () => {
+            if (message.firstChild) return;
+            const paragraph = document.createElement('p');
+            paragraph.textContent = `Message number ${i} with enough body text to pass the export filters.`;
+            message.appendChild(paragraph);
+        };
+
+        // ChatGPT mounts the turn container before its text renders, so a turn
+        // scrolled into view is an empty shell for a moment and then fills in
+        // where it stands — no further scrolling involved. The turns already on
+        // screen when the export starts are rendered.
+        if (options.mountLatency && i >= 3 && !seenOnce.has(i)) {
+            seenOnce.add(i);
+            window.setTimeout(fill, options.mountLatency);
+            return message;
+        }
+        fill();
+        return message;
+    };
+
     const render = () => {
         renders += 1;
-        scroller.innerHTML = '';
+        while (scroller.firstChild) scroller.removeChild(scroller.firstChild);
         for (let i = 0; i < totalMessages; i++) {
             const top = i * MESSAGE_HEIGHT;
             const inWindow = top < scrollTop + CLIENT_HEIGHT && top + MESSAGE_HEIGHT > scrollTop;
@@ -950,15 +988,7 @@ function installVirtualizedConversation(window, totalMessages, options = {}) {
                 && renders <= options.staleBottomRenders
                 && i >= totalMessages - 3;
             if (!inWindow && !stale) continue;
-
-            const message = document.createElement('div');
-            message.setAttribute('data-message-author-role', i % 2 === 0 ? 'user' : 'assistant');
-            message.setAttribute('data-message-id', `msg-${i}`);
-            message.getBoundingClientRect = () => ({ top: top - scrollTop, bottom: top - scrollTop + MESSAGE_HEIGHT, height: MESSAGE_HEIGHT, left: 0, right: 100, width: 100 });
-            const paragraph = document.createElement('p');
-            paragraph.textContent = `Message number ${i} with enough body text to pass the export filters.`;
-            message.appendChild(paragraph);
-            scroller.appendChild(message);
+            scroller.appendChild(nodeFor(i));
         }
     };
 
@@ -982,6 +1012,30 @@ function installVirtualizedConversation(window, totalMessages, options = {}) {
     render();
     return scroller;
 }
+
+test('full extraction retries turns that mount before their text renders', async () => {
+    // Observed on live ChatGPT: an export contained turns 1, 6, 7, 8, 9, 10, 11,
+    // 12 of 12. The sweep did reach every turn — but turns mounted empty on
+    // first sight, and marking them "seen" before the capture succeeded retired
+    // them permanently.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Late Content Fixture</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/late-content',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 20;
+    installVirtualizedConversation(dom.window, totalMessages, { mountLatency: 12, clientHeight: 200 });
+
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 10
+    });
+
+    assert.equal(full.messages.length, totalMessages, 'a turn seen empty must be retried, not dropped');
+    const order = full.messages.map(message => Number(message.content.match(/Message number (\d+)/)[1]));
+    assert.deepEqual(order, Array.from({ length: totalMessages }, (unused, index) => index));
+});
 
 test('full extraction keeps conversation order when the tail is still mounted', async () => {
     // Observed on live ChatGPT while exporting from the bottom of a 12-turn
