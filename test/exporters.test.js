@@ -177,9 +177,13 @@ async function runExporter(filename, html, url = 'https://chatgpt.com/c/test-fix
 
     window.eval(readScript(filename));
 
-    // Runners export through the async full-extraction path; let its promise
-    // chain settle before checking the download.
-    await new Promise(resolve => setTimeout(resolve, 0));
+    // Runners export through the async full-extraction path, which waits for
+    // the newest answer to stop growing before it reads anything — poll for the
+    // download rather than assuming a fixed number of ticks.
+    const deadline = Date.now() + 5000;
+    while (downloads.length === 0 && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
 
     assert.ok(downloads.length > 0, `${filename} should create a downloadable blob`);
     const latest = downloads[downloads.length - 1];
@@ -671,17 +675,20 @@ async function runUserscript(html, options = {}) {
     return { window, downloads, launcher };
 }
 
-async function exportFromLauncher(window, launcher) {
+async function exportFromLauncher(window, launcher, downloads) {
     launcher.click();
     window.document.querySelector('#chat-exporter-share-menu [role="menuitem"]:nth-child(2)').click();
-    await new Promise(resolve => setTimeout(resolve, 0));
+    const deadline = Date.now() + 5000;
+    while (downloads.length === 0 && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
 }
 
 test('built userscript exports end to end on an account with no share control (issue #31)', async () => {
     const { window, downloads, launcher } = await runUserscript(ENTERPRISE_PAGE);
     assert.ok(launcher, 'the userscript must expose an export control without ChatGPT sharing');
 
-    await exportFromLauncher(window, launcher);
+    await exportFromLauncher(window, launcher, downloads);
 
     assert.equal(downloads.length, 1, 'clicking Export to Markdown downloads the conversation');
     const content = await downloads[0].blob.text();
@@ -694,7 +701,7 @@ test('built userscript installs and exports on a page that enforces Trusted Type
     const { window, downloads, launcher } = await runUserscript(ENTERPRISE_PAGE, { trustedTypes: true });
     assert.ok(launcher, 'strict CSP must not stop the export UI from mounting');
 
-    await exportFromLauncher(window, launcher);
+    await exportFromLauncher(window, launcher, downloads);
 
     assert.equal(downloads.length, 1);
     assert.match(await downloads[0].blob.text(), /Does the export button still work here\?/);
@@ -1324,6 +1331,117 @@ test('a sweep waits for a hidden tab to come back before scrolling', async () =>
     assert.equal(hidden, false);
     assert.equal(conversation.messages.length, totalMessages, 'nothing is lost to a backgrounded tab');
     assert.equal(conversation.complete, true);
+});
+
+test('an answer still being written is waited for, not exported half-finished', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head><title>Streaming</title></head><body><main>
+    <div data-message-author-role="user"><p>Write me the long version please</p></div>
+    <div data-message-author-role="assistant" id="live"><p>The answer begins here</p></div>
+</main></body></html>`, { url: 'https://chatgpt.com/c/streaming', pretendToBeVisual: true });
+
+    const { window } = dom;
+    const live = window.document.querySelector('#live p');
+    let ticks = 0;
+    const typing = window.setInterval(() => {
+        live.textContent += ` and continues with sentence ${++ticks}.`;
+        if (ticks === 4) window.clearInterval(typing);
+    }, 120);
+
+    const conversation = await engine.extractConversationFull({
+        document: window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(ticks, 4, 'the sweep waited for the answer to stop growing');
+    assert.match(conversation.messages[1].content, /sentence 4\./, 'the finished answer is what gets exported');
+    assert.equal(conversation.complete, true);
+});
+
+test('a stream that never stops is exported with a warning rather than hanging', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html>
+<html><head><title>Endless stream</title></head><body><main>
+    <div data-message-author-role="user"><p>Keep going forever please</p></div>
+    <div data-message-author-role="assistant" id="live"><p>Still writing</p></div>
+</main></body></html>`, { url: 'https://chatgpt.com/c/endless-stream', pretendToBeVisual: true });
+
+    const { window } = dom;
+    const live = window.document.querySelector('#live p');
+    const typing = window.setInterval(() => { live.textContent += ' more'; }, 20);
+
+    const conversation = await engine.extractConversationFull({
+        document: window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0,
+        maxDuration: 600
+    });
+    window.clearInterval(typing);
+
+    assert.equal(conversation.complete, false, 'a cut-off answer is not passed off as complete');
+    assert.ok(conversation.messages.length >= 1);
+});
+
+test('Gemini conversations sweep through their virtualized scroller too', async () => {
+    // The Gemini exporter goes through the same async path, but Gemini marks
+    // turns up as custom elements with no message ids.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Gemini thread</title></head><body></body></html>', {
+        url: 'https://gemini.google.com/app/abc123',
+        pretendToBeVisual: true
+    });
+    const { window, window: { document } } = dom;
+
+    const scroller = document.createElement('infinite-scroller');
+    scroller.style.overflowY = 'auto';
+    document.body.appendChild(scroller);
+
+    const TURN_HEIGHT = 100;
+    const CLIENT_HEIGHT = 300;
+    const totalTurns = 16;
+    let scrollTop = 0;
+    const render = () => {
+        while (scroller.firstChild) scroller.removeChild(scroller.firstChild);
+        for (let i = 0; i < totalTurns; i++) {
+            const top = i * TURN_HEIGHT;
+            if (!(top < scrollTop + CLIENT_HEIGHT && top + TURN_HEIGHT > scrollTop)) continue;
+            const turn = document.createElement(i % 2 === 0 ? 'user-query' : 'model-response');
+            turn.getBoundingClientRect = () => ({ top: top - scrollTop, bottom: top - scrollTop + TURN_HEIGHT, height: TURN_HEIGHT, left: 0, right: 100, width: 100 });
+            const body = document.createElement(i % 2 === 0 ? 'div' : 'message-content');
+            body.className = i % 2 === 0 ? 'query-text' : 'markdown';
+            body.textContent = `Gemini turn number ${i} with enough body text to be exported.`;
+            turn.appendChild(body);
+            scroller.appendChild(turn);
+        }
+    };
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => totalTurns * TURN_HEIGHT, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => CLIENT_HEIGHT, configurable: true });
+    Object.defineProperty(scroller, 'scrollTop', {
+        get: () => scrollTop,
+        set(value) {
+            scrollTop = Math.max(0, Math.min(value, totalTurns * TURN_HEIGHT - CLIENT_HEIGHT));
+            render();
+        },
+        configurable: true
+    });
+    render();
+
+    const single = engine.extractConversation({ document, provider: 'gemini', format: 'markdown' });
+    assert.ok(single.messages.length < totalTurns, 'a single pass only sees the rendered window');
+
+    const full = await engine.extractConversationFull({
+        document,
+        provider: 'gemini',
+        format: 'markdown',
+        scrollDelay: 0
+    });
+
+    assert.equal(full.messages.length, totalTurns, 'every Gemini turn is captured');
+    const order = full.messages.map(message => Number(message.content.match(/turn number (\d+)/)[1]));
+    assert.deepEqual(order, Array.from({ length: totalTurns }, (unused, index) => index));
+    assert.deepEqual(full.messages.map(m => m.sender).slice(0, 4), ['You', 'Gemini', 'You', 'Gemini']);
+    assert.equal(full.complete, true);
 });
 
 test('full extraction without a scrollable container matches single-pass output', async () => {

@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.9.1-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -78,7 +78,15 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.9.0
+## 🔧 What's New in v0.9.1
+
+- ✍️ **Exporting mid-answer waits for the answer to finish**: hit Export while ChatGPT is still writing and the file used to contain the reply cut off mid-sentence, with nothing to say so. The sweep now waits for the newest message to stop growing (bounded by the same deadline), and marks the export incomplete if it can't.
+- 🧪 **Gemini's auto-scroll path is now tested** — it has shipped since v0.8.0 with no coverage of its custom-element markup.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.9.0
 
 **An audit pass over the whole engine** (see [release notes](temporal/release-notes-v0.9.0.md)). Two of these were silent data loss:
 
@@ -88,9 +96,6 @@ No install, no server, no account: everything runs locally in your browser.
 - 🙈 **A backgrounded tab is waited for**, not fought — the sweep pauses while the tab is hidden and resumes when it returns (v0.8.3 only warned).
 - ↩️ **Your scroll position always comes back**, even if the sweep throws midway; a container that disappears mid-sweep is re-resolved.
 - ⏳ The launcher shows **Exporting…** while a sweep runs, and a second click won't start a competing one.
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.8.3
 
@@ -224,7 +229,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.9.0** (Current) - Whole-text dedupe (redrafts no longer collapse), incomplete-export reporting, sweep deadline, hidden-tab wait, scroll restored on failure
+- **v0.9.1** (Current) - Waits for a streaming answer to finish before exporting; Gemini sweep coverage
+- **v0.9.0** - Whole-text dedupe (redrafts no longer collapse), incomplete-export reporting, sweep deadline, hidden-tab wait, scroll restored on failure
 - **v0.8.3** - Turns caught mid-render are retried instead of dropped; hidden-tab warning
 - **v0.8.2** - Conversation order preserved in long exports, sweeps no longer stop early, ••• menu entries visible on desktop, per-message "Share prompt" left native
 - **v0.8.1** - Floating **Export** fallback for accounts with no Share control, console API, and Trusted-Types-safe UI (#31)

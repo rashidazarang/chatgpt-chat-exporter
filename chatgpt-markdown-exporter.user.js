@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - Markdown
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.9.0
+// @version      0.9.1
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @match        https://chat.openai.com/*
@@ -28,7 +28,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.9.0';
+        const ENGINE_VERSION = '0.9.1';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -40,6 +40,10 @@
         // Wall-clock budget for a full sweep. Step counts alone can't bound it —
         // a provider that keeps changing height would hold the page for minutes.
         const DEFAULT_MAX_DURATION = 120000;
+
+        // How long to watch the newest answer before deciding it has stopped
+        // growing. Short enough not to be felt on an idle conversation.
+        const STREAM_SETTLE_INTERVAL = 250;
         // Random run token so conversation text can never collide with (or inject
         // through) the internal block placeholders used during serialization.
         const MARKER_PREFIX = `__CHAT_EXPORTER_BLOCK_${Math.random().toString(36).slice(2, 10)}_`;
@@ -1091,6 +1095,30 @@
             return root && root.scrollHeight > root.clientHeight + 10 ? root : null;
         }
 
+        // An answer still being written would be exported half-finished. Rather
+        // than hunt for a "stop generating" button — a test id that changes with
+        // every redesign — watch whether the newest message is still growing.
+        async function awaitStreamingSettled(doc, provider, wait, outOfTime) {
+            const sample = () => {
+                const messages = findMessages(doc, provider);
+                const last = messages[messages.length - 1];
+                return last ? normalizeWhitespace(last.textContent).length : 0;
+            };
+
+            let previous = sample();
+            await wait(STREAM_SETTLE_INTERVAL);
+            if (sample() === previous) return true;
+
+            console.log('[Chat Exporter] The answer is still being written — waiting for it to finish before exporting.');
+            let stable = 0;
+            while (stable < 2 && !outOfTime()) {
+                previous = sample();
+                await wait(STREAM_SETTLE_INTERVAL);
+                stable = sample() === previous ? stable + 1 : 0;
+            }
+            return stable >= 2;
+        }
+
         // Stable identity across scroll snapshots. Message ids are the reliable
         // signal; text prefix plus length covers providers without ids. Streaming
         // partials that slip through are still collapsed by contentHash dedupe.
@@ -1153,6 +1181,12 @@
                 }
                 return !doc.hidden;
             };
+
+            // Wait for the newest answer to stop growing before anything is read,
+            // whether or not there is a container to sweep.
+            const settled = options.awaitStreaming === false
+                ? true
+                : await awaitStreamingSettled(doc, provider, wait, outOfTime);
 
             if (container) {
                 const originalTop = container.scrollTop;
@@ -1241,7 +1275,10 @@
             // Turns that were on screen but never became readable. Saying so beats
             // handing over a short file that looks complete.
             conversation.missedMessages = pendingKeys.size;
-            conversation.complete = pendingKeys.size === 0 && !outOfTime();
+            conversation.complete = pendingKeys.size === 0 && !outOfTime() && settled;
+            if (!settled) {
+                console.warn('[Chat Exporter] The answer was still being written when the export ran out of time; the last message may be cut off.');
+            }
             if (!conversation.complete) {
                 console.warn(`[Chat Exporter] Export may be incomplete: ${conversation.messages.length} messages captured, ${pendingKeys.size} turn(s) never finished rendering${outOfTime() ? ', and the sweep ran out of time' : ''}. Keep the tab in the foreground and try again.`);
             }
