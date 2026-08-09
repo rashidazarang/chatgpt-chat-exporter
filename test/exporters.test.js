@@ -138,6 +138,88 @@ Make no mistakes.
 </html>`;
 }
 
+function issue32And33Fixture() {
+    return `<!DOCTYPE html>
+<html>
+<head><title>Attachment Metadata Fixture</title></head>
+<body>
+    <main>
+        <section data-testid="conversation-turn-0">
+            <div data-message-author-role="user" data-message-id="message-user-image">
+                <div class="whitespace-pre-wrap"></div>
+            </div>
+            <div data-testid="file-thumbnail">
+                <img
+                    alt="uploaded-sketch.png"
+                    src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+                >
+            </div>
+            <button data-testid="file-thumbnail" aria-label="Uploaded_Filename.zip">Uploaded_Filename.zip</button>
+            <time datetime="2026-06-09T12:47:00-06:00">Tue, Jun 9 at 12:47 PM</time>
+        </section>
+        <section data-testid="conversation-turn-1">
+            <div data-message-author-role="assistant" data-message-id="message-assistant-file">
+                <div class="markdown prose"><p>Created the requested workbook.</p></div>
+            </div>
+            <a data-testid="generated-file" href="sandbox:/mnt/data/ABC_Workbook.xlsx">Download ABC Workbook</a>
+            <div data-testid="reasoning-recap">Checked the formulas before saving.</div>
+            <time datetime="2026-06-09T12:48:00-06:00">Tue, Jun 9 at 12:48 PM</time>
+        </section>
+    </main>
+</body>
+</html>`;
+}
+
+function chatGptConversationPayload() {
+    return {
+        title: 'Payload Metadata Fixture',
+        current_node: 'node-assistant',
+        mapping: {
+            'node-user': {
+                id: 'node-user',
+                parent: null,
+                children: ['node-recap'],
+                message: {
+                    id: 'message-user-api',
+                    author: { role: 'user' },
+                    create_time: 1781030820,
+                    content: { content_type: 'multimodal_text', parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'file-service://file-image-api' }] },
+                    metadata: {
+                        attachments: [{ id: 'file-image-api', name: 'uploaded-diagram.png', mime_type: 'image/png' }]
+                    }
+                }
+            },
+            'node-recap': {
+                id: 'node-recap',
+                parent: 'node-user',
+                children: ['node-assistant'],
+                message: {
+                    id: 'message-recap-api',
+                    author: { role: 'assistant' },
+                    create_time: 1781030870,
+                    content: { content_type: 'reasoning_recap', parts: ['Checked workbook formulas and output paths.'] },
+                    metadata: {}
+                }
+            },
+            'node-assistant': {
+                id: 'node-assistant',
+                parent: 'node-recap',
+                children: [],
+                message: {
+                    id: 'message-assistant-api',
+                    author: { role: 'assistant' },
+                    create_time: 1781030880,
+                    content: {
+                        content_type: 'text',
+                        parts: ['Created the workbook. [Download the ABC Workbook](sandbox:/mnt/data/ABC_Workbook.xlsx)']
+                    },
+                    metadata: {}
+                }
+            }
+        }
+    };
+}
+
 function installInnerText(window) {
     const descriptor = Object.getOwnPropertyDescriptor(window.HTMLElement.prototype, 'innerText');
     if (!descriptor) {
@@ -763,6 +845,133 @@ second line</div>
     });
 
     assert.equal(result.messages[0].content, 'first line\nsecond line');
+});
+
+test('image-only turns keep embedded media and turn-level metadata (issues #32, #33)', () => {
+    const dom = new JSDOM(issue32And33Fixture(), {
+        url: 'https://chatgpt.com/c/attachment-metadata'
+    });
+    installInnerText(dom.window);
+
+    const markdownConversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(markdownConversation.messages.length, 2, 'an image-only user turn must not be rejected as empty');
+    assert.equal(markdownConversation.messages[0].sender, 'You');
+    assert.match(markdownConversation.messages[0].content, /!\[uploaded-sketch\.png\]\(data:image\/png;base64,/);
+    assert.match(markdownConversation.messages[0].content, /\[File: Uploaded_Filename\.zip\]/);
+    assert.equal(markdownConversation.messages[0].timestamp, 'Tue, Jun 9 at 12:47 PM');
+    assert.equal(markdownConversation.messages[0].timestampIso, '2026-06-09T18:47:00.000Z');
+
+    const assistant = markdownConversation.messages[1];
+    assert.match(assistant.content, /\[File: ABC Workbook\]\(sandbox:\/mnt\/data\/ABC_Workbook\.xlsx\)/);
+    assert.match(assistant.content, /Checked the formulas before saving\./);
+    assert.equal(assistant.timestamp, 'Tue, Jun 9 at 12:48 PM');
+
+    const rendered = engine.serializers.markdown(markdownConversation);
+    assert.match(rendered, /### \*\*You\*\* · Tue, Jun 9 at 12:47 PM/);
+    assert.equal((rendered.match(/Tue, Jun 9 at 12:47 PM/g) || []).length, 1,
+        'turn timestamps are metadata, not duplicated in message content');
+
+    const htmlConversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'html'
+    });
+    assert.match(htmlConversation.messages[0].content, /<img class="exported-media" src="data:image\/png;base64,/);
+    assert.match(engine.serializers.html(htmlConversation), /<time datetime="2026-06-09T18:47:00\.000Z">Tue, Jun 9 at 12:47 PM<\/time>/);
+});
+
+test('built Markdown exporter captures an image-only turn end to end (issue #33)', async () => {
+    const { content } = await runExporter('exporter-markdown.js', issue32And33Fixture());
+
+    assert.match(content, /### \*\*You\*\* · Tue, Jun 9 at 12:47 PM/);
+    assert.match(content, /!\[uploaded-sketch\.png\]\(data:image\/png;base64,/);
+    assert.match(content, /\[File: Uploaded_Filename\.zip\]/);
+    assert.match(content, /\[File: ABC Workbook\]\(sandbox:\/mnt\/data\/ABC_Workbook\.xlsx\)/);
+});
+
+test('ChatGPT payload enrichment adds timestamps, attachments, generated files, and visible reasoning (issue #32)', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Payload Fixture</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="message-user-api"><p>Review the uploaded diagram please.</p></div>
+        <div data-message-author-role="assistant" data-message-id="message-assistant-api"><p>Created the workbook.</p></div>
+    </main></body></html>`, {
+        url: 'https://chatgpt.com/c/conversation-api'
+    });
+    installInnerText(dom.window);
+
+    const requested = [];
+    dom.window.fetch = async input => {
+        const url = String(input);
+        requested.push(url);
+        if (url.includes('/backend-api/conversation/conversation-api')) {
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: () => 'application/json' },
+                json: async () => chatGptConversationPayload()
+            };
+        }
+        if (url.includes('/backend-api/files/download/file-image-api')) {
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: () => 'image/png' },
+                arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer
+            };
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false
+    });
+
+    assert.equal(conversation.messages.length, 2);
+    assert.equal(conversation.messages[0].timestampIso, new Date(1781030820 * 1000).toISOString());
+    assert.ok(conversation.messages[0].timestamp, 'a localized per-turn timestamp is rendered');
+    assert.match(conversation.messages[0].content, /!\[uploaded-diagram\.png\]\(data:image\/png;base64,iVBORw==\)/);
+
+    assert.equal(conversation.messages[1].timestampIso, new Date(1781030880 * 1000).toISOString());
+    assert.match(conversation.messages[1].content, /\[File: ABC_Workbook\.xlsx\]\(sandbox:\/mnt\/data\/ABC_Workbook\.xlsx\)/);
+    assert.match(conversation.messages[1].content, /\*\*Reasoning:\*\* Checked workbook formulas and output paths\./);
+    assert.ok(requested.some(url => url.includes('/backend-api/files/download/file-image-api')),
+        'image bytes are embedded from the authenticated file endpoint');
+});
+
+test('ChatGPT metadata enrichment is bounded and never blocks the DOM export', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Metadata Timeout</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="message-timeout-user"><p>Keep this prompt even if metadata stalls.</p></div>
+        <div data-message-author-role="assistant" data-message-id="message-timeout-assistant"><p>Keep this response too.</p></div>
+    </main></body></html>`, {
+        url: 'https://chatgpt.com/c/metadata-timeout'
+    });
+
+    dom.window.fetch = (input, init = {}) => new Promise((resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    });
+
+    const started = Date.now();
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false,
+        metadataMaxDuration: 25
+    });
+
+    assert.ok(Date.now() - started < 1000, 'metadata uses its own short wall-clock budget');
+    assert.equal(conversation.messages.length, 2);
+    assert.match(conversation.messages[0].content, /Keep this prompt/);
+    assert.match(conversation.messages[1].content, /Keep this response/);
 });
 
 test('exports omit exact source URLs by default while keeping provider labels', async () => {

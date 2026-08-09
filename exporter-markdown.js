@@ -17,7 +17,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.9.1';
+        const ENGINE_VERSION = '0.9.2';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -36,6 +36,27 @@
         // Random run token so conversation text can never collide with (or inject
         // through) the internal block placeholders used during serialization.
         const MARKER_PREFIX = `__CHAT_EXPORTER_BLOCK_${Math.random().toString(36).slice(2, 10)}_`;
+
+        const CHATGPT_TURN_SELECTOR = [
+            'section[data-testid^="conversation-turn-"]',
+            'article[data-testid*="conversation-turn"]',
+            'div[data-testid^="conversation-turn-"]',
+            'div[data-testid="conversation-turn"]',
+            '.group\\/conversation-turn'
+        ].join(', ');
+
+        const MESSAGE_TIMESTAMP_SELECTOR = [
+            'time[datetime]',
+            'time[data-testid*="timestamp"]',
+            '[data-message-timestamp]',
+            '[data-created-at]',
+            '[data-create-time]'
+        ].join(', ');
+
+        const METADATA_FETCH_TIMEOUT = 5000;
+        const METADATA_MAX_DURATION = 15000;
+        const MAX_EMBEDDED_IMAGE_BYTES = 20 * 1024 * 1024;
+        const MAX_TOTAL_EMBEDDED_IMAGE_BYTES = 50 * 1024 * 1024;
 
         const PROVIDERS = {
             chatgpt: {
@@ -121,6 +142,85 @@
 
         function normalizeWhitespace(value) {
             return String(value ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+
+        function messageScope(element) {
+            if (!element || typeof element.closest !== 'function') return element;
+            try {
+                return element.closest(CHATGPT_TURN_SELECTOR) || element;
+            } catch (error) {
+                return element;
+            }
+        }
+
+        function providerMessageId(element) {
+            const scope = messageScope(element);
+            const carrier = [element, scope, scope?.querySelector?.('[data-message-id], [data-message-uuid]')]
+                .find(candidate => candidate?.getAttribute?.('data-message-id') || candidate?.getAttribute?.('data-message-uuid'));
+            return carrier?.getAttribute('data-message-id') || carrier?.getAttribute('data-message-uuid') || '';
+        }
+
+        function timestampIso(value) {
+            if (value === null || value === undefined || value === '') return '';
+
+            let date;
+            if (typeof value === 'number' || /^\d+(?:\.\d+)?$/.test(String(value).trim())) {
+                const numeric = Number(value);
+                if (!Number.isFinite(numeric) || numeric <= 0) return '';
+                date = new Date(numeric < 1e12 ? numeric * 1000 : numeric);
+            } else {
+                date = new Date(String(value));
+            }
+
+            return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+        }
+
+        function formatMessageTimestamp(value, doc) {
+            const iso = timestampIso(value);
+            if (!iso) return '';
+
+            const date = new Date(iso);
+            const win = getWindow(doc);
+            const DateTimeFormat = win?.Intl?.DateTimeFormat || Intl.DateTimeFormat;
+            try {
+                return new DateTimeFormat(undefined, {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit'
+                }).format(date);
+            } catch (error) {
+                return iso;
+            }
+        }
+
+        function extractMessageTimestamp(element) {
+            const scope = messageScope(element);
+            const timeElement = scope?.querySelector?.(MESSAGE_TIMESTAMP_SELECTOR) || null;
+            const sources = [timeElement, element, scope].filter(Boolean);
+            let raw = '';
+
+            for (const source of sources) {
+                raw = source.getAttribute?.('datetime') ||
+                    source.getAttribute?.('data-message-timestamp') ||
+                    source.getAttribute?.('data-created-at') ||
+                    source.getAttribute?.('data-create-time') || '';
+                if (raw) break;
+            }
+
+            const iso = timestampIso(raw);
+            const visible = normalizeWhitespace(
+                timeElement?.textContent ||
+                timeElement?.getAttribute?.('aria-label') ||
+                timeElement?.getAttribute?.('title') || ''
+            );
+
+            if (!iso && !visible) return null;
+            return {
+                timestamp: visible || formatMessageTimestamp(iso, element?.ownerDocument),
+                timestampIso: iso
+            };
         }
 
         function getClassName(element) {
@@ -468,6 +568,80 @@
             });
         }
 
+        function isSafeEmbeddedImageSource(source) {
+            const value = String(source || '');
+            if (!/^data:image\/(?:png|jpe?g|gif|webp|avif|bmp);base64,[a-z0-9+/=\s]+$/i.test(value)) return false;
+            const payload = value.slice(value.indexOf(',') + 1).replace(/\s/g, '');
+            return Math.ceil(payload.length * 3 / 4) <= MAX_EMBEDDED_IMAGE_BYTES;
+        }
+
+        function isSafeRemoteImageSource(source) {
+            try {
+                const protocol = new URL(String(source || '')).protocol.toLowerCase();
+                return protocol === 'https:' || protocol === 'http:';
+            } catch (error) {
+                return false;
+            }
+        }
+
+        function canvasDataUrl(element) {
+            try {
+                const CanvasRenderingContext2D = element.ownerDocument?.defaultView?.CanvasRenderingContext2D;
+                if (typeof CanvasRenderingContext2D !== 'function') return '';
+
+                if (element.tagName?.toLowerCase() === 'canvas') {
+                    const value = element.toDataURL?.('image/png') || '';
+                    return isSafeEmbeddedImageSource(value) ? value : '';
+                }
+
+                const width = element.naturalWidth || element.width || 0;
+                const height = element.naturalHeight || element.height || 0;
+                if (!width || !height) return '';
+
+                const canvas = element.ownerDocument?.createElement?.('canvas');
+                const context = canvas?.getContext?.('2d');
+                if (!canvas || !context) return '';
+                canvas.width = width;
+                canvas.height = height;
+                context.drawImage(element, 0, 0, width, height);
+                const value = canvas.toDataURL('image/png');
+                return isSafeEmbeddedImageSource(value) ? value : '';
+            } catch (error) {
+                // Cross-origin images can taint a canvas. Their original HTTPS URL
+                // is still a useful fallback, while blob URLs are not portable.
+                return '';
+            }
+        }
+
+        function mediaSource(element) {
+            if (element.hasAttribute?.('data-chat-exporter-media-source')) {
+                return element.getAttribute('data-chat-exporter-media-source') || '';
+            }
+
+            const direct = String(
+                element.currentSrc ||
+                element.getAttribute?.('src') ||
+                element.getAttribute?.('data-src') || ''
+            ).trim();
+            if (isSafeEmbeddedImageSource(direct)) return direct;
+
+            const embedded = canvasDataUrl(element);
+            if (embedded) return embedded;
+
+            const resolved = String(element.src || direct).trim();
+            return isSafeRemoteImageSource(resolved) ? resolved : '';
+        }
+
+        function annotateMediaSources(original, clone) {
+            const originalMedia = queryAll(original, 'img, canvas');
+            const clonedMedia = queryAll(clone, 'img, canvas');
+            originalMedia.forEach((element, index) => {
+                const cloneElement = clonedMedia[index];
+                if (!cloneElement) return;
+                cloneElement.setAttribute('data-chat-exporter-media-source', mediaSource(element));
+            });
+        }
+
         function processMedia(clone, format, replacements) {
             queryAll(clone, 'img, canvas, video, audio').forEach(element => {
                 const tag = element.tagName.toLowerCase();
@@ -479,9 +653,14 @@
                     tag === 'audio' ? '[Audio]' :
                     '[Media]';
 
-                const replacement = format === 'markdown'
-                    ? label
-                    : addReplacement(replacements, `<span class="media-placeholder">${sanitizeHtml(label)}</span>`);
+                const source = (tag === 'img' || tag === 'canvas') ? mediaSource(element) : '';
+                const imageAlt = alt || (tag === 'canvas' ? 'Canvas or chart' : 'Image');
+
+                const replacement = format === 'markdown' ?
+                    (source ? `![${escapeMarkdownLinkText(imageAlt)}](${escapeMarkdownUrl(source)})` : label) :
+                    addReplacement(replacements, source ?
+                        `<img class="exported-media" src="${sanitizeHtml(source)}" alt="${sanitizeHtml(imageAlt)}">` :
+                        `<span class="media-placeholder">${sanitizeHtml(label)}</span>`);
                 element.replaceWith(createTextNode(element, replacement));
             });
         }
@@ -581,11 +760,14 @@
         }
 
         function cardLabel(element) {
+            const contentClone = element.cloneNode(true);
+            queryAll(contentClone, 'button, [data-testid*="copy"], [data-test-id*="copy"], [aria-label*="Copy"], [aria-label*="copy"]').forEach(action => action.remove());
             const candidates = [
                 element.getAttribute('aria-label'),
                 element.getAttribute('title'),
                 element.getAttribute('download'),
                 element.getAttribute('data-filename'),
+                getText(contentClone),
                 getText(element)
             ].filter(Boolean).map(normalizeWhitespace);
 
@@ -596,6 +778,13 @@
                 .trim();
         }
 
+        function cardHref(element) {
+            const link = matches(element, 'a[href]') ? element : element.querySelector('a[href]');
+            if (!link) return '';
+            const href = String(link.getAttribute('href') || link.href || '').trim();
+            return isUnsafeHref(href) ? '' : href;
+        }
+
         function processCards(clone, format, replacements) {
             const cards = topLevelElements(Array.from(clone.querySelectorAll('*')).filter(element => {
                 const kind = cardSignal(element);
@@ -603,6 +792,9 @@
                 if (matches(element, '[data-message-author-role], user-query, model-response')) return false;
                 if (element.closest('pre, code, code-block, table')) return false;
                 if (element.querySelector('pre, code-block, table, user-query, model-response')) return false;
+                // Image attachment cards need to keep their actual media node so it
+                // can be embedded. Plain file cards are collapsed below.
+                if (element.querySelector('img, canvas, video, audio')) return false;
 
                 const text = normalizeWhitespace(getText(element));
                 const label = cardLabel(element);
@@ -613,9 +805,12 @@
                 const kind = cardSignal(card);
                 const label = cardLabel(card);
                 const text = label ? `[${kind}: ${label}]` : `[${kind}]`;
-                const replacement = format === 'markdown'
-                    ? text
-                    : addReplacement(replacements, `<span class="card-placeholder">${sanitizeHtml(text)}</span>`);
+                const href = cardHref(card);
+                const replacement = format === 'markdown' ?
+                    (href ? `[${escapeMarkdownLinkText(text.slice(1, -1))}](${escapeMarkdownUrl(href)})` : text) :
+                    addReplacement(replacements, href ?
+                        `<a class="card-placeholder" href="${sanitizeHtml(href)}">${sanitizeHtml(text)}</a>` :
+                        `<span class="card-placeholder">${sanitizeHtml(text)}</span>`);
                 card.replaceWith(createTextNode(card, replacement));
             });
         }
@@ -818,14 +1013,20 @@
             return `\n<div class="references"><strong>References:</strong><ol>${items}</ol></div>`;
         }
 
-        function serializeMessageContent(element, format) {
+        function serializeMessageContent(element, format, options = {}) {
             const clone = element.cloneNode(true);
             const replacements = [];
 
             annotatePreWrapElements(element, clone);
+            annotateMediaSources(element, clone);
             const citations = collectCitations(clone);
-            removeUiElements(clone);
+            // Cards implemented as buttons disappear with the rest of the UI if
+            // they are not converted first (issue #32).
             processCards(clone, format, replacements);
+            removeUiElements(clone);
+            if (options.stripMessageMetadata) {
+                queryAll(clone, MESSAGE_TIMESTAMP_SELECTOR).forEach(element => element.remove());
+            }
             processCodeBlocks(clone, format, replacements);
             processMath(clone);
             processMedia(clone, format, replacements);
@@ -859,13 +1060,20 @@
         }
 
         function meaningfulScore(element) {
-            const richCount = queryAll(element, 'pre, code-block, table, img, canvas, video, audio, annotation, script[type^="math/tex"]').length;
+            const richCount = richContentCount(element);
             return normalizeWhitespace(element.textContent).length + richCount * 200;
         }
 
+        function richContentCount(element) {
+            const structured = queryAll(element, 'pre, code-block, table, img, canvas, video, audio, annotation, script[type^="math/tex"]').length;
+            const cards = Array.from(element?.querySelectorAll?.('*') || []).filter(candidate => Boolean(cardSignal(candidate))).length;
+            return structured + cards;
+        }
+
         function isValidMessage(element) {
-            const text = normalizeWhitespace(element.textContent);
-            const richCount = queryAll(element, 'pre, code-block, table, img, canvas, video, audio, annotation, script[type^="math/tex"]').length;
+            const scope = messageScope(element);
+            const text = normalizeWhitespace(scope?.textContent);
+            const richCount = richContentCount(scope);
 
             if (text.length < 5 && richCount === 0) return false;
             if (text.length > 200000) return false;
@@ -909,14 +1117,18 @@
         }
 
         function selectContentRoot(messageElement, provider) {
-            const candidates = [messageElement];
+            const scope = messageScope(messageElement);
+            const roots = Array.from(new Set([messageElement, scope].filter(Boolean)));
+            const candidates = [...roots];
 
             provider.contentSelectors.forEach(selector => {
-                if (matches(messageElement, selector)) candidates.push(messageElement);
-                candidates.push(...queryAll(messageElement, selector));
+                roots.forEach(root => {
+                    if (matches(root, selector)) candidates.push(root);
+                    candidates.push(...queryAll(root, selector));
+                });
             });
 
-            return candidates
+            return Array.from(new Set(candidates))
                 .filter(Boolean)
                 .sort((a, b) => meaningfulScore(b) - meaningfulScore(a))[0] || messageElement;
         }
@@ -926,7 +1138,9 @@
             if (tag === 'user-query') return { sender: 'You', reliable: true };
             if (tag === 'model-response') return { sender: provider.assistantName, reliable: true };
 
-            const role = element.getAttribute('data-message-author-role') || element.getAttribute('data-author') || element.getAttribute('data-sender');
+            const roleCarrier = matches(element, '[data-message-author-role], [data-author], [data-sender]') ?
+                element : element.querySelector?.('[data-message-author-role], [data-author], [data-sender]');
+            const role = roleCarrier?.getAttribute('data-message-author-role') || roleCarrier?.getAttribute('data-author') || roleCarrier?.getAttribute('data-sender');
             if (role) {
                 const normalizedRole = role.toLowerCase();
                 if (normalizedRole === 'user') return { sender: 'You', reliable: true };
@@ -973,8 +1187,8 @@
 
         function captureMessage(state, messageElement, provider, format) {
             const contentRoot = selectContentRoot(messageElement, provider);
-            const content = serializeMessageContent(contentRoot, format);
-            const minLength = queryAll(contentRoot, 'pre, code-block, table, img, canvas, video, audio').length > 0 ? 3 : 10;
+            const content = serializeMessageContent(contentRoot, format, { stripMessageMetadata: true });
+            const minLength = richContentCount(contentRoot) > 0 ? 3 : 10;
 
             // Not captured — the caller must be free to try this element again once
             // the provider has filled it in.
@@ -986,14 +1200,19 @@
 
             const index = state.messages.length;
             const sender = identifySender(messageElement, index, provider);
-            state.messages.push({
+            const timestamp = extractMessageTimestamp(messageElement);
+            const messageId = providerMessageId(messageElement);
+            const message = {
                 sender: sender.sender,
                 senderType: sender.sender === 'You' ? 'user' : 'assistant',
                 reliableSender: sender.reliable,
                 content,
                 index,
                 order: conversationOffset(messageElement, state.container)
-            });
+            };
+            if (messageId) message.providerMessageId = messageId;
+            if (timestamp) Object.assign(message, timestamp);
+            state.messages.push(message);
             return true;
         }
 
@@ -1001,7 +1220,7 @@
         // sweep visits messages in whatever order the virtualizer mounts them, so
         // capture order is not conversation order.
         function conversationOffset(element, container) {
-            const rect = element.getBoundingClientRect?.();
+            const rect = messageScope(element)?.getBoundingClientRect?.();
             if (!rect) return 0;
             const scrolled = container ? container.scrollTop : (getWindow(element.ownerDocument)?.scrollY || 0);
             return rect.top + scrolled;
@@ -1040,6 +1259,367 @@
             };
         }
 
+        function chatGptConversationId(doc) {
+            try {
+                const url = new URL(doc.defaultView?.location?.href || '');
+                const match = url.pathname.match(/(?:^|\/)c\/([^/]+)/);
+                return match ? decodeURIComponent(match[1]) : '';
+            } catch (error) {
+                return '';
+            }
+        }
+
+        function payloadContentText(content) {
+            if (!content || !Array.isArray(content.parts)) return '';
+            return content.parts.map(part => {
+                if (typeof part === 'string') return part;
+                if (!part || typeof part !== 'object') return '';
+                if (typeof part.text === 'string') return part.text;
+                if (typeof part.content === 'string') return part.content;
+                return '';
+            }).filter(Boolean).join('\n\n').trim();
+        }
+
+        function activePayloadMessages(payload) {
+            const mapping = payload?.mapping;
+            if (!mapping || typeof mapping !== 'object') return [];
+
+            const entries = [];
+            const visited = new Set();
+            let nodeId = typeof payload.current_node === 'string' ? payload.current_node : '';
+            while (nodeId && !visited.has(nodeId)) {
+                const node = mapping[nodeId];
+                if (!node) break;
+                visited.add(nodeId);
+                entries.push({ nodeId, node, message: node.message });
+                nodeId = typeof node.parent === 'string' ? node.parent : '';
+            }
+
+            if (entries.length > 0) return entries.reverse().filter(entry => entry.message);
+
+            return Object.entries(mapping)
+                .map(([id, node]) => ({ nodeId: id, node, message: node?.message }))
+                .filter(entry => entry.message)
+                .sort((left, right) => Number(left.message.create_time || 0) - Number(right.message.create_time || 0));
+        }
+
+        function isMainPayloadMessage(entry) {
+            const message = entry?.message;
+            const role = message?.author?.role;
+            if (role !== 'user' && role !== 'assistant') return false;
+            if (message.metadata?.is_visually_hidden_from_conversation) return false;
+
+            const contentType = String(message.content?.content_type || '').toLowerCase();
+            return !['thoughts', 'reasoning_recap', 'code', 'execution_output', 'tool_result'].includes(contentType);
+        }
+
+        function payloadMessageMatches(conversation, entries) {
+            const mainEntries = entries.filter(isMainPayloadMessage);
+            const byId = new Map(mainEntries.map(entry => [String(entry.message.id || entry.nodeId), entry]));
+            const used = new Set();
+            const matches = new Map();
+            const positionalFallbackIsSafe = mainEntries.length === conversation.messages.length;
+
+            conversation.messages.forEach(message => {
+                let entry = message.providerMessageId ? byId.get(String(message.providerMessageId)) : null;
+                if (entry && used.has(entry)) entry = null;
+
+                if (!entry && positionalFallbackIsSafe) {
+                    entry = mainEntries.find(candidate => {
+                        if (used.has(candidate)) return false;
+                        const role = candidate.message.author?.role;
+                        return role === message.senderType;
+                    }) || null;
+                }
+
+                if (!entry) return;
+                used.add(entry);
+                matches.set(message, entry);
+            });
+
+            return matches;
+        }
+
+        function payloadReasoningRecaps(entries) {
+            const recaps = new Map();
+            let pending = [];
+
+            entries.forEach(entry => {
+                const message = entry.message;
+                const role = message?.author?.role;
+                const contentType = String(message?.content?.content_type || '').toLowerCase();
+
+                if (role === 'assistant' && contentType === 'reasoning_recap') {
+                    const text = payloadContentText(message.content);
+                    if (text) pending.push(text);
+                    return;
+                }
+
+                if (role === 'user') {
+                    pending = [];
+                    return;
+                }
+
+                if (role === 'assistant' && isMainPayloadMessage(entry) && pending.length > 0) {
+                    recaps.set(String(message.id || entry.nodeId), pending.join('\n\n'));
+                    pending = [];
+                }
+            });
+
+            return recaps;
+        }
+
+        function payloadAttachmentDescriptors(message) {
+            const descriptors = new Map();
+            const add = descriptor => {
+                if (!descriptor) return;
+                const key = descriptor.sandboxPath || descriptor.fileId || descriptor.name;
+                if (!key) return;
+                const existing = descriptors.get(key);
+                if (existing) {
+                    Object.entries(descriptor).forEach(([field, value]) => {
+                        if (!existing[field] && value) existing[field] = value;
+                    });
+                    return;
+                }
+                descriptors.set(key, descriptor);
+            };
+
+            (Array.isArray(message?.metadata?.attachments) ? message.metadata.attachments : []).forEach(attachment => {
+                const fileId = attachment?.id || attachment?.file_id || '';
+                const mimeType = String(attachment?.mime_type || attachment?.content_type || '');
+                add({
+                    kind: /^image\//i.test(mimeType) ? 'image' : 'file',
+                    fileId: String(fileId || ''),
+                    name: String(attachment?.name || attachment?.filename || fileId || ''),
+                    mimeType
+                });
+            });
+
+            (Array.isArray(message?.content?.parts) ? message.content.parts : []).forEach(part => {
+                if (!part || typeof part !== 'object') return;
+                const pointer = String(part.asset_pointer || part.file_id || '');
+                const fileId = String(part.file_id || pointer.match(/file-[a-z0-9_-]+/i)?.[0] || '');
+                const mimeType = String(part.mime_type || part.content_type || part.metadata?.mime_type || '');
+                const isImage = /^image\//i.test(mimeType) || /image/i.test(String(part.content_type || ''));
+                add({
+                    kind: isImage ? 'image' : 'file',
+                    fileId,
+                    name: String(part.name || part.filename || part.metadata?.name || fileId || ''),
+                    mimeType: /^image\//i.test(mimeType) ? mimeType : (isImage ? 'image/png' : mimeType)
+                });
+            });
+
+            const sandboxPattern = /sandbox:(\/mnt\/data\/[^\s)\]"'<>]+)/g;
+            for (const match of payloadContentText(message?.content).matchAll(sandboxPattern)) {
+                const sandboxPath = match[1].replace(/[.,;:!?*`]+$/, '');
+                const name = sandboxPath.split('/').filter(Boolean).pop() || 'Generated file';
+                add({ kind: 'sandbox', sandboxPath, name });
+            }
+
+            return Array.from(descriptors.values());
+        }
+
+        async function fetchWithTimeout(doc, input, init = {}, timeout = METADATA_FETCH_TIMEOUT) {
+            const win = getWindow(doc);
+            const fetcher = win?.fetch?.bind(win);
+            if (typeof fetcher !== 'function') return null;
+
+            const AbortControllerCtor = win?.AbortController || globalThis.AbortController;
+            const controller = typeof AbortControllerCtor === 'function' ? new AbortControllerCtor() : null;
+            const setTimer = win?.setTimeout?.bind(win) || setTimeout;
+            const clearTimer = win?.clearTimeout?.bind(win) || clearTimeout;
+            const timer = controller ? setTimer(() => controller.abort(), timeout) : null;
+
+            try {
+                return await fetcher(input, {
+                    credentials: 'include',
+                    cache: 'no-store',
+                    ...init,
+                    ...(controller ? { signal: controller.signal } : {})
+                });
+            } catch (error) {
+                return null;
+            } finally {
+                if (timer !== null) clearTimer(timer);
+            }
+        }
+
+        function metadataRequestTimeout(doc, options) {
+            const configured = options.metadataFetchTimeout ?? METADATA_FETCH_TIMEOUT;
+            if (!options.metadataDeadline) return configured;
+            return Math.max(0, Math.min(configured, options.metadataDeadline - now(getWindow(doc))));
+        }
+
+        async function fetchChatGptPayload(doc, options) {
+            if (options.chatGptMetadata === false) return null;
+            const conversationId = chatGptConversationId(doc);
+            if (!conversationId) return null;
+
+            let timeout = metadataRequestTimeout(doc, options);
+            if (timeout <= 0) return null;
+            const endpoint = `/backend-api/conversation/${encodeURIComponent(conversationId)}`;
+            let response = await fetchWithTimeout(doc, endpoint, {}, timeout);
+
+            // Some ChatGPT sessions require the bearer token that the page itself
+            // uses. Cookies alone work for others, so only pay for this fallback
+            // after an authorization failure.
+            if (response && (response.status === 401 || response.status === 403)) {
+                timeout = metadataRequestTimeout(doc, options);
+                if (timeout <= 0) return null;
+                const session = await fetchWithTimeout(doc, '/api/auth/session', {}, timeout);
+                const sessionData = session?.ok ? await session.json().catch(() => null) : null;
+                if (sessionData?.accessToken) {
+                    timeout = metadataRequestTimeout(doc, options);
+                    if (timeout <= 0) return null;
+                    response = await fetchWithTimeout(doc, endpoint, {
+                        headers: { Authorization: `Bearer ${sessionData.accessToken}` }
+                    }, timeout);
+                }
+            }
+
+            if (!response?.ok) return null;
+            try {
+                return await response.json();
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function imageMimeType(value) {
+            const mime = String(value || '').split(';')[0].trim().toLowerCase();
+            return /^image\/(?:png|jpe?g|gif|webp|avif|bmp)$/.test(mime) ? mime : '';
+        }
+
+        function bytesToDataUrl(bytes, mimeType, doc) {
+            const win = getWindow(doc);
+            const encode = win?.btoa?.bind(win) || (typeof btoa === 'function' ? btoa : null);
+            if (!encode) return '';
+
+            let binary = '';
+            for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+                binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+            }
+            return `data:${mimeType};base64,${encode(binary)}`;
+        }
+
+        async function fetchEmbeddedImage(doc, descriptor, options) {
+            if (!descriptor.fileId) return null;
+            let timeout = metadataRequestTimeout(doc, options);
+            if (timeout <= 0) return null;
+            const maxBytes = options.maxEmbeddedImageBytes ?? MAX_EMBEDDED_IMAGE_BYTES;
+            const endpoint = `/backend-api/files/download/${encodeURIComponent(descriptor.fileId)}?inline=true`;
+            let response = await fetchWithTimeout(doc, endpoint, {}, timeout);
+            if (!response?.ok) return null;
+
+            let contentType = String(response.headers?.get?.('content-type') || '');
+            if (/application\/json/i.test(contentType)) {
+                const metadata = await response.json().catch(() => null);
+                const downloadUrl = metadata?.download_url || metadata?.downloadUrl || metadata?.url;
+                if (!downloadUrl) return null;
+                let credentials = 'omit';
+                try {
+                    credentials = new URL(downloadUrl, doc.defaultView?.location?.href).origin === doc.defaultView?.location?.origin ? 'include' : 'omit';
+                } catch (error) {
+                    credentials = 'omit';
+                }
+                timeout = metadataRequestTimeout(doc, options);
+                if (timeout <= 0) return null;
+                response = await fetchWithTimeout(doc, downloadUrl, { credentials }, timeout);
+                if (!response?.ok) return null;
+                contentType = String(response.headers?.get?.('content-type') || '');
+            }
+
+            const mimeType = imageMimeType(contentType) || imageMimeType(descriptor.mimeType);
+            if (!mimeType) return null;
+            const declaredSize = Number(response.headers?.get?.('content-length') || 0);
+            if (declaredSize > maxBytes) return null;
+
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            if (bytes.byteLength === 0 || bytes.byteLength > maxBytes) return null;
+            const dataUrl = bytesToDataUrl(bytes, mimeType, doc);
+            return dataUrl ? { dataUrl, size: bytes.byteLength } : null;
+        }
+
+        function appendMessageEnrichment(message, markdown, html, needle) {
+            if (needle && message.content.includes(needle)) return;
+            message.content = `${message.content}${message.content ? '\n\n' : ''}${markdown !== null ? markdown : html}`.trim();
+        }
+
+        async function enrichChatGptConversation(conversation, doc, format, options) {
+            if (conversation.provider !== 'chatgpt') return conversation;
+
+            const started = now(getWindow(doc));
+            const ownDeadline = started + (options.metadataMaxDuration ?? METADATA_MAX_DURATION);
+            const metadataDeadline = options.metadataDeadline ? Math.min(options.metadataDeadline, ownDeadline) : ownDeadline;
+            const enrichmentOptions = { ...options, metadataDeadline };
+            const payload = await fetchChatGptPayload(doc, enrichmentOptions);
+            if (!payload) return conversation;
+
+            const entries = activePayloadMessages(payload);
+            const matches = payloadMessageMatches(conversation, entries);
+            const recaps = payloadReasoningRecaps(entries);
+            let embeddedBytes = 0;
+
+            for (const [message, entry] of matches.entries()) {
+                const nativeMessage = entry.message;
+                if (!message.timestamp) {
+                    const iso = timestampIso(nativeMessage.create_time);
+                    if (iso) {
+                        message.timestampIso = iso;
+                        message.timestamp = formatMessageTimestamp(iso, doc);
+                    }
+                }
+
+                const descriptors = payloadAttachmentDescriptors(nativeMessage);
+                if (descriptors.length > 0) message.attachments = descriptors;
+
+                for (const descriptor of descriptors) {
+                    const name = descriptor.name || (descriptor.kind === 'image' ? 'Image attachment' : 'File attachment');
+
+                    if (descriptor.kind === 'image') {
+                        let embedded = null;
+                        if (metadataRequestTimeout(doc, enrichmentOptions) > 0 && embeddedBytes < (options.maxTotalEmbeddedImageBytes ?? MAX_TOTAL_EMBEDDED_IMAGE_BYTES)) {
+                            embedded = await fetchEmbeddedImage(doc, descriptor, enrichmentOptions);
+                        }
+                        if (embedded && embeddedBytes + embedded.size <= (options.maxTotalEmbeddedImageBytes ?? MAX_TOTAL_EMBEDDED_IMAGE_BYTES)) {
+                            embeddedBytes += embedded.size;
+                            const markdown = `![${escapeMarkdownLinkText(name)}](${embedded.dataUrl})`;
+                            const html = `<figure class="embedded-image"><img class="exported-media" src="${sanitizeHtml(embedded.dataUrl)}" alt="${sanitizeHtml(name)}"><figcaption>${sanitizeHtml(name)}</figcaption></figure>`;
+                            appendMessageEnrichment(message, format === 'markdown' ? markdown : null, html, name);
+                        } else {
+                            const label = `[Image: ${name}]`;
+                            const html = `<span class="media-placeholder">${sanitizeHtml(label)}</span>`;
+                            appendMessageEnrichment(message, format === 'markdown' ? label : null, html, name);
+                        }
+                        continue;
+                    }
+
+                    if (descriptor.kind === 'sandbox') {
+                        const href = `sandbox:${descriptor.sandboxPath}`;
+                        const markdown = `[File: ${escapeMarkdownLinkText(name)}](${escapeMarkdownUrl(href)})`;
+                        const html = `<a class="card-placeholder" href="${sanitizeHtml(href)}">${sanitizeHtml(`[File: ${name}]`)}</a>`;
+                        appendMessageEnrichment(message, format === 'markdown' ? markdown : null, html, descriptor.sandboxPath);
+                        continue;
+                    }
+
+                    const label = `[File: ${name}]`;
+                    const html = `<span class="card-placeholder">${sanitizeHtml(label)}</span>`;
+                    appendMessageEnrichment(message, format === 'markdown' ? label : null, html, name);
+                }
+
+                const nativeId = String(nativeMessage.id || entry.nodeId);
+                const recap = recaps.get(nativeId);
+                if (recap && !message.content.includes(recap)) {
+                    const markdown = `**Reasoning:** ${recap}`;
+                    const html = `<div class="reasoning-recap"><strong>Reasoning:</strong> ${sanitizeHtml(recap).replace(/\n/g, '<br>')}</div>`;
+                    appendMessageEnrichment(message, format === 'markdown' ? markdown : null, html, recap);
+                }
+            }
+
+            return conversation;
+        }
+
         function extractConversation(options = {}) {
             const doc = resolveDocument(options.document);
             const provider = providerFor(options.provider, doc);
@@ -1050,7 +1630,10 @@
 
             // A single pass reads the DOM in document order already; drop the
             // ordering key so the message shape stays the same.
-            state.messages.forEach(message => delete message.order);
+            state.messages.forEach(message => {
+                delete message.order;
+                delete message.providerMessageId;
+            });
 
             return buildConversation(doc, provider, options, state.messages);
         }
@@ -1112,11 +1695,12 @@
         // signal; text prefix plus length covers providers without ids. Streaming
         // partials that slip through are still collapsed by contentHash dedupe.
         function messageKey(element) {
-            const id = element.getAttribute?.('data-message-id') || element.getAttribute?.('data-message-uuid');
+            const id = providerMessageId(element);
             if (id) return `id:${id}`;
 
-            const testId = element.getAttribute?.('data-testid') || element.getAttribute?.('data-test-id') || '';
-            const text = normalizeWhitespace(element.textContent);
+            const scope = messageScope(element);
+            const testId = scope?.getAttribute?.('data-testid') || scope?.getAttribute?.('data-test-id') || '';
+            const text = normalizeWhitespace(scope?.textContent);
             return `text:${testId}:${text.length}:${text.slice(0, 200)}`;
         }
 
@@ -1260,6 +1844,16 @@
             }
 
             const conversation = buildConversation(doc, provider, options, sortByConversationOrder(state.messages, provider));
+            if (!outOfTime()) {
+                try {
+                    await enrichChatGptConversation(conversation, doc, format, { ...options, metadataDeadline: deadline });
+                } catch (error) {
+                    // Metadata is an enhancement over the DOM capture. A changed
+                    // private endpoint must never prevent the conversation export.
+                    console.warn('[Chat Exporter] Per-message metadata could not be added:', error);
+                }
+            }
+            conversation.messages.forEach(message => delete message.providerMessageId);
 
             // Turns that were on screen but never became readable. Saying so beats
             // handing over a short file that looks complete.
@@ -1299,7 +1893,8 @@
             ];
 
             conversation.messages.forEach(message => {
-                lines.push(`### **${message.sender}**\n`, message.content, '\n---\n');
+                const timestamp = message.timestamp ? ` · ${message.timestamp}` : '';
+                lines.push(`### **${message.sender}**${timestamp}\n`, message.content, '\n---\n');
             });
 
             return `${lines.join('\n').trim()}\n`;
@@ -1314,9 +1909,11 @@
             const title = sanitizeHtml(conversation.title);
             const messages = conversation.messages.map(message => {
                 const senderClass = message.senderType === 'user' ? 'user' : 'assistant';
+                const timestamp = message.timestamp ?
+                    `<time${message.timestampIso ? ` datetime="${sanitizeHtml(message.timestampIso)}"` : ''}>${sanitizeHtml(message.timestamp)}</time>` : '';
                 return `
             <div class="message ${senderClass}">
-                <div class="sender">${sanitizeHtml(message.sender)}</div>
+                <div class="sender"><span>${sanitizeHtml(message.sender)}</span>${timestamp}</div>
                 <div class="content">${message.content}</div>
             </div>`;
             }).join('');
@@ -1376,10 +1973,26 @@
                 font-weight: 700;
                 color: #2c3e50;
                 margin-bottom: 0.5rem;
+                display: flex;
+                align-items: baseline;
+                justify-content: space-between;
+                gap: 1rem;
+            }
+            .sender time {
+                color: #667085;
+                font-size: 0.8rem;
+                font-weight: 400;
             }
             .content {
                 white-space: pre-wrap;
                 overflow-wrap: anywhere;
+            }
+            .exported-media {
+                display: block;
+                max-width: 100%;
+                height: auto;
+                margin: 0.75rem 0;
+                border-radius: 6px;
             }
             pre {
                 background: #f4f4f4;

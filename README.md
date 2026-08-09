@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.9.1-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.9.2-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -17,8 +17,10 @@ No install, no server, no account: everything runs locally in your browser.
 - 📝 Captures **all messages** with proper sender attribution
 - 📜 **Long conversations export fully**: the exporter auto-scrolls through virtualized (lazy-loaded) conversations so messages ChatGPT removed from the page are still captured
 - 🔗 **Web-search references included**: citation sources in a response are appended as a numbered **References** list, matching ChatGPT's own copy output
+- 🖼️ **Images are kept**: image-only turns are captured and images are embedded directly in Markdown, HTML, and PDF-ready exports when their bytes are available
+- 🕓 **Per-turn context included**: ChatGPT timestamps, uploaded/generated file references, download paths, and visible reasoning recaps are preserved when available
 - 🔤 **Faithful text**: prompt line breaks, indentation, and backslashes are preserved exactly as written — no re-flowed whitespace, no doubled `\` escapes
-- 🔧 Preserves **code blocks** (including CodeMirror), tables, MathJax/KaTeX equations, lists, links, media placeholders, and file/artifact cards
+- 🔧 Preserves **code blocks** (including CodeMirror), tables, MathJax/KaTeX equations, lists, links, media, and file/artifact cards
 - 📄 Exports to **Markdown**, **HTML**, or **printable PDF**
 - 🆕 **Google Gemini** conversation export support
 - 🔒 **Private by default**: exports show the provider label without embedding your exact conversation URL
@@ -78,13 +80,21 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.9.1
+## 🔧 What's New in v0.9.2
 
-- ✍️ **Exporting mid-answer waits for the answer to finish**: hit Export while ChatGPT is still writing and the file used to contain the reply cut off mid-sentence, with nothing to say so. The sweep now waits for the newest message to stop growing (bounded by the same deadline), and marks the export incomplete if it can't.
-- 🧪 **Gemini's auto-scroll path is now tested** — it has shipped since v0.8.0 with no coverage of its custom-element markup.
+- 🖼️ **Image-only messages no longer disappear** ([#33](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/33)): attachment media can live beside ChatGPT's otherwise empty role node. The exporter now reads the whole turn, embeds safe raster image data when possible, and falls back to the source image or an explicit placeholder instead of reporting the turn as unread.
+- 🕓 **Transcript context is preserved** ([#32](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/32)): per-message timestamps, uploaded filenames, generated `sandbox:/mnt/data` downloads, and visible reasoning recaps are included when ChatGPT exposes them.
+- 📎 **Button-backed file cards keep their labels and links**: file controls are serialized before generic interface buttons are stripped.
+- 🛟 **Metadata remains best-effort**: the normal DOM export still completes if ChatGPT's authenticated conversation or file endpoint is unavailable or changes.
+
 
 <details>
 <summary>📝 Previous updates</summary>
+
+### v0.9.1
+
+- ✍️ **Exporting mid-answer waits for the answer to finish**: hit Export while ChatGPT is still writing and the file used to contain the reply cut off mid-sentence, with nothing to say so. The sweep now waits for the newest message to stop growing (bounded by the same deadline), and marks the export incomplete if it can't.
+- 🧪 **Gemini's auto-scroll path is now tested** — it has shipped since v0.8.0 with no coverage of its custom-element markup.
 
 ### v0.9.0
 
@@ -198,7 +208,7 @@ scripts/build-exporters.js   ← generates the files below
 └── chatgpt-pdf-exporter.user.js        userscript + native export menus
 ```
 
-The engine finds messages through a cascade of selector strategies (data attributes → ARIA → semantic HTML → content heuristics), so it keeps working across ChatGPT and Gemini UI revisions. Rich content — code, tables, math, links, media — is converted through a processing pipeline that protects verbatim regions (code, pre-wrap prompts) from whitespace cleanup.
+The engine finds messages through a cascade of selector strategies (data attributes → ARIA → semantic HTML → content heuristics), so it keeps working across ChatGPT and Gemini UI revisions. Rich content — code, tables, math, links, media — is converted through a processing pipeline that protects verbatim regions (code, pre-wrap prompts) from whitespace cleanup. On ChatGPT, the async exporter also makes a bounded, best-effort request for the already-open conversation's metadata and attachment bytes so it can add timestamps and embed images; the DOM capture remains the fallback.
 
 ## 🧑‍💻 Development
 
@@ -214,7 +224,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🔐 Privacy & Security
 
-- Everything runs **locally in your browser**; no data leaves your machine
+- No conversation content is sent to this project or to a third-party service. ChatGPT exports may re-fetch the current conversation metadata and image bytes from **chatgpt.com itself**, using your existing signed-in session, so timestamps and attachments can be included.
 - Exports **omit your exact conversation URL** by default (the engine supports `includeSourceUrl: true` for explicit opt-in)
 - HTML/PDF output escapes all conversation content; unsafe link schemes (`javascript:`, `data:`) are never exported as links
 
@@ -222,6 +232,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 - **"No messages found"** — the site's DOM may have changed. Update to the latest exporter version; if it persists, [open an issue](https://github.com/rashidazarang/chatgpt-chat-exporter/issues) with your browser and a description of the page.
 - **Long conversation exports only a fragment, or turns come out in the wrong order** — **keep the ChatGPT tab visible while the export runs**: Chrome throttles timers and suspends rendering in a background tab, so the auto-scroll sweep can't load the turns it scrolls to (v0.8.3+ warns you in the console when this happens). Otherwise, update to v0.8.2+. v0.8.0 added the auto-scroll sweep for lazily-loaded conversations; v0.8.2 fixed sweeps that ended early and exports that were ordered by capture rather than by conversation. Leave the tab in the foreground while the sweep runs; the export downloads when it finishes.
+- **An image is shown as a link or placeholder instead of embedded data** — the exporter embeds safe raster images up to 20 MB each (50 MB total). If ChatGPT's authenticated file endpoint or the browser canvas cannot provide the bytes, the export keeps the HTTPS source or an explicit image placeholder rather than dropping the turn.
 - **Export actions don't appear** — confirm the userscript is enabled for `chatgpt.com`, reload the page, and open a conversation's **•••** or header **Share** menu. On accounts with no Share control (v0.8.1+), look for the floating **Export** button in the bottom-right corner instead; you can also force it on from the console with `ChatExporter.showLauncher()`, or export directly with `ChatExporter.markdown()` / `ChatExporter.pdf()`.
 - **Downloads blocked in the console** — some browsers require you to allow downloads/popups triggered from DevTools; the userscript method avoids this.
 
@@ -229,7 +240,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.9.1** (Current) - Waits for a streaming answer to finish before exporting; Gemini sweep coverage
+- **v0.9.2** (Current) - Embedded image/image-only turn support (#33); per-turn timestamps, uploaded/generated files, and visible reasoning recaps (#32)
+- **v0.9.1** - Waits for a streaming answer to finish before exporting; Gemini sweep coverage
 - **v0.9.0** - Whole-text dedupe (redrafts no longer collapse), incomplete-export reporting, sweep deadline, hidden-tab wait, scroll restored on failure
 - **v0.8.3** - Turns caught mid-render are retried instead of dropped; hidden-tab warning
 - **v0.8.2** - Conversation order preserved in long exports, sweeps no longer stop early, ••• menu entries visible on desktop, per-message "Share prompt" left native
