@@ -26,6 +26,36 @@ ${indent(engineSource, 4)}
 `;
 }
 
+// Paste-into-the-console health check. Generated from the same engine as the
+// exporters so it always reports on the selectors that actually ship.
+function doctor() {
+    return `${GENERATED_NOTICE}(() => {
+    'use strict';
+
+${indent(engineSource, 4)}
+
+    globalThis.ChatExporterEngine.diagnose().then(report => {
+        console.log('%c[Chat Exporter] Selector health — ' + report.provider + ' (engine ' + report.version + ')',
+            'font-weight:bold');
+        console.log('Messages found: ' + report.messagesFound +
+            ' · resolved selector: ' + (report.resolvedMessageSelector || 'none') +
+            ' · scroll container: ' + report.scrollContainer);
+        console.log('Title: "' + report.title.value + '" (via ' + report.title.resolvedBy + ')');
+        console.table(report.messageSelectors);
+        console.table(report.contentSelectors);
+        if (report.api) console.log('Private API:', report.api);
+        if (report.warnings.length) {
+            report.warnings.forEach(warning => console.warn('[Chat Exporter] ' + warning));
+        } else {
+            console.log('%cNo drift detected.', 'color:green');
+        }
+        globalThis.ChatExporterReport = report;
+        console.log('Full report saved to window.ChatExporterReport');
+    }).catch(error => console.error('[Chat Exporter] Health check failed.', error));
+})();
+`;
+}
+
 function userscriptHeader(name, version, description) {
     return `// ==UserScript==
 // @name         ${name}
@@ -67,6 +97,7 @@ const outputs = new Map([
     ['exporter-html.js', runner('chatgpt', 'html')],
     ['exporter-pdf.js', runner('chatgpt', 'pdf')],
     ['gemini-exporter-markdown.js', runner('gemini', 'markdown')],
+    ['selector-doctor.js', doctor()],
     ['chatgpt-markdown-exporter.user.js', userscript(
         'ChatGPT Chat Exporter - Markdown',
         'Export ChatGPT conversations to Markdown or PDF from the native conversation menus'

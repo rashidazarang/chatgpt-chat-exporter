@@ -2499,8 +2499,22 @@
         };
     });
 
-    globalThis.ChatExporterEngine.exportConversationFull({
-        provider: 'gemini',
-        format: 'markdown'
-    }).catch(error => console.error('[Chat Exporter] Export failed.', error));
+    globalThis.ChatExporterEngine.diagnose().then(report => {
+        console.log('%c[Chat Exporter] Selector health — ' + report.provider + ' (engine ' + report.version + ')',
+            'font-weight:bold');
+        console.log('Messages found: ' + report.messagesFound +
+            ' · resolved selector: ' + (report.resolvedMessageSelector || 'none') +
+            ' · scroll container: ' + report.scrollContainer);
+        console.log('Title: "' + report.title.value + '" (via ' + report.title.resolvedBy + ')');
+        console.table(report.messageSelectors);
+        console.table(report.contentSelectors);
+        if (report.api) console.log('Private API:', report.api);
+        if (report.warnings.length) {
+            report.warnings.forEach(warning => console.warn('[Chat Exporter] ' + warning));
+        } else {
+            console.log('%cNo drift detected.', 'color:green');
+        }
+        globalThis.ChatExporterReport = report;
+        console.log('Full report saved to window.ChatExporterReport');
+    }).catch(error => console.error('[Chat Exporter] Health check failed.', error));
 })();

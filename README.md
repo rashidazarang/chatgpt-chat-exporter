@@ -80,17 +80,25 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.9.3
+## 🔧 What's New in v0.9.4
+
+Hardening pass over the provider layer — both ChatGPT and Gemini read against the live sites. ([release notes](temporal/release-notes-v0.9.4.md))
+
+- 🏷️ **Gemini exports no longer carry Google's tab suffix**: every Gemini title selector misses on the live site, so the title came from the tab — including its `" - Google Gemini"` ending, which landed in the exported heading *and* the download filename.
+- 🧩 **A "turn" is now a per-provider concept**: the wrapper that owns a message was hardcoded to ChatGPT's, so the v0.9.2 fix for media rendered *beside* a message could never apply to Gemini. Gemini's own pair wrapper holds a question **and** its answer — adopting it would have prefixed every answer with its question, so Gemini's turn is correctly its message element. Pinned by a regression test.
+- 🩺 **New `selector-doctor.js`**: paste it into the console on either provider and it reports what each shipped selector actually matches, which one is carrying the page, and whether ChatGPT's private API authenticates. It warns when a cascade is still working but only on a fallback — what silent drift looks like one release before it breaks.
+- 🕓 **Worth knowing:** neither site exposes per-message timestamps in the DOM. ChatGPT's come from the conversation payload — so the v0.9.3 bug meant **every export before it shipped with no timestamps at all**.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.9.3
 
 - 🔑 **`404 (Not Found)` on `backend-api/conversation/…` is fixed**: chatgpt.com's private API doesn't accept cookies alone — it wants the same bearer token the app itself uses — and it reports a request without one as a **404**, not a 401. v0.9.2 only retried with the token after a 401/403, so the retry never ran: every export silently lost its metadata pass and left a red error in the console. The token is now read up front and attached to every request, so the failing call isn't made at all. ([release notes](temporal/release-notes-v0.9.3.md))
 - 🏢 **Team/Business/Enterprise conversations**: a refused read now retries as each workspace you can act as, which a workspace-owned conversation requires.
 - 🖼️ **Attachment images can actually be embedded**: the file endpoint was the one private-API call sending no credentials at all, and it reports failure as HTTP **200** with an error body — both now handled.
 - 🔒 **Your session can't follow a download link off-origin**: signed file links point at a third-party CDN, so credentials are attached only on a same-origin hop.
 - 💬 **A skipped metadata pass explains itself** — which cause, and that the conversation itself exported fine — instead of leaving you a bare network error.
-
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.9.2
 
@@ -238,7 +246,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## ❓ Troubleshooting
 
-- **"No messages found"** — the site's DOM may have changed. Update to the latest exporter version; if it persists, [open an issue](https://github.com/rashidazarang/chatgpt-chat-exporter/issues) with your browser and a description of the page.
+- **"No messages found"** — the site's DOM may have changed. Update to the latest exporter version; if it persists, paste **[selector-doctor.js](selector-doctor.js)** into the same console — it reports which selectors still match on that page — and [open an issue](https://github.com/rashidazarang/chatgpt-chat-exporter/issues) with that output, your browser, and a description of the page.
 - **Long conversation exports only a fragment, or turns come out in the wrong order** — **keep the ChatGPT tab visible while the export runs**: Chrome throttles timers and suspends rendering in a background tab, so the auto-scroll sweep can't load the turns it scrolls to (v0.8.3+ warns you in the console when this happens). Otherwise, update to v0.8.2+. v0.8.0 added the auto-scroll sweep for lazily-loaded conversations; v0.8.2 fixed sweeps that ended early and exports that were ordered by capture rather than by conversation. Leave the tab in the foreground while the sweep runs; the export downloads when it finishes.
 - **`GET https://chatgpt.com/backend-api/conversation/… 404 (Not Found)` in the console** — fixed in **v0.9.3**; update your copy of the exporter. ChatGPT reports a request that lacks the app's bearer token as a 404 rather than a 401, and versions before v0.9.3 only retried with the token after a 401, so the retry never ran. The export itself was never affected — only the optional per-turn metadata (timestamps, attachment names, reasoning recaps) was lost. If v0.9.3 still can't read it, the console now says why: signed out, refused, or a conversation with no stored copy (a temporary chat, a shared link, or a deleted conversation).
 - **An image is shown as a link or placeholder instead of embedded data** — the exporter embeds safe raster images up to 20 MB each (50 MB total). If ChatGPT's authenticated file endpoint or the browser canvas cannot provide the bytes, the export keeps the HTTPS source or an explicit image placeholder rather than dropping the turn.
@@ -249,7 +257,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.9.3** (Current) - Fixes the `404` on `backend-api/conversation/…`: private-API calls now carry the page's bearer token up front, with workspace-account and signed-file-link handling
+- **v0.9.4** (Current) - Provider-layer hardening: per-provider turn scope, Gemini title/filename suffix fixed, new `selector-doctor.js` health check
+- **v0.9.3** - Fixes the `404` on `backend-api/conversation/…`: private-API calls now carry the page's bearer token up front, with workspace-account and signed-file-link handling
 - **v0.9.2** - Embedded image/image-only turn support (#33); per-turn timestamps, uploaded/generated files, and visible reasoning recaps (#32)
 - **v0.9.1** - Waits for a streaming answer to finish before exporting; Gemini sweep coverage
 - **v0.9.0** - Whole-text dedupe (redrafts no longer collapse), incomplete-export reporting, sweep deadline, hidden-tab wait, scroll restored on failure

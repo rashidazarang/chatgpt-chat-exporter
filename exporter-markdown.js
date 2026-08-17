@@ -17,7 +17,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.9.3';
+        const ENGINE_VERSION = '0.9.4';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -37,6 +37,11 @@
         // through) the internal block placeholders used during serialization.
         const MARKER_PREFIX = `__CHAT_EXPORTER_BLOCK_${Math.random().toString(36).slice(2, 10)}_`;
 
+        // The element that owns one turn — the message plus whatever the provider
+        // renders beside it. ChatGPT puts uploaded media outside the role node, so
+        // the turn wrapper is what has to be read (issues #32, #33). This is a
+        // per-provider concept and lives in PROVIDERS below; a provider whose
+        // message element *is* the whole turn names that element instead.
         const CHATGPT_TURN_SELECTOR = [
             'section[data-testid^="conversation-turn-"]',
             'article[data-testid*="conversation-turn"]',
@@ -44,6 +49,13 @@
             'div[data-testid="conversation-turn"]',
             '.group\\/conversation-turn'
         ].join(', ');
+
+        // Gemini's own wrapper, .conversation-container, holds a *pair* — one
+        // user-query and one model-response. Scoping a message to it would hand
+        // both turns to selectContentRoot, which sorts candidates by text length:
+        // the pair would win and every answer would be prefixed with its question.
+        // The message element is the turn here.
+        const GEMINI_TURN_SELECTOR = 'user-query, model-response';
 
         const MESSAGE_TIMESTAMP_SELECTOR = [
             'time[datetime]',
@@ -81,6 +93,8 @@
                 sourceLabel: 'chatgpt.com',
                 defaultTitle: 'Conversation with ChatGPT',
                 genericTitlePattern: /^(chatgpt|new chat|untitled|chat)$/i,
+                turnSelector: CHATGPT_TURN_SELECTOR,
+                documentTitleSuffix: /\s*[-–—|]\s*ChatGPT\s*$/i,
                 messageSelectors: [
                     'div[data-message-author-role]',
                     'article[data-testid*="conversation-turn"]',
@@ -105,6 +119,11 @@
                 sourceLabel: 'gemini.google.com',
                 defaultTitle: 'Conversation with Gemini',
                 genericTitlePattern: /^(gemini|new chat|untitled|chat|bard)$/i,
+                turnSelector: GEMINI_TURN_SELECTOR,
+                // Live Gemini titles its tab "<name> - Google Gemini"; every
+                // titleSelector below misses, so that suffix reached the export
+                // and the filename verbatim.
+                documentTitleSuffix: /\s*[-–—|]\s*(?:Google\s+)?Gemini\s*$/i,
                 messageSelectors: [
                     'user-query, model-response',
                     '[data-test-id="conversation-turn"]',
@@ -160,17 +179,18 @@
             return String(value ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
         }
 
-        function messageScope(element) {
-            if (!element || typeof element.closest !== 'function') return element;
+        function messageScope(element, provider) {
+            const selector = provider?.turnSelector;
+            if (!element || !selector || typeof element.closest !== 'function') return element;
             try {
-                return element.closest(CHATGPT_TURN_SELECTOR) || element;
+                return element.closest(selector) || element;
             } catch (error) {
                 return element;
             }
         }
 
-        function providerMessageId(element) {
-            const scope = messageScope(element);
+        function providerMessageId(element, provider) {
+            const scope = messageScope(element, provider);
             const carrier = [element, scope, scope?.querySelector?.('[data-message-id], [data-message-uuid]')]
                 .find(candidate => candidate?.getAttribute?.('data-message-id') || candidate?.getAttribute?.('data-message-uuid'));
             return carrier?.getAttribute('data-message-id') || carrier?.getAttribute('data-message-uuid') || '';
@@ -211,8 +231,8 @@
             }
         }
 
-        function extractMessageTimestamp(element) {
-            const scope = messageScope(element);
+        function extractMessageTimestamp(element, provider) {
+            const scope = messageScope(element, provider);
             const timeElement = scope?.querySelector?.(MESSAGE_TIMESTAMP_SELECTOR) || null;
             const sources = [timeElement, element, scope].filter(Boolean);
             let raw = '';
@@ -1086,8 +1106,8 @@
             return structured + cards;
         }
 
-        function isValidMessage(element) {
-            const scope = messageScope(element);
+        function isValidMessage(element, provider) {
+            const scope = messageScope(element, provider);
             const text = normalizeWhitespace(scope?.textContent);
             const richCount = richContentCount(scope);
 
@@ -1102,7 +1122,7 @@
 
         function findMessages(doc, provider) {
             for (const selector of provider.messageSelectors) {
-                const messages = topLevelElements(queryAll(doc, selector)).filter(isValidMessage);
+                const messages = topLevelElements(queryAll(doc, selector)).filter(element => isValidMessage(element, provider));
                 if (messages.length > 0) {
                     console.log(`[Chat Exporter] ${provider.id}: using selector "${selector}" (${messages.length} messages)`);
                     return messages;
@@ -1112,13 +1132,13 @@
             const container = doc.querySelector('[role="main"], main, [class*="conversation"], [class*="chat"]');
             if (!container) return [];
 
-            return topLevelElements(queryAll(container, ':scope > article, :scope > section, :scope > div')).filter(isValidMessage);
+            return topLevelElements(queryAll(container, ':scope > article, :scope > section, :scope > div')).filter(element => isValidMessage(element, provider));
         }
 
         // The selector that currently matches at least one real message, or null.
         function resolveMessageSelector(doc, provider) {
             for (const selector of provider.messageSelectors) {
-                if (topLevelElements(queryAll(doc, selector)).some(isValidMessage)) return selector;
+                if (topLevelElements(queryAll(doc, selector)).some(element => isValidMessage(element, provider))) return selector;
             }
             return null;
         }
@@ -1133,7 +1153,7 @@
         }
 
         function selectContentRoot(messageElement, provider) {
-            const scope = messageScope(messageElement);
+            const scope = messageScope(messageElement, provider);
             const roots = Array.from(new Set([messageElement, scope].filter(Boolean)));
             const candidates = [...roots];
 
@@ -1216,15 +1236,15 @@
 
             const index = state.messages.length;
             const sender = identifySender(messageElement, index, provider);
-            const timestamp = extractMessageTimestamp(messageElement);
-            const messageId = providerMessageId(messageElement);
+            const timestamp = extractMessageTimestamp(messageElement, provider);
+            const messageId = providerMessageId(messageElement, provider);
             const message = {
                 sender: sender.sender,
                 senderType: sender.sender === 'You' ? 'user' : 'assistant',
                 reliableSender: sender.reliable,
                 content,
                 index,
-                order: conversationOffset(messageElement, state.container)
+                order: conversationOffset(messageElement, state.container, provider)
             };
             if (messageId) message.providerMessageId = messageId;
             if (timestamp) Object.assign(message, timestamp);
@@ -1235,8 +1255,8 @@
         // Where a message sits in the whole conversation, not in the viewport: the
         // sweep visits messages in whatever order the virtualizer mounts them, so
         // capture order is not conversation order.
-        function conversationOffset(element, container) {
-            const rect = messageScope(element)?.getBoundingClientRect?.();
+        function conversationOffset(element, container, provider) {
+            const rect = messageScope(element, provider)?.getBoundingClientRect?.();
             if (!rect) return 0;
             const scrolled = container ? container.scrollTop : (getWindow(element.ownerDocument)?.scrollY || 0);
             return rect.top + scrolled;
@@ -1879,11 +1899,11 @@
         // Stable identity across scroll snapshots. Message ids are the reliable
         // signal; text prefix plus length covers providers without ids. Streaming
         // partials that slip through are still collapsed by contentHash dedupe.
-        function messageKey(element) {
-            const id = providerMessageId(element);
+        function messageKey(element, provider) {
+            const id = providerMessageId(element, provider);
             if (id) return `id:${id}`;
 
-            const scope = messageScope(element);
+            const scope = messageScope(element, provider);
             const testId = scope?.getAttribute?.('data-testid') || scope?.getAttribute?.('data-test-id') || '';
             const text = normalizeWhitespace(scope?.textContent);
             return `text:${testId}:${text.length}:${text.slice(0, 200)}`;
@@ -1909,12 +1929,12 @@
             const capture = () => {
                 messageSelector = messageSelector || resolveMessageSelector(doc, provider);
                 findMessageCandidates(doc, messageSelector).forEach(messageElement => {
-                    const key = messageKey(messageElement);
+                    const key = messageKey(messageElement, provider);
                     if (seenKeys.has(key)) return;
                     // A virtualizer mounts the turn before it fills in the text, so
                     // a message seen empty must stay eligible for a later pass —
                     // marking it seen here would drop it from the export for good.
-                    if (isValidMessage(messageElement) && captureMessage(state, messageElement, provider, format)) {
+                    if (isValidMessage(messageElement, provider) && captureMessage(state, messageElement, provider, format)) {
                         seenKeys.add(key);
                         pendingKeys.delete(key);
                         return;
@@ -2060,10 +2080,111 @@
                 if (title && !provider.genericTitlePattern.test(title)) return title;
             }
 
-            const docTitle = normalizeWhitespace(doc.title);
+            // Every titleSelector above misses on both live providers today, so the
+            // tab title is the real source — and Gemini appends its own name to it,
+            // which reached the exported title and the filename verbatim.
+            const rawTitle = String(doc.title || '');
+            const docTitle = normalizeWhitespace(
+                provider.documentTitleSuffix ? rawTitle.replace(provider.documentTitleSuffix, '') : rawTitle
+            );
             if (docTitle && !provider.genericTitlePattern.test(docTitle)) return docTitle;
 
             return provider.defaultTitle;
+        }
+
+        // ─── Selector health check ───────────────────────────────────────────────
+        // Provider markup drifts silently: an export keeps succeeding on a fallback
+        // selector until one day nothing matches and the failure reaches a user as
+        // "No messages found". Reading the real page is the only way to know, so
+        // this reports what each selector in the shipped cascade actually matches.
+        // It is generated into selector-doctor.js from this same source, which is
+        // what stops the check itself from drifting away from the exporters.
+
+        function describeSelector(doc, provider, selector) {
+            const matched = topLevelElements(queryAll(doc, selector));
+            const valid = matched.filter(element => isValidMessage(element, provider)).length;
+            return { selector, matched: matched.length, valid };
+        }
+
+        async function probeChatGptApi(doc, options) {
+            if (providerFor(options.provider, doc).id !== 'chatgpt') return null;
+            const conversationId = chatGptConversationId(doc);
+            if (!conversationId) return { conversationId: '', reason: 'no-conversation-id' };
+
+            const probeOptions = {
+                ...options,
+                metadataDeadline: now(getWindow(doc)) + (options.metadataMaxDuration ?? METADATA_MAX_DURATION),
+                chatGptAuth: createChatGptAuth(options)
+            };
+            const result = await fetchChatGptJson(
+                doc,
+                probeOptions,
+                `/backend-api/conversation/${encodeURIComponent(conversationId)}`
+            );
+            return {
+                conversationId,
+                reason: result.reason,
+                tokenObtained: Boolean(probeOptions.chatGptAuth.token),
+                accountScoped: Boolean(probeOptions.chatGptAuth.accountId),
+                payloadMessages: result.reason === 'ok'
+                    ? activePayloadMessages(result.body).filter(isMainPayloadMessage).length
+                    : 0
+            };
+        }
+
+        async function diagnose(options = {}) {
+            const doc = resolveDocument(options.document);
+            const provider = providerFor(options.provider, doc);
+            const container = findScrollContainer(doc, provider);
+            const messages = findMessages(doc, provider);
+
+            const titleSelector = provider.titleSelectors.find(selector => {
+                const title = normalizeWhitespace(doc.querySelector(selector)?.textContent);
+                return title && !provider.genericTitlePattern.test(title);
+            }) || null;
+
+            const report = {
+                version: ENGINE_VERSION,
+                provider: provider.id,
+                url: doc.defaultView?.location?.href || '',
+                hidden: Boolean(doc.hidden),
+                messageSelectors: provider.messageSelectors.map(selector => describeSelector(doc, provider, selector)),
+                resolvedMessageSelector: resolveMessageSelector(doc, provider),
+                contentSelectors: provider.contentSelectors.map(selector => ({
+                    selector,
+                    matched: queryAll(doc, selector).length
+                })),
+                turnSelector: {
+                    selector: provider.turnSelector,
+                    matched: queryAll(doc, provider.turnSelector).length
+                },
+                title: {
+                    resolvedBy: titleSelector || 'document.title fallback',
+                    value: extractConversationTitle(doc, provider),
+                    rawDocumentTitle: normalizeWhitespace(doc.title)
+                },
+                scrollContainer: container
+                    ? `${container.tagName.toLowerCase()} (${container.scrollHeight}px in ${container.clientHeight}px)`
+                    : 'none — single-pass export',
+                messagesFound: messages.length,
+                domTimestamps: queryAll(doc, MESSAGE_TIMESTAMP_SELECTOR).length
+            };
+
+            report.api = await probeChatGptApi(doc, options);
+
+            // A cascade that only matches on its last entry still works, and is
+            // exactly what a silent drift looks like one release before it breaks.
+            const winner = report.messageSelectors.findIndex(entry => entry.valid > 0);
+            report.warnings = [
+                report.messagesFound === 0 ? 'No messages matched any selector — the exporter would fail on this page.' : '',
+                winner > 0 ? `Falling back to selector #${winner + 1} of ${report.messageSelectors.length}; earlier entries no longer match.` : '',
+                !titleSelector ? 'Every titleSelector missed; the title comes from the tab.' : '',
+                report.api && report.api.reason !== 'ok' && report.api.reason !== 'no-conversation-id'
+                    ? `Per-message metadata is unavailable here (${report.api.reason}).` : '',
+                report.hidden ? 'This tab is in the background; a real export would be throttled.' : ''
+            ].filter(Boolean);
+
+            return report;
         }
 
         function renderMarkdown(conversation) {
@@ -2250,8 +2371,11 @@
             throw new Error(`Unsupported export format: ${format}`);
         }
 
-        function filenameFor(conversation, format, doc) {
-            const safeTitle = normalizeWhitespace(doc.title || conversation.title)
+        // The conversation title has already been through the provider's cascade
+        // and suffix cleanup; reading doc.title again here reintroduced whatever
+        // the provider stamps on the tab.
+        function filenameFor(conversation, format) {
+            const safeTitle = normalizeWhitespace(conversation.title)
                 .replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '')
                 .slice(0, 120)
                 .replace(/[. ]+$/, '');
@@ -2305,7 +2429,7 @@
             }
 
             const content = render(conversation, format);
-            const filename = options.filename || filenameFor(conversation, format, doc);
+            const filename = options.filename || filenameFor(conversation, format);
 
             if (options.download !== false) {
                 downloadFile(doc, content, filename, mimeFor(format));
@@ -2353,6 +2477,7 @@
             version: ENGINE_VERSION,
             providers: PROVIDERS,
             detectProvider,
+            diagnose,
             extractConversation,
             extractConversationFull,
             exportConversation,

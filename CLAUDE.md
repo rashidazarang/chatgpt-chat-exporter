@@ -12,6 +12,7 @@ ChatGPT Chat Exporter is a browser-based tool for exporting ChatGPT and Google G
 
 - `exporter-markdown.js`, `exporter-html.js`, `exporter-pdf.js` — ChatGPT console scripts
 - `gemini-exporter-markdown.js` — Gemini console script
+- `selector-doctor.js` — console health check for either provider's selector cascade
 - `src/userscript-ui.js` — native ChatGPT conversation-menu and Share-menu integration
 - `chatgpt-markdown-exporter.user.js`, `chatgpt-pdf-exporter.user.js` — generated userscripts with Markdown and PDF menu actions
 
@@ -24,6 +25,9 @@ Legacy directories `core/` and `archived/` are historical prototypes; they are n
 ### Engine design
 
 - **Provider adapters** (`PROVIDERS`): per-platform selector cascades for messages, content roots, and titles, tried in priority order (data attributes → ARIA/custom elements → semantic HTML → class heuristics)
+- **A turn is a provider concept, not a ChatGPT one** (`turnSelector`, `messageScope`): the wrapper that owns a message *and whatever renders beside it* differs per platform, so each provider declares its own and `messageScope` takes the provider. It must wrap **exactly one message**. Gemini's own `div.conversation-container` wraps a *pair* — one `user-query` plus one `model-response` — and adopting it would hand both to `selectContentRoot`, which ranks candidates by text length: the pair wins, every answer gets prefixed with its own question, and both messages collapse to one `messageKey` so the second is dropped as already seen. Gemini's turn *is* its message element
+- **The title cascade misses on both live providers** (verified 2026-08-17): every `titleSelectors` entry returns nothing on real ChatGPT and Gemini pages, so `document.title` is the actual source. Gemini stamps `" - Google Gemini"` on it, which reached the exported title and the filename verbatim — hence `documentTitleSuffix`. Do not "fix" this by loosening the selectors: on Gemini, `[class*="title"]` matches sidebar chrome ("Notebooks", "New notebook") and would export that as the conversation title. `filenameFor` takes the already-cleaned `conversation.title`, never `doc.title`
+- **`diagnose()` / `selector-doctor.js`**: a paste-into-the-console health check generated from this engine, so it reports on the selectors that actually ship. It flags the dangerous case — a cascade still working, but only on a late fallback entry, which is what silent drift looks like one release before it breaks
 - **Content pipeline** (`serializeMessageContent`): clone the message, annotate `white-space: pre-wrap` regions from computed style, strip UI chrome, then process cards → code blocks → math → media → links → tables before serializing to Markdown or HTML
 - **Verbatim protection**: code fences, display math, and pre-wrap prompt text bypass Markdown whitespace cleanup; pre-wrap text travels through collision-proof randomized placeholders (`MARKER_PREFIX`)
 - **Fidelity rules**: never backslash-escape inside code spans or code fences; inline backtick collisions use longer CommonMark delimiters; table cells escape only `|`
@@ -66,6 +70,12 @@ Tests live in `test/exporters.test.js` with synthetic DOM fixtures (`test/fixtur
 2. DevTools Console (F12) → paste the built exporter file → Enter
 3. Verify the downloaded export against the rendered conversation
 
+Before blaming the exporter — or before trusting a fixture — paste
+`selector-doctor.js` into the same console. It reports what each shipped
+selector matches on that page, which one is carrying it, whether the title came
+from a selector or the tab, and (on ChatGPT) whether the private API
+authenticates. The full report is left on `window.ChatExporterReport`.
+
 ### Live ChatGPT DOM notes (observed 2026-08-05, desktop Chrome)
 
 Verified by running the built userscript against a real conversation. Re-check
@@ -88,6 +98,30 @@ before trusting any of it — but do not assume a fixture reflects these:
   framing localhost is blocked — a userscript manager is the only sane way to
   load the exporter; for ad-hoc testing, CDP-evaluated *synchronous* `eval`
   works but anything after an `await` is subject to page CSP
+
+### Live Gemini DOM notes (observed 2026-08-17, desktop Chrome)
+
+Verified against a real signed-in conversation. Re-check before trusting it:
+
+- Messages are `user-query` / `model-response` custom elements — the first
+  entry of the cascade, still healthy. Every other entry
+  (`[data-test-id="conversation-turn"]`, `[data-message-author-role]`,
+  `[role="listitem"]`, …) matches **nothing**; they are dead weight kept as
+  insurance
+- Content roots `message-content`, `.query-text`, `.response-container` all
+  match, one per turn
+- `div.conversation-container` wraps **a question and its answer together** —
+  never use it as the turn scope (see the engine-design note above)
+- The scroll container is `infinite-scroller.chat-history`
+  (`overflow-y: scroll`), found at depth 2 from a message
+- **No per-message timestamps exist in the DOM** (`time[datetime]` and friends:
+  zero matches) — and Gemini has no private-API path, so Gemini exports carry
+  no timestamps at all. ChatGPT's also has none; its timestamps come entirely
+  from the conversation payload, which is why the metadata 404 meant *every*
+  ChatGPT export shipped without them
+- All `img` elements sit outside the message elements (avatars, product
+  chrome), so media serialization does not pick them up
+- The tab title is `"<conversation name> - Google Gemini"`
 
 ### Selector updates
 

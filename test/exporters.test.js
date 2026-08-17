@@ -1131,6 +1131,32 @@ test('file downloads authenticate to chatgpt.com and never leak the token to the
     assert.equal(cdn.credentials, 'omit');
 });
 
+test('a conversation inside a project is read by its own id', async () => {
+    const dom = payloadDom('https://chatgpt.com/g/g-p-68a1b2c3d4e5-workspace/c/conversation-api');
+    const backend = chatGptBackendStub();
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.metadataStatus, 'enriched');
+    const requested = backend.conversationCalls().map(call => call.url);
+    assert.ok(requested.every(url => url.endsWith('/backend-api/conversation/conversation-api')),
+        'the gizmo segment is part of the page route, not of the conversation id');
+});
+
+test('a shared link has no stored conversation to read, and asks for none', async () => {
+    const dom = payloadDom('https://chatgpt.com/share/e7c9a1b2-1111-2222-3333-444455556666');
+    const backend = chatGptBackendStub();
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.messages.length, 2, 'a shared page still exports from the DOM');
+    assert.equal(conversation.metadataStatus, 'unavailable');
+    assert.equal(backend.calls.length, 0,
+        'no conversation id means no request at all — not a request that can only fail');
+});
+
 test('the file endpoint reports failure as HTTP 200 with an error envelope', async () => {
     const dom = payloadDom();
     const backend = chatGptBackendStub();
@@ -1285,6 +1311,132 @@ test('ChatGPT PDF-ready exporter keeps printable code and table elements', async
     assert.match(content, /<pre class="code-block"><div class="code-language">javascript<\/div><code>function hi\(\) \{\n  return &quot;ok&quot;;\n\}<\/code><\/pre>/);
     assert.match(content, /<table><tr><th>Name<\/th><th>Value<\/th><\/tr><tr><td>alpha<\/td><td>1<\/td><\/tr><\/table>/);
     assert.doesNotMatch(content, /\[CODE\]/);
+});
+
+// Live Gemini (observed 2026-08-17) wraps each exchange in a single
+// div.conversation-container holding one user-query and one model-response.
+// Treating that wrapper as the turn scope would hand both messages to
+// selectContentRoot, which ranks candidates by text length — the pair would
+// win and every answer would be prefixed with its own question.
+function geminiPairContainerFixture() {
+    return `<!DOCTYPE html><html><head><title>Pair Container - Google Gemini</title></head><body><main>
+        <div class="conversation-container">
+            <user-query><div class="query-text">First question about the deployment pipeline.</div></user-query>
+            <model-response><message-content><div class="response-container">
+                <p>First answer describing the deployment pipeline.</p>
+            </div></message-content></model-response>
+        </div>
+        <div class="conversation-container">
+            <user-query><div class="query-text">Second question about rollback safety.</div></user-query>
+            <model-response><message-content><div class="response-container">
+                <p>Second answer describing rollback safety.</p>
+            </div></message-content></model-response>
+        </div>
+    </main></body></html>`;
+}
+
+test('the selector doctor reports a healthy page and names the drift on an unhealthy one', async () => {
+    const healthy = new JSDOM(readFixture('chatgpt-live-shapes.html'), { url: 'https://chatgpt.com/c/doctor-fixture' });
+    installInnerText(healthy.window);
+    healthy.window.fetch = async () => ({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({}) });
+
+    const good = await engine.diagnose({ document: healthy.window.document, provider: 'chatgpt' });
+    assert.equal(good.provider, 'chatgpt');
+    assert.ok(good.messagesFound > 0);
+    assert.equal(good.messageSelectors[0].valid, good.messagesFound,
+        'the preferred selector is the one carrying the page');
+    assert.ok(!good.warnings.some(warning => warning.includes('Falling back')));
+
+    // The failure this exists to catch: the data-attribute selector stops
+    // matching, an older class-based entry quietly takes over, and exports keep
+    // working until it too disappears.
+    const drifted = new JSDOM(`<!DOCTYPE html><html><head><title>Drifted</title></head><body><main>
+        <div class="group/conversation-turn"><p>A question long enough to count as a real message.</p></div>
+        <div class="group/conversation-turn"><p>An answer long enough to count as a real message.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/drift-fixture' });
+    installInnerText(drifted.window);
+    drifted.window.fetch = async () => null;
+
+    const bad = await engine.diagnose({ document: drifted.window.document, provider: 'chatgpt' });
+    assert.equal(bad.messageSelectors[0].valid, 0, 'the preferred data-attribute selector no longer matches');
+    assert.ok(bad.messagesFound > 0, 'the export still works, which is what makes the drift silent');
+    assert.ok(bad.warnings.some(warning => /Falling back to selector #4/.test(warning)),
+        'the doctor must name the fallback rather than report a clean bill of health');
+});
+
+test('the doctor reports each provider against its own turn scope', async () => {
+    const dom = new JSDOM(geminiPairContainerFixture(), { url: 'https://gemini.google.com/app/pair-fixture' });
+    installInnerText(dom.window);
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'gemini' });
+    assert.equal(report.provider, 'gemini');
+    assert.equal(report.turnSelector.selector, 'user-query, model-response');
+    assert.equal(report.turnSelector.matched, 4, 'Gemini scopes a turn to the message, not to the pair wrapper');
+    assert.equal(report.api, null, 'Gemini has no private-API surface to probe');
+    assert.equal(report.title.value, 'Pair Container');
+});
+
+test('a Gemini pair wrapper is not mistaken for a turn', async () => {
+    const dom = new JSDOM(geminiPairContainerFixture(), { url: 'https://gemini.google.com/app/pair-fixture' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'gemini',
+        format: 'markdown'
+    });
+
+    assert.equal(conversation.messages.length, 4, 'each user-query and model-response is its own turn');
+    assert.deepEqual(conversation.messages.map(message => message.sender), ['You', 'Gemini', 'You', 'Gemini']);
+
+    assert.match(conversation.messages[0].content, /First question about the deployment pipeline\./);
+    assert.ok(!conversation.messages[0].content.includes('First answer'),
+        'a question must not absorb the answer sharing its container');
+    assert.match(conversation.messages[1].content, /First answer describing the deployment pipeline\./);
+    assert.ok(!conversation.messages[1].content.includes('First question'),
+        'an answer must not be prefixed with its own question');
+
+    // Both messages in a pair would otherwise collapse to one key and the
+    // second would be dropped as already seen.
+    const keys = [...dom.window.document.querySelectorAll('user-query, model-response')]
+        .map(element => engine.internals.messageKey(element, engine.providers.gemini));
+    assert.equal(new Set(keys).size, 4, 'every message in a pair gets a distinct identity');
+});
+
+test('Gemini titles and filenames drop the vendor suffix the tab carries', async () => {
+    const dom = new JSDOM(geminiPairContainerFixture(), { url: 'https://gemini.google.com/app/pair-fixture' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'gemini',
+        format: 'markdown'
+    });
+
+    assert.equal(dom.window.document.title, 'Pair Container - Google Gemini');
+    assert.equal(conversation.title, 'Pair Container',
+        'every Gemini titleSelector misses live, so the tab title is the source — minus Google\'s suffix');
+    assert.match(engine.serializers.markdown(conversation), /^# Pair Container\n/);
+});
+
+test('ChatGPT keeps its own turn scope after the provider refactor', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Turn Scope</title></head><body><main>
+        <section data-testid="conversation-turn-2">
+            <div data-message-author-role="user" data-message-id="m1"></div>
+            <img src="https://example.com/sketch.png" alt="sketch.png">
+        </section>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/turn-scope' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(conversation.messages.length, 1,
+        'media beside an empty role node is still reached through the turn wrapper (issue #33)');
+    assert.match(conversation.messages[0].content, /!\[sketch\.png\]\(https:\/\/example\.com\/sketch\.png\)/);
 });
 
 test('Gemini markdown exporter uses current selectors and rich content extraction', async () => {
