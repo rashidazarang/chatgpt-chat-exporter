@@ -11,18 +11,25 @@ if met without context:
 
 - **They belong to a disjoint history.** `master` and the v1.x line share *no*
   commits — not a divergence, two separate roots. `master`'s root commit is
-  `63f7d51`, the v0.3.0 release; the v1.x line roots at `b65c59c`. The commits
-  survive only on the `rashidazarang-patch-1` / `rashidazarang-patch-2`
-  branches, which were never merged.
+  `63f7d51`, the v0.3.0 release; the v1.x line roots at `b65c59c`. That line
+  lived on the `rashidazarang-patch-1` / `rashidazarang-patch-2` branches,
+  which were never merged; the `legacy/` tags below are now what keeps it
+  reachable.
 - **The `1.x` numbers were never project versions.** They versioned the
   *userscript files* — see `temporal/release-notes-v0.3.0.md`, which refers to
   "`chatgpt-pdf-exporter.user.js` v1.1.0". The project's own line starts at
   v0.3.0 and has run forward from there.
 
-| tag | commit | date | on `master`? |
+| tag | commit | date | what it marks |
 | --- | --- | --- | --- |
-| `legacy/v1.0.0` | `6383eb9` "Add MIT license" | 2025-03-24 | no |
-| `legacy/v1.1.0` | `7b87008` "Add userscript versions…" | 2025-03-24 | no |
+| `legacy/v1.0.0` | `6383eb9` | 2025-03-24 | userscripts v1.0.0 — the original release |
+| `legacy/v1.1.0` | `7b87008` | 2025-03-24 | userscripts v1.1.0 |
+| `legacy/pre-restart-1` | `0a3b38f` | 2025-06-18 | head of the former `rashidazarang-patch-1` |
+| `legacy/pre-restart-2` | `60551fc` | 2025-06-25 | head of the former `rashidazarang-patch-2` |
+
+None of these is reachable from `master`. The last two exist so that deleting
+the abandoned branches costs nothing: between them they cover every commit
+those branches held.
 
 ## Why they were renamed
 
