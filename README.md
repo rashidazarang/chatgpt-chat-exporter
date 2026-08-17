@@ -80,16 +80,24 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.9.2
+## 🔧 What's New in v0.9.3
+
+- 🔑 **`404 (Not Found)` on `backend-api/conversation/…` is fixed**: chatgpt.com's private API doesn't accept cookies alone — it wants the same bearer token the app itself uses — and it reports a request without one as a **404**, not a 401. v0.9.2 only retried with the token after a 401/403, so the retry never ran: every export silently lost its metadata pass and left a red error in the console. The token is now read up front and attached to every request, so the failing call isn't made at all. ([release notes](temporal/release-notes-v0.9.3.md))
+- 🏢 **Team/Business/Enterprise conversations**: a refused read now retries as each workspace you can act as, which a workspace-owned conversation requires.
+- 🖼️ **Attachment images can actually be embedded**: the file endpoint was the one private-API call sending no credentials at all, and it reports failure as HTTP **200** with an error body — both now handled.
+- 🔒 **Your session can't follow a download link off-origin**: signed file links point at a third-party CDN, so credentials are attached only on a same-origin hop.
+- 💬 **A skipped metadata pass explains itself** — which cause, and that the conversation itself exported fine — instead of leaving you a bare network error.
+
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.9.2
 
 - 🖼️ **Image-only messages no longer disappear** ([#33](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/33)): attachment media can live beside ChatGPT's otherwise empty role node. The exporter now reads the whole turn, embeds safe raster image data when possible, and falls back to the source image or an explicit placeholder instead of reporting the turn as unread.
 - 🕓 **Transcript context is preserved** ([#32](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/32)): per-message timestamps, uploaded filenames, generated `sandbox:/mnt/data` downloads, and visible reasoning recaps are included when ChatGPT exposes them.
 - 📎 **Button-backed file cards keep their labels and links**: file controls are serialized before generic interface buttons are stripped.
 - 🛟 **Metadata remains best-effort**: the normal DOM export still completes if ChatGPT's authenticated conversation or file endpoint is unavailable or changes.
-
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.9.1
 
@@ -232,6 +240,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 - **"No messages found"** — the site's DOM may have changed. Update to the latest exporter version; if it persists, [open an issue](https://github.com/rashidazarang/chatgpt-chat-exporter/issues) with your browser and a description of the page.
 - **Long conversation exports only a fragment, or turns come out in the wrong order** — **keep the ChatGPT tab visible while the export runs**: Chrome throttles timers and suspends rendering in a background tab, so the auto-scroll sweep can't load the turns it scrolls to (v0.8.3+ warns you in the console when this happens). Otherwise, update to v0.8.2+. v0.8.0 added the auto-scroll sweep for lazily-loaded conversations; v0.8.2 fixed sweeps that ended early and exports that were ordered by capture rather than by conversation. Leave the tab in the foreground while the sweep runs; the export downloads when it finishes.
+- **`GET https://chatgpt.com/backend-api/conversation/… 404 (Not Found)` in the console** — fixed in **v0.9.3**; update your copy of the exporter. ChatGPT reports a request that lacks the app's bearer token as a 404 rather than a 401, and versions before v0.9.3 only retried with the token after a 401, so the retry never ran. The export itself was never affected — only the optional per-turn metadata (timestamps, attachment names, reasoning recaps) was lost. If v0.9.3 still can't read it, the console now says why: signed out, refused, or a conversation with no stored copy (a temporary chat, a shared link, or a deleted conversation).
 - **An image is shown as a link or placeholder instead of embedded data** — the exporter embeds safe raster images up to 20 MB each (50 MB total). If ChatGPT's authenticated file endpoint or the browser canvas cannot provide the bytes, the export keeps the HTTPS source or an explicit image placeholder rather than dropping the turn.
 - **Export actions don't appear** — confirm the userscript is enabled for `chatgpt.com`, reload the page, and open a conversation's **•••** or header **Share** menu. On accounts with no Share control (v0.8.1+), look for the floating **Export** button in the bottom-right corner instead; you can also force it on from the console with `ChatExporter.showLauncher()`, or export directly with `ChatExporter.markdown()` / `ChatExporter.pdf()`.
 - **Downloads blocked in the console** — some browsers require you to allow downloads/popups triggered from DevTools; the userscript method avoids this.
@@ -240,7 +249,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.9.2** (Current) - Embedded image/image-only turn support (#33); per-turn timestamps, uploaded/generated files, and visible reasoning recaps (#32)
+- **v0.9.3** (Current) - Fixes the `404` on `backend-api/conversation/…`: private-API calls now carry the page's bearer token up front, with workspace-account and signed-file-link handling
+- **v0.9.2** - Embedded image/image-only turn support (#33); per-turn timestamps, uploaded/generated files, and visible reasoning recaps (#32)
 - **v0.9.1** - Waits for a streaming answer to finish before exporting; Gemini sweep coverage
 - **v0.9.0** - Whole-text dedupe (redrafts no longer collapse), incomplete-export reporting, sweep deadline, hidden-tab wait, scroll restored on failure
 - **v0.8.3** - Turns caught mid-render are retried instead of dropped; hidden-tab warning

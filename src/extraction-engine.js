@@ -11,7 +11,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
     'use strict';
 
-    const ENGINE_VERSION = '0.9.2';
+    const ENGINE_VERSION = '0.9.3';
 
     // Pixels of slack when deciding the scroll container has reached its end.
     const BOTTOM_TOLERANCE = 4;
@@ -51,6 +51,22 @@
     const METADATA_MAX_DURATION = 15000;
     const MAX_EMBEDDED_IMAGE_BYTES = 20 * 1024 * 1024;
     const MAX_TOTAL_EMBEDDED_IMAGE_BYTES = 50 * 1024 * 1024;
+
+    // ChatGPT's private API is reached through the page's own session. The
+    // bearer token the app uses lives behind the session endpoint; the accounts
+    // endpoint names the workspaces the reader may act as.
+    const CHATGPT_SESSION_ENDPOINT = '/api/auth/session';
+    const CHATGPT_ACCOUNTS_ENDPOINT = '/backend-api/accounts/check/v4-2023-04-27';
+
+    // A refused request comes back as 404 carrying one of these codes instead
+    // of 401/403, so the status line alone cannot say why it failed.
+    const CHATGPT_AUTH_ERROR_CODES = new Set([
+        'conversation_inaccessible',
+        'account_deactivated',
+        'unauthorized',
+        'invalid_token',
+        'token_expired'
+    ]);
 
     const PROVIDERS = {
         chatgpt: {
@@ -1445,39 +1461,180 @@
         return Math.max(0, Math.min(configured, options.metadataDeadline - now(getWindow(doc))));
     }
 
-    async function fetchChatGptPayload(doc, options) {
-        if (options.chatGptMetadata === false) return null;
-        const conversationId = chatGptConversationId(doc);
-        if (!conversationId) return null;
-
-        let timeout = metadataRequestTimeout(doc, options);
-        if (timeout <= 0) return null;
-        const endpoint = `/backend-api/conversation/${encodeURIComponent(conversationId)}`;
-        let response = await fetchWithTimeout(doc, endpoint, {}, timeout);
-
-        // Some ChatGPT sessions require the bearer token that the page itself
-        // uses. Cookies alone work for others, so only pay for this fallback
-        // after an authorization failure.
-        if (response && (response.status === 401 || response.status === 403)) {
-            timeout = metadataRequestTimeout(doc, options);
-            if (timeout <= 0) return null;
-            const session = await fetchWithTimeout(doc, '/api/auth/session', {}, timeout);
-            const sessionData = session?.ok ? await session.json().catch(() => null) : null;
-            if (sessionData?.accessToken) {
-                timeout = metadataRequestTimeout(doc, options);
-                if (timeout <= 0) return null;
-                response = await fetchWithTimeout(doc, endpoint, {
-                    headers: { Authorization: `Bearer ${sessionData.accessToken}` }
-                }, timeout);
-            }
-        }
-
-        if (!response?.ok) return null;
+    async function readJsonBody(response) {
+        if (!response) return null;
         try {
             return await response.json();
         } catch (error) {
             return null;
         }
+    }
+
+    // Cookies alone are not enough for chatgpt.com's private API: a cookie-only
+    // read of a conversation the reader owns comes back as 404
+    // "conversation_inaccessible" — the same status a deleted conversation
+    // returns. Waiting for a 401 that never arrives meant the bearer-token
+    // retry never fired, so every export silently lost its metadata and left a
+    // red 404 in the console. The token is fetched up front instead, once per
+    // export, and reused for every private-API call in the pass.
+    function createChatGptAuth(options = {}) {
+        return {
+            token: typeof options.accessToken === 'string' ? options.accessToken : '',
+            accountId: typeof options.accountId === 'string' ? options.accountId : '',
+            sessionRead: false,
+            signedOut: false,
+            accountIds: null
+        };
+    }
+
+    function chatGptAuthHeaders(auth) {
+        const headers = {};
+        if (auth?.token) headers.Authorization = `Bearer ${auth.token}`;
+        // A workspace member acts as an account, not as themselves. Without
+        // this the backend scopes the lookup to their personal account and
+        // reports the workspace's own conversation as missing.
+        if (auth?.accountId) headers['ChatGPT-Account-Id'] = auth.accountId;
+        return headers;
+    }
+
+    async function readChatGptToken(doc, options, refresh = false) {
+        const auth = options.chatGptAuth;
+        if (!auth) return '';
+        if (!refresh && (auth.token || auth.sessionRead)) return auth.token;
+
+        const timeout = metadataRequestTimeout(doc, options);
+        if (timeout <= 0) return auth.token;
+
+        auth.sessionRead = true;
+        const response = await fetchWithTimeout(doc, CHATGPT_SESSION_ENDPOINT, {}, timeout);
+        // An unreachable session endpoint means "unknown", not "signed out" —
+        // a cookie-only attempt is still worth making in that case.
+        if (!response?.ok) return auth.token;
+
+        const session = await readJsonBody(response);
+        const token = typeof session?.accessToken === 'string' ? session.accessToken : '';
+        auth.signedOut = !token;
+        if (token) auth.token = token;
+        return auth.token;
+    }
+
+    async function readChatGptAccountIds(doc, options) {
+        const auth = options.chatGptAuth;
+        if (!auth) return [];
+        if (auth.accountIds) return auth.accountIds;
+        auth.accountIds = [];
+
+        const timeout = metadataRequestTimeout(doc, options);
+        if (timeout <= 0) return auth.accountIds;
+
+        const response = await fetchWithTimeout(doc, CHATGPT_ACCOUNTS_ENDPOINT, {
+            headers: chatGptAuthHeaders({ token: auth.token })
+        }, timeout);
+        if (!response?.ok) return auth.accountIds;
+
+        const payload = await readJsonBody(response);
+        const accounts = payload?.accounts && typeof payload.accounts === 'object' ? payload.accounts : {};
+        const ids = new Set();
+        Object.values(accounts).forEach(entry => {
+            const accountId = entry?.account?.account_id;
+            if (typeof accountId === 'string' && accountId) ids.add(accountId);
+        });
+        auth.accountIds = Array.from(ids);
+        return auth.accountIds;
+    }
+
+    function isChatGptAuthFailure(response, body) {
+        if (!response) return false;
+        if (response.status === 401 || response.status === 403) return true;
+        if (response.status !== 404) return false;
+
+        const detail = body?.detail;
+        const code = String(detail?.code || body?.error_code || '').toLowerCase();
+        if (CHATGPT_AUTH_ERROR_CODES.has(code)) return true;
+
+        const message = String(typeof detail === 'string' ? detail : detail?.message || body?.message || '');
+        return /log ?in|sign ?in|unauthori[sz]ed|not authenticated/i.test(message);
+    }
+
+    async function attemptChatGptJson(doc, options, endpoint) {
+        const timeout = metadataRequestTimeout(doc, options);
+        if (timeout <= 0) return { reason: 'timeout' };
+
+        const response = await fetchWithTimeout(doc, endpoint, {
+            headers: chatGptAuthHeaders(options.chatGptAuth)
+        }, timeout);
+        if (!response) return { reason: 'network' };
+
+        const body = await readJsonBody(response);
+        if (response.ok) return { reason: 'ok', body };
+        if (isChatGptAuthFailure(response, body)) return { reason: 'auth' };
+        return { reason: `status:${response.status}` };
+    }
+
+    // Escalates only as far as it has to: the token already in hand, then a
+    // fresh one in case the session rolled over mid-export, then each workspace
+    // the reader belongs to.
+    async function fetchChatGptJson(doc, options, endpoint) {
+        // Callers reaching this without a pass-scoped auth state get one rather
+        // than a TypeError; the state is what makes a single token serve every
+        // request in the export.
+        const auth = options.chatGptAuth || (options.chatGptAuth = createChatGptAuth(options));
+        await readChatGptToken(doc, options);
+        // No session means the request can only 404. Skipping it keeps a
+        // confusing error out of the reader's console.
+        if (auth.signedOut && !auth.token) return { reason: 'signed-out' };
+
+        let result = await attemptChatGptJson(doc, options, endpoint);
+        if (result.reason !== 'auth') return result;
+
+        const stale = auth.token;
+        const refreshed = await readChatGptToken(doc, options, true);
+        if (refreshed && refreshed !== stale) {
+            result = await attemptChatGptJson(doc, options, endpoint);
+            if (result.reason !== 'auth') return result;
+        }
+
+        for (const accountId of await readChatGptAccountIds(doc, options)) {
+            if (accountId === auth.accountId) continue;
+            auth.accountId = accountId;
+            result = await attemptChatGptJson(doc, options, endpoint);
+            if (result.reason !== 'auth') return result;
+        }
+
+        // Leaving the last losing account id in place would misdirect every
+        // later request in this pass.
+        auth.accountId = '';
+        return result;
+    }
+
+    function chatGptMetadataNote(reason) {
+        if (reason === 'signed-out') {
+            return 'this tab has no signed-in ChatGPT session';
+        }
+        if (reason === 'auth') {
+            return 'ChatGPT would not authorize the request for this conversation';
+        }
+        if (reason === 'timeout' || reason === 'network') {
+            return 'the request to ChatGPT did not complete in time';
+        }
+        return `ChatGPT answered ${String(reason).replace(/^status:/, 'HTTP ')} — a temporary chat, a shared link or a deleted conversation has no stored copy to read`;
+    }
+
+    async function fetchChatGptPayload(doc, options) {
+        if (options.chatGptMetadata === false) return null;
+        const conversationId = chatGptConversationId(doc);
+        if (!conversationId) return null;
+
+        const endpoint = `/backend-api/conversation/${encodeURIComponent(conversationId)}`;
+        const result = await fetchChatGptJson(doc, options, endpoint);
+        if (result.reason === 'ok') return result.body;
+
+        // This pass only adds timestamps, attachment names and reasoning
+        // recaps; the conversation itself is already captured from the DOM. A
+        // bare 404 in the console reads like a broken exporter, so name the
+        // cause and say the export is fine.
+        console.info(`[Chat Exporter] Per-message metadata was skipped: ${chatGptMetadataNote(result.reason)}. The conversation itself exported normally.`);
+        return null;
     }
 
     function imageMimeType(value) {
@@ -1497,29 +1654,47 @@
         return `data:${mimeType};base64,${encode(binary)}`;
     }
 
+    function isSameOrigin(doc, url) {
+        const location = getWindow(doc)?.location;
+        if (!location?.href) return false;
+        try {
+            return new URL(url, location.href).origin === location.origin;
+        } catch (error) {
+            return false;
+        }
+    }
+
     async function fetchEmbeddedImage(doc, descriptor, options) {
         if (!descriptor.fileId) return null;
         let timeout = metadataRequestTimeout(doc, options);
         if (timeout <= 0) return null;
         const maxBytes = options.maxEmbeddedImageBytes ?? MAX_EMBEDDED_IMAGE_BYTES;
         const endpoint = `/backend-api/files/download/${encodeURIComponent(descriptor.fileId)}?inline=true`;
-        let response = await fetchWithTimeout(doc, endpoint, {}, timeout);
+        // The same private API behind the same session: without the bearer
+        // token this hands back the signed-out shape rather than the file.
+        let response = await fetchWithTimeout(doc, endpoint, {
+            headers: chatGptAuthHeaders(options.chatGptAuth)
+        }, timeout);
         if (!response?.ok) return null;
 
         let contentType = String(response.headers?.get?.('content-type') || '');
         if (/application\/json/i.test(contentType)) {
-            const metadata = await response.json().catch(() => null);
+            const metadata = await readJsonBody(response);
+            // This endpoint reports failure as HTTP 200 with an error envelope,
+            // so response.ok says nothing about whether a file came back.
+            if (metadata?.status === 'error') return null;
             const downloadUrl = metadata?.download_url || metadata?.downloadUrl || metadata?.url;
             if (!downloadUrl) return null;
-            let credentials = 'omit';
-            try {
-                credentials = new URL(downloadUrl, doc.defaultView?.location?.href).origin === doc.defaultView?.location?.origin ? 'include' : 'omit';
-            } catch (error) {
-                credentials = 'omit';
-            }
+
+            // The link points at a signed CDN URL. Sending the bearer token
+            // there would hand the reader's ChatGPT credentials to a
+            // third-party host, so only a same-origin hop stays authenticated.
+            const sameOrigin = isSameOrigin(doc, downloadUrl);
             timeout = metadataRequestTimeout(doc, options);
             if (timeout <= 0) return null;
-            response = await fetchWithTimeout(doc, downloadUrl, { credentials }, timeout);
+            response = await fetchWithTimeout(doc, downloadUrl, sameOrigin
+                ? { credentials: 'include', headers: chatGptAuthHeaders(options.chatGptAuth) }
+                : { credentials: 'omit' }, timeout);
             if (!response?.ok) return null;
             contentType = String(response.headers?.get?.('content-type') || '');
         }
@@ -1546,9 +1721,18 @@
         const started = now(getWindow(doc));
         const ownDeadline = started + (options.metadataMaxDuration ?? METADATA_MAX_DURATION);
         const metadataDeadline = options.metadataDeadline ? Math.min(options.metadataDeadline, ownDeadline) : ownDeadline;
-        const enrichmentOptions = { ...options, metadataDeadline };
+        // One auth state for the whole pass: the conversation read discovers
+        // the working token and account, and every file download reuses them.
+        const enrichmentOptions = {
+            ...options,
+            metadataDeadline,
+            chatGptAuth: options.chatGptAuth || createChatGptAuth(options)
+        };
         const payload = await fetchChatGptPayload(doc, enrichmentOptions);
-        if (!payload) return conversation;
+        if (!payload) {
+            conversation.metadataStatus = 'unavailable';
+            return conversation;
+        }
 
         const entries = activePayloadMessages(payload);
         const matches = payloadMessageMatches(conversation, entries);
@@ -1611,6 +1795,7 @@
             }
         }
 
+        conversation.metadataStatus = 'enriched';
         return conversation;
     }
 

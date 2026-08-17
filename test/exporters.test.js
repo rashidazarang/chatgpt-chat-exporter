@@ -944,6 +944,217 @@ test('ChatGPT payload enrichment adds timestamps, attachments, generated files, 
     assert.match(conversation.messages[1].content, /\*\*Reasoning:\*\* Checked workbook formulas and output paths\./);
     assert.ok(requested.some(url => url.includes('/backend-api/files/download/file-image-api')),
         'image bytes are embedded from the authenticated file endpoint');
+    assert.equal(conversation.metadataStatus, 'enriched');
+});
+
+// ChatGPT refuses an unauthenticated read of a conversation the reader owns
+// with 404 "conversation_inaccessible" — the same status a deleted
+// conversation returns — so a retry keyed on 401/403 never fired and every
+// export lost its metadata behind a red console 404.
+function chatGptBackendStub(options = {}) {
+    const {
+        token = 'session-access-token',
+        requiredAccountId = '',
+        accountIds = [],
+        payload = chatGptConversationPayload(),
+        conversationStatus = null
+    } = options;
+
+    const calls = [];
+    const headersOf = map => ({ get: name => map[String(name).toLowerCase()] ?? null });
+    const json = (status, body) => ({
+        ok: status >= 200 && status < 300,
+        status,
+        headers: headersOf({ 'content-type': 'application/json' }),
+        json: async () => body
+    });
+    const refused = () => json(404, {
+        detail: {
+            message: 'Log in to view this conversation.',
+            code: 'conversation_inaccessible',
+            can_retry: false
+        }
+    });
+
+    const fetch = async (input, init = {}) => {
+        const url = String(input);
+        const headers = init.headers || {};
+        calls.push({ url, headers });
+
+        if (url.includes('/api/auth/session')) {
+            return json(200, token ? { accessToken: token, user: { id: 'reader' } } : { expires: '2099-01-01' });
+        }
+
+        if (url.includes('/backend-api/accounts/check/')) {
+            const accounts = {};
+            accountIds.forEach((id, index) => {
+                accounts[`workspace-${index}`] = { account: { account_id: id } };
+            });
+            accounts.default = { account: { account_id: 'personal-account' } };
+            return json(200, { accounts });
+        }
+
+        if (url.includes('/backend-api/conversation/')) {
+            if (conversationStatus) return json(conversationStatus.status, conversationStatus.body);
+            if (headers.Authorization !== `Bearer ${token}`) return refused();
+            if (requiredAccountId && headers['ChatGPT-Account-Id'] !== requiredAccountId) return refused();
+            return json(200, payload);
+        }
+
+        throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    return { fetch, calls, conversationCalls: () => calls.filter(call => call.url.includes('/backend-api/conversation/')) };
+}
+
+function payloadDom(url = 'https://chatgpt.com/c/conversation-api') {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Payload Fixture</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="message-user-api"><p>Review the uploaded diagram please.</p></div>
+        <div data-message-author-role="assistant" data-message-id="message-assistant-api"><p>Created the workbook.</p></div>
+    </main></body></html>`, { url });
+    installInnerText(dom.window);
+    return dom;
+}
+
+function extractWithBackend(dom, extra = {}) {
+    return engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false,
+        maxEmbeddedImageBytes: 4096,
+        ...extra
+    });
+}
+
+test('a 404 "conversation_inaccessible" is an auth failure, not a missing conversation', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub();
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.metadataStatus, 'enriched',
+        'the page bearer token must be used, not waited for behind a 401 that never comes');
+    assert.equal(conversation.messages[0].timestampIso, new Date(1781030820 * 1000).toISOString());
+    assert.match(conversation.messages[1].content, /\*\*Reasoning:\*\* Checked workbook formulas and output paths\./);
+
+    const unauthenticated = backend.conversationCalls().filter(call => !call.headers.Authorization);
+    assert.equal(unauthenticated.length, 0,
+        'a cookie-only attempt can only 404 — it must not be made, because the reader sees it as a console error');
+});
+
+test('no signed-in session means no doomed request to the private API', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub({ token: '' });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.messages.length, 2, 'the DOM export is unaffected by missing metadata');
+    assert.equal(conversation.metadataStatus, 'unavailable');
+    assert.equal(backend.conversationCalls().length, 0);
+});
+
+test('a genuinely missing conversation does not trigger the auth escalation', async () => {
+    const dom = payloadDom('https://chatgpt.com/c/deleted-conversation');
+    const backend = chatGptBackendStub({
+        conversationStatus: { status: 404, body: { detail: { code: 'conversation_not_found', message: 'Not found' } } }
+    });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.messages.length, 2);
+    assert.equal(conversation.metadataStatus, 'unavailable');
+    assert.equal(backend.conversationCalls().length, 1, 'one attempt, then stop — the conversation really is gone');
+    assert.ok(!backend.calls.some(call => call.url.includes('/accounts/check/')),
+        'workspace enumeration is for refused reads, not for missing conversations');
+});
+
+test('a workspace conversation is read with the account the reader acts as', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub({
+        requiredAccountId: 'workspace-account-id',
+        accountIds: ['workspace-account-id']
+    });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.metadataStatus, 'enriched');
+    assert.ok(backend.conversationCalls().some(call => call.headers['ChatGPT-Account-Id'] === 'workspace-account-id'),
+        'a Team/Enterprise conversation belongs to the workspace, not to the personal account');
+});
+
+test('file downloads authenticate to chatgpt.com and never leak the token to the CDN', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub();
+    const calls = backend.calls;
+    const cdnUrl = 'https://files.oaiusercontent.com/file-image-api?signature=abc';
+
+    dom.window.fetch = async (input, init = {}) => {
+        const url = String(input);
+        if (url.includes('/backend-api/files/download/')) {
+            calls.push({ url, headers: init.headers || {} });
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: name => (String(name).toLowerCase() === 'content-type' ? 'application/json' : null) },
+                json: async () => ({ status: 'success', download_url: cdnUrl })
+            };
+        }
+        if (url === cdnUrl) {
+            calls.push({ url, headers: init.headers || {}, credentials: init.credentials });
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: name => (String(name).toLowerCase() === 'content-type' ? 'image/png' : null) },
+                arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer
+            };
+        }
+        return backend.fetch(input, init);
+    };
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.match(conversation.messages[0].content, /!\[uploaded-diagram\.png\]\(data:image\/png;base64,iVBORw==\)/);
+
+    const download = calls.find(call => call.url.includes('/backend-api/files/download/'));
+    assert.ok(download?.headers.Authorization, 'the private file endpoint needs the same bearer token');
+
+    const cdn = calls.find(call => call.url === cdnUrl);
+    assert.ok(cdn, 'the signed download link is followed');
+    assert.ok(!cdn.headers.Authorization,
+        'the signed link is a third-party host — sending the bearer token there would hand over the reader session');
+    assert.equal(cdn.credentials, 'omit');
+});
+
+test('the file endpoint reports failure as HTTP 200 with an error envelope', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub();
+
+    dom.window.fetch = async (input, init = {}) => {
+        const url = String(input);
+        if (url.includes('/backend-api/files/download/')) {
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: name => (String(name).toLowerCase() === 'content-type' ? 'application/json' : null) },
+                json: async () => ({ status: 'error', error_code: 'file_not_found', error_type: 'GetDownloadLinkError', error_message: null })
+            };
+        }
+        return backend.fetch(input, init);
+    };
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.metadataStatus, 'enriched');
+    assert.match(conversation.messages[0].content, /\[Image: uploaded-diagram\.png\]/,
+        'a 200 that carries an error envelope must fall back to the placeholder, not embed the envelope');
+    assert.ok(!conversation.messages[0].content.includes('data:image'),
+        'no image bytes ever arrived');
 });
 
 test('ChatGPT metadata enrichment is bounded and never blocks the DOM export', async () => {
