@@ -1098,7 +1098,8 @@ test('ChatGPT payload enrichment adds timestamps, attachments, generated files, 
         provider: 'chatgpt',
         format: 'markdown',
         scroll: false,
-        awaitStreaming: false
+        awaitStreaming: false,
+        sourceFromPayload: false
     });
 
     assert.equal(conversation.messages.length, 2);
@@ -1183,6 +1184,10 @@ function payloadDom(url = 'https://chatgpt.com/c/conversation-api') {
     return dom;
 }
 
+// These exercise the DOM sweep and the payload repairs layered on top of it —
+// the path taken whenever the stored conversation is unavailable. Markdown now
+// prefers the payload outright, so this pins the fallback explicitly rather
+// than testing whichever path happens to be default.
 function extractWithBackend(dom, extra = {}) {
     return engine.extractConversationFull({
         document: dom.window.document,
@@ -1191,6 +1196,7 @@ function extractWithBackend(dom, extra = {}) {
         scroll: false,
         awaitStreaming: false,
         maxEmbeddedImageBytes: 4096,
+        sourceFromPayload: false,
         ...extra
     });
 }
@@ -1296,6 +1302,158 @@ test('file downloads authenticate to chatgpt.com and never leak the token to the
     assert.ok(!cdn.headers.Authorization,
         'the signed link is a third-party host — sending the bearer token there would hand over the reader session');
     assert.equal(cdn.credentials, 'omit');
+});
+
+// ── Payload-first Markdown ──────────────────────────────────────────────────
+// The payload is the markdown the model produced; the DOM is a rendering of it.
+// Reading the source avoids every scraping artifact and needs no scroll sweep.
+
+test('Markdown is read from the payload without touching the page', async () => {
+    // A page holding only the two newest turns, as a virtualizer would leave it.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Payload First</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="p5"><p>Only the newest turns are mounted.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/payload-first' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['p1','p2','p3','p4','p5','p6']) });
+    dom.window.fetch = backend.fetch;
+
+    // No scroll container is even offered — the payload path must not need one.
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.equal(conversation.source, 'payload');
+    assert.equal(conversation.messages.length, 6, 'the whole conversation, not the mounted fragment');
+    assert.equal(conversation.complete, true);
+    assert.equal(conversation.unreachedMessages, 0);
+    assert.ok(conversation.messages.every(message => message.source === 'payload'));
+    assert.deepEqual(conversation.messages.map(message => message.senderType),
+        ['user','assistant','user','assistant','user','assistant']);
+    assert.ok(conversation.messages.every(message => message.timestampIso),
+        'every message carries the payload timestamp');
+});
+
+test('ChatGPT citation markers become sources, not private-use garbage', async () => {
+    // Live payloads wrap citation markers in U+E200…U+E201. Rendered naively
+    // they appear as "citeturn1search0" mid-sentence.
+    const payload = payloadWithMessages(['c1', 'c2']);
+    payload.mapping['node-c2'].message.content.parts = [
+        'The repository corroborates this.\uE200cite\uE202turn1search0\uE201 That settles it.'
+    ];
+    payload.mapping['node-c2'].message.metadata.content_references = [{
+        matched_text: '\uE200cite\uE202turn1search0\uE201',
+        type: 'grouped_webpages',
+        items: [{ title: 'PROV-O: The PROV Ontology', url: 'https://www.w3.org/TR/prov-o/?utm_source=chatgpt.com' }]
+    }];
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+    const body = conversation.messages[1].content;
+
+    assert.ok(!/[\uE200-\uE20F]/.test(body), 'no private-use marker survives');
+    assert.ok(!body.includes('cite'), 'no raw marker text');
+    assert.match(body, /\[PROV-O: The PROV Ontology\]\(https:\/\/www\.w3\.org\/TR\/prov-o/,
+        'the citation reads as its real title — better than the DOM pill');
+    assert.match(body, /\*\*References:\*\*/, 'and is listed as a source');
+});
+
+// The private-use range must be written as an escaped range. Written with
+// literal characters it can collapse into a class that also matches "-", which
+// silently turns "grep-based" into "grepbased" throughout an export — a
+// corruption no structural check would catch.
+test('stripping citation markers never eats ordinary punctuation', async () => {
+    const payload = payloadWithMessages(['h1', 'h2']);
+    payload.mapping['node-h2'].message.content.parts = [
+        'A one-line digest beat grep-based search in the Pre-Registered study.\uE200cite\uE202turn0search1\uE201'
+    ];
+    payload.mapping['node-h2'].message.metadata.content_references = [{
+        matched_text: '\uE200cite\uE202turn0search1\uE201', items: []
+    }];
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+    const body = conversation.messages[1].content;
+
+    assert.match(body, /one-line digest beat grep-based search in the Pre-Registered study\./,
+        `hyphens must survive marker stripping, got: ${body}`);
+    assert.ok(!/[\uE200-\uE20F]/.test(body), 'the marker itself is gone');
+});
+
+test('an image-only turn survives the payload path', async () => {
+    // payloadContentText yields '' for a multimodal part, which used to drop the
+    // message entirely.
+    const payload = payloadWithMessages(['i1', 'i2']);
+    payload.mapping['node-i1'].message.content = {
+        content_type: 'multimodal_text',
+        parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'file-service://file-shot' }]
+    };
+    payload.mapping['node-i1'].message.metadata.attachments = [
+        { id: 'file-shot', name: 'screenshot.png', mime_type: 'image/png' }
+    ];
+
+    const dom = payloadDom();
+    dom.window.fetch = async (input, init) => {
+        if (String(input).includes('/backend-api/files/download/')) {
+            return { ok: true, status: 200,
+                headers: { get: name => (String(name).toLowerCase() === 'content-type' ? 'image/png' : null) },
+                arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer };
+        }
+        return chatGptBackendStub({ payload }).fetch(input, init);
+    };
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.equal(conversation.messages.length, 2, 'the image-only turn is not dropped');
+    assert.match(conversation.messages[0].content, /!\[screenshot\.png\]\(data:image\/png;base64,/);
+});
+
+test('the DOM sweep takes over whenever the payload cannot', async () => {
+    const cases = [
+        ['a shared link has no stored conversation', 'https://chatgpt.com/share/abc', {}],
+        ['HTML needs rendered markup, not markdown', 'https://chatgpt.com/c/html-case', { format: 'html' }],
+        ['metadata explicitly disabled', 'https://chatgpt.com/c/off-case', { chatGptMetadata: false }],
+        ['payload source explicitly disabled', 'https://chatgpt.com/c/opt-out', { sourceFromPayload: false }]
+    ];
+
+    for (const [why, url, extra] of cases) {
+        const dom = payloadDom(url);
+        dom.window.fetch = chatGptBackendStub().fetch;
+        const conversation = await engine.extractConversationFull({
+            document: dom.window.document, provider: 'chatgpt', format: 'markdown',
+            scroll: false, awaitStreaming: false, ...extra
+        });
+        assert.equal(conversation.source, 'dom', why);
+        assert.ok(conversation.messages.length > 0, `${why}: still exports`);
+    }
+});
+
+test('a refused payload falls back and is not requested twice', async () => {
+    const dom = payloadDom();
+    const backend = chatGptBackendStub({
+        conversationStatus: { status: 404, body: { detail: { code: 'conversation_not_found' } } }
+    });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown',
+        scroll: false, awaitStreaming: false
+    });
+
+    assert.equal(conversation.source, 'dom');
+    assert.equal(conversation.messages.length, 2, 'the page still exports');
+    assert.equal(backend.conversationCalls().length, 1,
+        'the fallback reuses what the first attempt learned rather than asking again');
 });
 
 test('a conversation inside a project is read by its own id', async () => {
@@ -1666,7 +1824,7 @@ test('a recovered message is escaped in HTML exports', async () => {
 
     const conversation = await engine.extractConversationFull({
         document: dom.window.document, provider: 'chatgpt', format: 'html',
-        scroll: false, awaitStreaming: false
+        scroll: false, awaitStreaming: false, sourceFromPayload: false
     });
 
     assert.equal(conversation.recoveredMessages, 1);
@@ -1954,6 +2112,40 @@ test('the doctor reports each provider against its own turn scope', async () => 
     assert.equal(report.turnSelector.matched, 4, 'Gemini scopes a turn to the message, not to the pair wrapper');
     assert.equal(report.api, null, 'Gemini has no private-API surface to probe');
     assert.equal(report.title.value, 'Pair Container');
+});
+
+// Live Gemini (2026-08-18) labels every turn for screen readers with
+// <span class="cdk-visually-hidden screen-reader-user-query-label">You said</span>
+// and an <h2> equivalent for the model. Verified against the live page: exactly
+// one such node per message, nine or twelve characters, nothing else lost.
+test('Gemini screen-reader turn labels never reach the export', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Etiquetas - Google Gemini</title></head><body><main>
+        <div class="conversation-container">
+            <user-query>
+                <span class="cdk-visually-hidden screen-reader-user-query-label">You said</span>
+                <div class="query-text">ayudame a escribir un mensaje para el equipo.</div>
+            </user-query>
+            <model-response>
+                <h2 class="cdk-visually-hidden screen-reader-model-response-label ng-star-inserted">Gemini said</h2>
+                <message-content><div class="response-container">
+                    <p>Propuesta de redacción para el segundo mensaje.</p>
+                </div></message-content>
+            </model-response>
+        </div>
+    </main></body></html>`, { url: 'https://gemini.google.com/app/labels' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document, provider: 'gemini', format: 'markdown'
+    });
+    const exported = engine.serializers.markdown(conversation);
+
+    assert.equal(conversation.messages.length, 2);
+    assert.ok(!exported.includes('You said'), 'the reader never sees this label; nor should the file');
+    assert.ok(!exported.includes('Gemini said'));
+    assert.match(exported, /ayudame a escribir un mensaje para el equipo\./);
+    assert.match(exported, /Propuesta de redacción para el segundo mensaje\./);
+    assert.equal(conversation.title, 'Etiquetas', 'and the vendor suffix still goes');
 });
 
 test('a Gemini pair wrapper is not mistaken for a turn', async () => {

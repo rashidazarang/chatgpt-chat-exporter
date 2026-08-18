@@ -409,10 +409,15 @@
         // Say so on the launcher, and don't let a second click start a second
         // sweep fighting the first one for the scroll position.
         let exportInFlight = false;
+        // The busy *state* still guards against a second sweep fighting the
+        // first for the scroll position — that is the part that matters. The
+        // label only speaks when there is no progress card saying it better.
         const setBusy = busy => {
             exportInFlight = busy;
             const label = doc.getElementById(LAUNCHER_ID)?.querySelector('span');
-            if (label) label.textContent = busy ? 'Exporting…' : 'Export';
+            if (!label) return;
+            const cardVisible = Boolean(options.progress && doc.getElementById('chat-exporter-progress'));
+            label.textContent = busy && !cardVisible ? 'Exporting…' : 'Export';
         };
         const exportSafely = format => {
             if (exportInFlight) return Promise.resolve();

@@ -21,7 +21,26 @@ ChatGPT Chat Exporter is a browser-based tool for exporting ChatGPT and Google G
 
 Userscript `@version` headers come from `package.json`'s `version` field.
 
-Legacy directories `core/` and `archived/` are historical prototypes; they are not part of the build.
+Reference docs live in `docs/`. The former `core/` and `archived/` prototype directories were removed in v0.12.0; they are in git history if ever needed.
+
+### Source of truth per format
+
+**Markdown from ChatGPT reads the payload; everything else reads the DOM.**
+
+The payload *is* the markdown the model produced — the DOM is a rendering of it.
+Scraping the rendering and then repairing the result from the source we could
+have read directly is what produced seven of the eight defects fixed in
+v0.9.3–v0.11.0. `canUsePayloadSource` gates it; any failure falls through to the
+sweep unchanged, and the fetched payload is handed along so it is never
+requested twice.
+
+The inversion is Markdown-only on purpose: HTML and PDF need rendered HTML,
+which the DOM provides natively and the payload would need a markdown parser to
+produce. Payload-first also needs **no sweep at all** — no scrolling, no
+virtualizer, no hidden-tab stall.
+
+- **Citation markers are private-use code points**: `U+E200 cite U+E202 turn1search0 U+E201`. Write the range as an **escaped** `[\uE200-\uE20F]`; with literal characters the class can collapse into one that also matches `-`, silently turning `grep-based` into `grepbased` across an entire export. `metadata.content_references[].items[]` carries the real title and URL — better than the DOM, where the same citation is a pill labelled "W3C+1"
+- **`payloadContentText` returns `''` for a multimodal part**: an image-only turn has its content in attachments, so callers must allow an empty body rather than dropping the message
 
 ### Engine design
 

@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.11.0-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.12.0-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -80,13 +80,28 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.11.0
+## 🔧 What's New in v0.12.0
 
-- 🧮 **Math from every renderer, and never twice.** TeX is now recovered from KaTeX, MathJax v3, `data-latex` attributes, and MathJax v2 scripts — the last of which had *never* worked, because the source was being stripped before math was processed. And when no TeX exists at all, the renderer's visual duplicate is dropped so a formula stops exporting as `f(x)f(x)`. ([release notes](temporal/release-notes-v0.11.0.md))
-- 🔀 **Earlier versions of regenerated or edited turns can be included.** They live in the conversation as replaced branches and were invisible to every export. Pass `includeVariants: true` to append them, labelled and in place. Off by default so nobody's existing export changes shape; when a conversation has them, the export tells you.
+**ChatGPT Markdown exports now read ChatGPT's own record of the conversation instead of scraping the page.** ([release notes](temporal/release-notes-v0.12.0.md))
+
+- ⚡ **No scrolling.** One request instead of 30–60 seconds of sweeping a long conversation — and no hidden-tab stall, because there is nothing to scroll.
+- ✅ **Complete by construction.** "Messages the sweep never reached" cannot happen: the payload *is* the conversation, not a sample of whatever was on screen.
+- 🔗 **Better citations.** Sources now carry their real titles — "PROV-O: The PROV Ontology" where the page only offered a pill reading "W3C+1".
+- 🧼 **No scraping artifacts**, because nothing is scraped.
+
+Unchanged and still reading the page: HTML and PDF (which need rendered HTML), Gemini, shared links, temporary chats, and any case where the record is unavailable. `sourceFromPayload: false` forces the old behaviour.
+
+### ⚠️ ChatGPT and Gemini are not equivalent
+
+Gemini exposes no conversation record, so Gemini exports have **no timestamps, no completeness check, no message recovery, and no order correction**. They are a faithful read of the page, which is all Gemini makes possible.
 
 <details>
 <summary>📝 Previous updates</summary>
+
+### v0.11.0
+
+- 🧮 **Math from every renderer, and never twice.** TeX is now recovered from KaTeX, MathJax v3, `data-latex` attributes, and MathJax v2 scripts — the last of which had *never* worked, because the source was being stripped before math was processed. And when no TeX exists at all, the renderer's visual duplicate is dropped so a formula stops exporting as `f(x)f(x)`. ([release notes](temporal/release-notes-v0.11.0.md))
+- 🔀 **Earlier versions of regenerated or edited turns can be included.** They live in the conversation as replaced branches and were invisible to every export. Pass `includeVariants: true` to append them, labelled and in place. Off by default so nobody's existing export changes shape; when a conversation has them, the export tells you.
 
 ### v0.10.3
 
@@ -288,7 +303,7 @@ npm test        # verify generated files are current + run the jsdom test suite
 
 Never edit the generated exporter files directly — change `src/extraction-engine.js`, `src/userscript-ui.js`, or the build script and run `npm run build`.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md) for details.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/EXPORTER_GUIDE.md](docs/EXPORTER_GUIDE.md) for details.
 
 ## 🔐 Privacy & Security
 
@@ -309,7 +324,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.11.0** (Current) - Math recovered from every renderer and never duplicated; opt-in export of regenerated/edited turn history
+- **v0.12.0** (Current) - ChatGPT Markdown reads the conversation record instead of scraping the page: no scrolling, complete by construction, real citation titles
+- **v0.11.0** - Math recovered from every renderer and never duplicated; opt-in export of regenerated/edited turn history
 - **v0.10.3** - Inline citations export as their label instead of escaped base64
 - **v0.10.2** - Strips ChatGPT's screen-reader "said:" heading from every message; recovered messages keep their timestamp
 - **v0.10.1** - Sweep always finishes at the bottom; payload decides order and fills messages the sweep couldn't reach

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - Markdown
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.11.0
+// @version      0.12.0
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @match        https://chat.openai.com/*
@@ -28,7 +28,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.11.0';
+        const ENGINE_VERSION = '0.12.0';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -1416,6 +1416,78 @@
             }
         }
 
+        // ChatGPT wraps its inline citation markers in private-use code points:
+        // U+E200 "cite" U+E202 "turn1search0" U+E201. They are invisible machinery,
+        // not text — rendering payload markdown without removing them puts
+        // "citeturn1search0" in the middle of a sentence.
+        const PAYLOAD_CITATION_MARKER = /\uE200[\s\S]*?\uE201/g;
+        const PAYLOAD_PRIVATE_USE = /[\uE200-\uE20F]/g;
+
+        function stripPayloadMarkers(value) {
+            return String(value ?? '').replace(PAYLOAD_CITATION_MARKER, '').replace(PAYLOAD_PRIVATE_USE, '');
+        }
+
+        function hostnameOf(href) {
+            try {
+                return new URL(href).hostname.replace(/^www\./, '');
+            } catch (error) {
+                return '';
+            }
+        }
+
+        // metadata.content_references carries the real title and URL of each source
+        // — strictly better than the DOM, where the same citation renders as a pill
+        // labelled "W3C+1".
+        function payloadCitations(message) {
+            const references = message?.metadata?.content_references;
+            if (!Array.isArray(references)) return [];
+
+            const seen = new Set();
+            const citations = [];
+            references.forEach(reference => {
+                (Array.isArray(reference?.items) ? reference.items : []).forEach(item => {
+                    const href = String(item?.url || '').trim();
+                    if (!href || seen.has(href) || isUnsafeHref(href)) return;
+                    seen.add(href);
+                    citations.push({
+                        href,
+                        label: normalizeWhitespace(item?.title) || hostnameOf(href) || href
+                    });
+                });
+            });
+            return citations;
+        }
+
+        // Each marker is replaced in place by the source it points at, so a citation
+        // reads as a link rather than vanishing.
+        function resolvePayloadCitations(text, message, format) {
+            const references = message?.metadata?.content_references;
+            let result = String(text ?? '');
+
+            if (Array.isArray(references)) {
+                references.forEach(reference => {
+                    const marker = reference?.matched_text;
+                    if (!marker || !result.includes(marker)) return;
+
+                    const item = (Array.isArray(reference.items) ? reference.items : [])
+                        .find(candidate => candidate?.url && !isUnsafeHref(String(candidate.url)));
+                    if (!item) {
+                        result = result.split(marker).join('');
+                        return;
+                    }
+
+                    const href = String(item.url);
+                    const label = normalizeWhitespace(item.title) || hostnameOf(href) || href;
+                    const link = format === 'markdown'
+                        ? ` ([${escapeMarkdownLinkText(label)}](${escapeMarkdownUrl(href)}))`
+                        : ` (<a href="${sanitizeHtml(href)}">${sanitizeHtml(label)}</a>)`;
+                    result = result.split(marker).join(link);
+                });
+            }
+
+            return stripPayloadMarkers(result);
+        }
+
         function payloadContentText(content) {
             if (!content || !Array.isArray(content.parts)) return '';
             return content.parts.map(part => {
@@ -1423,6 +1495,10 @@
                 if (!part || typeof part !== 'object') return '';
                 if (typeof part.text === 'string') return part.text;
                 if (typeof part.content === 'string') return part.content;
+                // A multimodal part is an asset pointer with no text of its own.
+                // Returning '' for it is why an image-only turn rendered empty and
+                // was dropped entirely; its media is added by the caller from
+                // payloadAttachmentDescriptors.
                 return '';
             }).filter(Boolean).join('\n\n').trim();
         }
@@ -1888,20 +1964,26 @@
         // Renders a payload message the DOM never showed us. Its parts are the
         // markdown the model actually produced, which is exactly what a markdown
         // export wants; HTML exports escape it and keep the paragraph breaks.
-        function payloadMessageToExport(entry, assistantName, format, doc) {
+        function payloadMessageToExport(entry, assistantName, format, doc, options = {}) {
             const message = entry.message;
-            const text = payloadContentText(message.content);
-            if (!text) return null;
+            const text = resolvePayloadCitations(payloadContentText(message.content), message, format);
+            // No text is not the same as no message: an image-only turn carries its
+            // content in attachments, which the caller appends.
+            const allowEmpty = options.allowEmpty === true;
+            if (!text && !allowEmpty) return null;
 
             const isUser = message.author?.role === 'user';
-            const content = format === 'markdown'
+            const content = !text ? '' : (format === 'markdown'
                 ? text
-                : text.split(/\n{2,}/).map(block => `<p>${sanitizeHtml(block).replace(/\n/g, '<br>')}</p>`).join('');
+                : text.split(/\n{2,}/).map(block => `<p>${sanitizeHtml(block).replace(/\n/g, '<br>')}</p>`).join(''));
 
             const exported = {
                 sender: isUser ? 'You' : assistantName,
                 senderType: isUser ? 'user' : 'assistant',
                 reliableSender: true,
+                source: 'payload',
+                // Retained for one release so anything reading the old flag keeps
+                // working; `source` is the field to use.
                 recovered: true,
                 content
             };
@@ -2010,6 +2092,103 @@
             message.content = `${message.content}${message.content ? '\n\n' : ''}${markdown !== null ? markdown : html}`.trim();
         }
 
+        // ─── Payload-first rendering ────────────────────────────────────────────
+        // The payload is the markdown the model produced; the DOM is a rendering of
+        // it. Reading the source directly avoids every artifact that comes from
+        // scraping a rendering — screen-reader labels, escaped citation chips,
+        // duplicated formulas — and needs no scroll sweep at all, so a long
+        // conversation costs one request instead of a minute of scrolling.
+        //
+        // Markdown only, deliberately: HTML and PDF need rendered HTML, which the
+        // DOM already provides natively and which the payload would require a
+        // markdown parser to produce.
+        async function renderConversationFromPayload(payload, doc, provider, options) {
+            const format = 'markdown';
+            const entries = activePayloadMessages(payload);
+            const mainEntries = entries.filter(isMainPayloadMessage);
+            if (mainEntries.length === 0) return null;
+
+            const recaps = payloadReasoningRecaps(entries);
+            const messages = [];
+            let embeddedBytes = 0;
+            const totalImageBudget = options.maxTotalEmbeddedImageBytes ?? MAX_TOTAL_EMBEDDED_IMAGE_BYTES;
+
+            for (const entry of mainEntries) {
+                const message = payloadMessageToExport(entry, provider.assistantName, format, doc, { allowEmpty: true });
+                if (!message) continue;
+
+                for (const descriptor of payloadAttachmentDescriptors(entry.message)) {
+                    const name = descriptor.name || (descriptor.kind === 'image' ? 'Image attachment' : 'File attachment');
+
+                    if (descriptor.kind === 'sandbox') {
+                        const href = `sandbox:${descriptor.sandboxPath}`;
+                        appendMessageEnrichment(message, `[File: ${escapeMarkdownLinkText(name)}](${escapeMarkdownUrl(href)})`, null, descriptor.sandboxPath);
+                        continue;
+                    }
+                    if (descriptor.kind !== 'image') {
+                        appendMessageEnrichment(message, `[File: ${name}]`, null, name);
+                        continue;
+                    }
+
+                    let embedded = null;
+                    if (metadataRequestTimeout(doc, options) > 0 && embeddedBytes < totalImageBudget) {
+                        embedded = await fetchEmbeddedImage(doc, descriptor, options);
+                    }
+                    if (embedded && embeddedBytes + embedded.size <= totalImageBudget) {
+                        embeddedBytes += embedded.size;
+                        appendMessageEnrichment(message, `![${escapeMarkdownLinkText(name)}](${embedded.dataUrl})`, null, name);
+                    } else {
+                        appendMessageEnrichment(message, `[Image: ${name}]`, null, name);
+                    }
+                }
+
+                const recap = recaps.get(String(entry.message.id || entry.nodeId));
+                if (recap && !message.content.includes(recap)) {
+                    appendMessageEnrichment(message, `**Reasoning:** ${recap}`, null, recap);
+                }
+
+                const citations = payloadCitations(entry.message);
+                if (citations.length > 0) {
+                    message.content = `${message.content}${renderReferences(citations, format)}`.trim();
+                }
+
+                // A turn with neither text nor media has nothing to export.
+                if (!normalizeWhitespace(message.content)) continue;
+                message.index = messages.length;
+                messages.push(message);
+            }
+
+            if (messages.length === 0) return null;
+
+            const conversation = buildConversation(doc, provider, options, messages);
+            conversation.source = 'payload';
+            conversation.expectedMessages = mainEntries.length;
+            conversation.unreachedMessages = 0;
+            conversation.missedMessages = 0;
+            conversation.recoveredMessages = 0;
+            // Complete by construction: the payload is the conversation, not a
+            // sample of whatever happened to be on screen.
+            conversation.complete = true;
+            conversation.metadataStatus = 'enriched';
+
+            if (options.includeVariants === true) {
+                const matches = new Map();
+                mainEntries.forEach((entry, index) => {
+                    if (messages[index]) matches.set(messages[index], entry);
+                });
+                conversation.variantMessages = appendPayloadVariants(conversation, payload, entries, matches, format, doc);
+            } else {
+                const available = payloadVariantMessages(payload, entries).length;
+                conversation.variantMessages = 0;
+                conversation.availableVariants = available;
+                if (available > 0) {
+                    console.info(`[Chat Exporter] This conversation has ${available} earlier version(s) of regenerated or edited turns. They are not in the export; pass includeVariants: true to include them.`);
+                }
+            }
+
+            return conversation;
+        }
+
         async function enrichChatGptConversation(conversation, doc, format, options) {
             if (conversation.provider !== 'chatgpt') return conversation;
 
@@ -2023,7 +2202,12 @@
                 metadataDeadline,
                 chatGptAuth: options.chatGptAuth || createChatGptAuth(options)
             };
-            const payload = await fetchChatGptPayload(doc, enrichmentOptions);
+            // The payload-first path may already have fetched (or failed to fetch)
+            // this. Asking twice costs a second request and a second round of
+            // console noise for the same answer.
+            const payload = 'chatGptPayload' in options
+                ? options.chatGptPayload
+                : await fetchChatGptPayload(doc, enrichmentOptions);
             if (!payload) {
                 conversation.metadataStatus = 'unavailable';
                 return conversation;
@@ -2276,10 +2460,74 @@
             return `text:${testId}:${text.length}:${text.slice(0, 200)}`;
         }
 
+        // Markdown from ChatGPT reads the payload first; everything else, and every
+        // failure, falls through to the DOM sweep below unchanged.
+        function canUsePayloadSource(doc, provider, format, options) {
+            if (options.sourceFromPayload === false) return false;
+            if (options.chatGptMetadata === false) return false;
+            if (provider.id !== 'chatgpt') return false;
+            if (format !== 'markdown') return false;
+            // A shared link or temporary chat has no stored conversation to read.
+            return Boolean(chatGptConversationId(doc));
+        }
+
         async function extractConversationFull(options = {}) {
             const doc = resolveDocument(options.document);
             const provider = providerFor(options.provider, doc);
             const format = options.format || 'markdown';
+
+            if (canUsePayloadSource(doc, provider, format, options)) {
+                const emit = event => {
+                    if (typeof options.onProgress !== 'function') return;
+                    try {
+                        options.onProgress(event);
+                    } catch (error) {
+                        // A progress listener must never cost the reader an export.
+                    }
+                };
+                try {
+                    emit({ phase: 'start', provider: provider.id, messages: 0, lines: 0 });
+                    emit({ phase: 'payload', messages: 0, lines: 0, percent: 10 });
+
+                    const win = getWindow(doc);
+                    const payloadOptions = {
+                        ...options,
+                        metadataDeadline: now(win) + (options.metadataMaxDuration ?? METADATA_MAX_DURATION),
+                        chatGptAuth: options.chatGptAuth || createChatGptAuth(options)
+                    };
+                    const payload = await fetchChatGptPayload(doc, payloadOptions);
+                    if (payload) {
+                        emit({ phase: 'rendering', messages: 0, lines: 0, percent: 40 });
+                        const conversation = await renderConversationFromPayload(payload, doc, provider, payloadOptions);
+                        if (conversation) {
+                            const lines = conversation.messages.reduce(
+                                (total, message) => total + String(message.content).split('\n').length, 0);
+                            const last = conversation.messages[conversation.messages.length - 1];
+                            emit({
+                                phase: 'done',
+                                percent: 100,
+                                messages: conversation.messages.length,
+                                lines,
+                                complete: true,
+                                expectedMessages: conversation.expectedMessages || 0,
+                                unreachedMessages: 0,
+                                recoveredMessages: 0,
+                                lastSender: last ? last.sender : '',
+                                lastPreview: last ? normalizeWhitespace(last.content).slice(0, 90) : ''
+                            });
+                            console.log(`[Chat Exporter] Read ${conversation.messages.length} messages from ChatGPT's own record — no scrolling needed.`);
+                            return conversation;
+                        }
+                    }
+                    // Remember what we learned so the DOM path does not re-ask.
+                    options = { ...options, chatGptPayload: payload || null, chatGptAuth: payloadOptions.chatGptAuth };
+                    console.info('[Chat Exporter] Falling back to reading the page, which requires scrolling the whole conversation.');
+                } catch (error) {
+                    // Any failure here is a reason to read the page instead, never a
+                    // reason to fail the export.
+                    console.warn('[Chat Exporter] Could not read the stored conversation; reading the page instead.', error);
+                }
+            }
             const scrollDelay = options.scrollDelay ?? 350;
             const renderQuiet = options.renderQuiet ?? RENDER_QUIET_INTERVAL;
             const maxScrollSteps = options.maxScrollSteps ?? 400;
@@ -2518,7 +2766,11 @@
                     console.warn('[Chat Exporter] Per-message metadata could not be added:', error);
                 }
             }
-            conversation.messages.forEach(message => delete message.providerMessageId);
+            conversation.messages.forEach(message => {
+                delete message.providerMessageId;
+                if (!message.source) message.source = 'dom';
+            });
+            conversation.source = 'dom';
 
             // Turns that were on screen but never became readable. Saying so beats
             // handing over a short file that looks complete.
@@ -3694,10 +3946,15 @@
             // Say so on the launcher, and don't let a second click start a second
             // sweep fighting the first one for the scroll position.
             let exportInFlight = false;
+            // The busy *state* still guards against a second sweep fighting the
+            // first for the scroll position — that is the part that matters. The
+            // label only speaks when there is no progress card saying it better.
             const setBusy = busy => {
                 exportInFlight = busy;
                 const label = doc.getElementById(LAUNCHER_ID)?.querySelector('span');
-                if (label) label.textContent = busy ? 'Exporting…' : 'Export';
+                if (!label) return;
+                const cardVisible = Boolean(options.progress && doc.getElementById('chat-exporter-progress'));
+                label.textContent = busy && !cardVisible ? 'Exporting…' : 'Export';
             };
             const exportSafely = format => {
                 if (exportInFlight) return Promise.resolve();
