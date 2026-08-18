@@ -1403,6 +1403,57 @@ test('a Gemini pair wrapper is not mistaken for a turn', async () => {
     assert.equal(new Set(keys).size, 4, 'every message in a pair gets a distinct identity');
 });
 
+// Live Gemini (2026-08-17) renders its model picker with a class matching
+// [class*="conversation-title"]. The cascade hit it and v0.9.4 exported a
+// conversation titled "Flash-Lite" while the tab held the real name.
+test('a title selector matching page chrome cannot outrank the tab title', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Quarterly Planning Notes - Google Gemini</title></head><body><main>
+        <div class="conversation-title-button">Flash-Lite</div>
+        <div class="conversation-container">
+            <user-query><div class="query-text">What did we agree on for Q3 headcount?</div></user-query>
+            <model-response><message-content><div class="response-container">
+                <p>You agreed to hold headcount flat through Q3.</p>
+            </div></message-content></model-response>
+        </div>
+    </main></body></html>`, { url: 'https://gemini.google.com/app/model-picker' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'gemini',
+        format: 'markdown'
+    });
+
+    assert.equal(conversation.title, 'Quarterly Planning Notes',
+        'the model picker is page chrome; the tab carries the conversation name');
+    assert.ok(!conversation.title.includes('Flash-Lite'));
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'gemini' });
+    assert.equal(report.title.value, 'Quarterly Planning Notes');
+    assert.equal(report.title.selectorCandidate, null,
+        'the selector that matched the model picker is gone, not merely outranked');
+});
+
+// ChatGPT still keeps [class*="conversation-title"] in its cascade: it matches
+// nothing on the live site today, and there is no evidence its tab title is the
+// better source. The doctor is what makes that bet visible if it ever goes bad.
+test('the doctor flags a title selector that disagrees with the tab', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Migration Runbook</title></head><body><main>
+        <div class="conversation-title-pill">GPT-5 Thinking</div>
+        <div data-message-author-role="user"><p>Walk me through the migration runbook.</p></div>
+        <div data-message-author-role="assistant"><p>Start by draining the write queue.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/title-drift' });
+    installInnerText(dom.window);
+    dom.window.fetch = async () => null;
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'chatgpt' });
+
+    assert.match(report.title.selectorCandidate, /GPT-5 Thinking/);
+    assert.equal(report.title.documentTitle, 'Migration Runbook');
+    assert.ok(report.warnings.some(w => /one of them is page chrome/.test(w)),
+        'a selector disagreeing with the tab is exactly how the Gemini model-picker bug shipped');
+});
+
 test('Gemini titles and filenames drop the vendor suffix the tab carries', async () => {
     const dom = new JSDOM(geminiPairContainerFixture(), { url: 'https://gemini.google.com/app/pair-fixture' });
     installInnerText(dom.window);

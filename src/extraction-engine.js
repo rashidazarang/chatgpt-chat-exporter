@@ -11,7 +11,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
     'use strict';
 
-    const ENGINE_VERSION = '0.9.4';
+    const ENGINE_VERSION = '0.9.5';
 
     // Pixels of slack when deciding the scroll container has reached its end.
     const BOTTOM_TOLERANCE = 4;
@@ -132,9 +132,13 @@
                 '.response-container',
                 '.markdown, .prose, [class*="markdown"], [class*="prose"]'
             ],
+            // Verified live: Gemini's tab title IS the conversation name, and
+            // nothing in its DOM reliably carries it. [class*="conversation-title"]
+            // matched the model picker and exported a conversation titled
+            // "Flash-Lite", so it is gone rather than merely outranked.
+            preferDocumentTitle: true,
             titleSelectors: [
                 'h1:not([class*="hidden"])',
-                '[class*="conversation-title"]',
                 '[data-testid*="conversation-title"]',
                 '[aria-label*="conversation"]'
             ]
@@ -2067,23 +2071,36 @@
         return conversation;
     }
 
-    function extractConversationTitle(doc, provider) {
-        for (const selector of provider.titleSelectors) {
-            const element = doc.querySelector(selector);
-            const title = normalizeWhitespace(element?.textContent);
-            if (title && !provider.genericTitlePattern.test(title)) return title;
-        }
-
-        // Every titleSelector above misses on both live providers today, so the
-        // tab title is the real source — and Gemini appends its own name to it,
-        // which reached the exported title and the filename verbatim.
+    // The tab title, minus whatever the provider stamps on it.
+    function documentTitleFor(doc, provider) {
         const rawTitle = String(doc.title || '');
-        const docTitle = normalizeWhitespace(
+        return normalizeWhitespace(
             provider.documentTitleSuffix ? rawTitle.replace(provider.documentTitleSuffix, '') : rawTitle
         );
-        if (docTitle && !provider.genericTitlePattern.test(docTitle)) return docTitle;
+    }
 
-        return provider.defaultTitle;
+    // First selector in the cascade that yields a non-generic title, if any.
+    function selectorTitleFor(doc, provider) {
+        for (const selector of provider.titleSelectors) {
+            const title = normalizeWhitespace(doc.querySelector(selector)?.textContent);
+            if (title && !provider.genericTitlePattern.test(title)) return { selector, title };
+        }
+        return null;
+    }
+
+    function extractConversationTitle(doc, provider) {
+        const docTitle = documentTitleFor(doc, provider);
+        const usableDocTitle = docTitle && !provider.genericTitlePattern.test(docTitle) ? docTitle : '';
+
+        // A guessed selector cannot outrank a tab title the provider is known to
+        // keep accurate. Gemini's cascade matched its model picker and titled a
+        // conversation "Flash-Lite"; the tab said what it actually was.
+        if (provider.preferDocumentTitle && usableDocTitle) return usableDocTitle;
+
+        const selectorTitle = selectorTitleFor(doc, provider);
+        if (selectorTitle) return selectorTitle.title;
+
+        return usableDocTitle || provider.defaultTitle;
     }
 
     // ─── Selector health check ───────────────────────────────────────────────
@@ -2132,10 +2149,9 @@
         const container = findScrollContainer(doc, provider);
         const messages = findMessages(doc, provider);
 
-        const titleSelector = provider.titleSelectors.find(selector => {
-            const title = normalizeWhitespace(doc.querySelector(selector)?.textContent);
-            return title && !provider.genericTitlePattern.test(title);
-        }) || null;
+        const selectorTitle = selectorTitleFor(doc, provider);
+        const documentTitle = documentTitleFor(doc, provider);
+        const resolvedTitle = extractConversationTitle(doc, provider);
 
         const report = {
             version: ENGINE_VERSION,
@@ -2153,9 +2169,11 @@
                 matched: queryAll(doc, provider.turnSelector).length
             },
             title: {
-                resolvedBy: titleSelector || 'document.title fallback',
-                value: extractConversationTitle(doc, provider),
-                rawDocumentTitle: normalizeWhitespace(doc.title)
+                resolvedBy: resolvedTitle === selectorTitle?.title ? selectorTitle.selector : 'document.title',
+                value: resolvedTitle,
+                documentTitle,
+                rawDocumentTitle: normalizeWhitespace(doc.title),
+                selectorCandidate: selectorTitle ? `${selectorTitle.selector} => "${selectorTitle.title}"` : null
             },
             scrollContainer: container
                 ? `${container.tagName.toLowerCase()} (${container.scrollHeight}px in ${container.clientHeight}px)`
@@ -2172,7 +2190,12 @@
         report.warnings = [
             report.messagesFound === 0 ? 'No messages matched any selector — the exporter would fail on this page.' : '',
             winner > 0 ? `Falling back to selector #${winner + 1} of ${report.messageSelectors.length}; earlier entries no longer match.` : '',
-            !titleSelector ? 'Every titleSelector missed; the title comes from the tab.' : '',
+            !selectorTitle ? 'Every titleSelector missed; the title comes from the tab.' : '',
+            // The failure that shipped in v0.9.4: a selector matched page chrome
+            // (Gemini's model picker) and won over an accurate tab title.
+            selectorTitle && documentTitle && selectorTitle.title !== documentTitle
+                ? `A title selector matched "${selectorTitle.title}" but the tab says "${documentTitle}" — one of them is page chrome.`
+                : '',
             report.api && report.api.reason !== 'ok' && report.api.reason !== 'no-conversation-id'
                 ? `Per-message metadata is unavailable here (${report.api.reason}).` : '',
             report.hidden ? 'This tab is in the background; a real export would be throttled.' : ''

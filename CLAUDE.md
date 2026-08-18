@@ -26,7 +26,7 @@ Legacy directories `core/` and `archived/` are historical prototypes; they are n
 
 - **Provider adapters** (`PROVIDERS`): per-platform selector cascades for messages, content roots, and titles, tried in priority order (data attributes → ARIA/custom elements → semantic HTML → class heuristics)
 - **A turn is a provider concept, not a ChatGPT one** (`turnSelector`, `messageScope`): the wrapper that owns a message *and whatever renders beside it* differs per platform, so each provider declares its own and `messageScope` takes the provider. It must wrap **exactly one message**. Gemini's own `div.conversation-container` wraps a *pair* — one `user-query` plus one `model-response` — and adopting it would hand both to `selectContentRoot`, which ranks candidates by text length: the pair wins, every answer gets prefixed with its own question, and both messages collapse to one `messageKey` so the second is dropped as already seen. Gemini's turn *is* its message element
-- **The title cascade misses on both live providers** (verified 2026-08-17): every `titleSelectors` entry returns nothing on real ChatGPT and Gemini pages, so `document.title` is the actual source. Gemini stamps `" - Google Gemini"` on it, which reached the exported title and the filename verbatim — hence `documentTitleSuffix`. Do not "fix" this by loosening the selectors: on Gemini, `[class*="title"]` matches sidebar chrome ("Notebooks", "New notebook") and would export that as the conversation title. `filenameFor` takes the already-cleaned `conversation.title`, never `doc.title`
+- **The title cascade is a liability on Gemini, not an asset** (verified live 2026-08-17): `document.title` is the real source on both providers, and Gemini stamps `" - Google Gemini"` on it — hence `documentTitleSuffix`. Gemini also mounts its **model picker** under a class matching `[class*="conversation-title"]`, *lazily*: a first probe saw nothing and v0.9.4 shipped believing the cascade was inert, then the selector won and exported a conversation titled **"Flash-Lite"**. That selector is now gone from Gemini and `preferDocumentTitle` puts the tab ahead of any guess. Two rules follow: **never loosen a title selector** (`[class*="title"]` also matches Gemini's sidebar — "Notebooks"), and **never conclude a selector is inert from one point-in-time probe** — page chrome mounts late. `filenameFor` takes the already-cleaned `conversation.title`, never `doc.title`
 - **`diagnose()` / `selector-doctor.js`**: a paste-into-the-console health check generated from this engine, so it reports on the selectors that actually ship. It flags the dangerous case — a cascade still working, but only on a late fallback entry, which is what silent drift looks like one release before it breaks
 - **Content pipeline** (`serializeMessageContent`): clone the message, annotate `white-space: pre-wrap` regions from computed style, strip UI chrome, then process cards → code blocks → math → media → links → tables before serializing to Markdown or HTML
 - **Verbatim protection**: code fences, display math, and pre-wrap prompt text bypass Markdown whitespace cleanup; pre-wrap text travels through collision-proof randomized placeholders (`MARKER_PREFIX`)
@@ -121,7 +121,12 @@ Verified against a real signed-in conversation. Re-check before trusting it:
   ChatGPT export shipped without them
 - All `img` elements sit outside the message elements (avatars, product
   chrome), so media serialization does not pick them up
-- The tab title is `"<conversation name> - Google Gemini"`
+- The tab title is `"<conversation name> - Google Gemini"` and is the only
+  reliable source for it
+- The model picker (e.g. "Flash-Lite") carries a class matching
+  `[class*="conversation-title"]` and **mounts after first paint** — it is page
+  chrome, not the conversation title
+- The only `h1` is `h1.cdk-visually-hidden` reading "Conversation with Gemini"
 
 ### Selector updates
 

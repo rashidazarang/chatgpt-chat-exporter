@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.9.2-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.9.5-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -80,7 +80,16 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.9.4
+## 🔧 What's New in v0.9.5
+
+- 🏷️ **A Gemini chat could export titled "Flash-Lite"** — the model name, not the conversation. Gemini renders its model picker under a class matching one of its own title selectors, and it outranked the tab title. That selector is removed, and Gemini now trusts the tab title, which is verified accurate. Found on the first real run of v0.9.4's own health check. ([release notes](temporal/release-notes-v0.9.5.md))
+- 🩺 **`selector-doctor.js` now catches this whole class of bug**: it warns when a title selector matched something the browser tab disagrees with — "one of them is page chrome."
+- 🔍 **Lesson recorded in the repo docs**: page chrome mounts *after* first paint, so a single point-in-time probe is not evidence that a selector is safe. v0.9.4 shipped on exactly that mistake.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.9.4
 
 Hardening pass over the provider layer — both ChatGPT and Gemini read against the live sites. ([release notes](temporal/release-notes-v0.9.4.md))
 
@@ -88,9 +97,6 @@ Hardening pass over the provider layer — both ChatGPT and Gemini read against 
 - 🧩 **A "turn" is now a per-provider concept**: the wrapper that owns a message was hardcoded to ChatGPT's, so the v0.9.2 fix for media rendered *beside* a message could never apply to Gemini. Gemini's own pair wrapper holds a question **and** its answer — adopting it would have prefixed every answer with its question, so Gemini's turn is correctly its message element. Pinned by a regression test.
 - 🩺 **New `selector-doctor.js`**: paste it into the console on either provider and it reports what each shipped selector actually matches, which one is carrying the page, and whether ChatGPT's private API authenticates. It warns when a cascade is still working but only on a fallback — what silent drift looks like one release before it breaks.
 - 🕓 **Worth knowing:** neither site exposes per-message timestamps in the DOM. ChatGPT's come from the conversation payload — so the v0.9.3 bug meant **every export before it shipped with no timestamps at all**.
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.9.3
 
@@ -257,7 +263,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.9.4** (Current) - Provider-layer hardening: per-provider turn scope, Gemini title/filename suffix fixed, new `selector-doctor.js` health check
+- **v0.9.5** (Current) - Fixes a Gemini chat exporting titled with the model name; doctor flags title selectors that disagree with the tab
+- **v0.9.4** - Provider-layer hardening: per-provider turn scope, Gemini title/filename suffix fixed, new `selector-doctor.js` health check
 - **v0.9.3** - Fixes the `404` on `backend-api/conversation/…`: private-API calls now carry the page's bearer token up front, with workspace-account and signed-file-link handling
 - **v0.9.2** - Embedded image/image-only turn support (#33); per-turn timestamps, uploaded/generated files, and visible reasoning recaps (#32)
 - **v0.9.1** - Waits for a streaming answer to finish before exporting; Gemini sweep coverage
