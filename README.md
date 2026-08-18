@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.10.3-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.11.0-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -80,12 +80,17 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.10.3
+## 🔧 What's New in v0.11.0
 
-- 🔗 **Inline citations no longer export as a wall of base64.** ChatGPT puts a favicon and a label inside one link; the exporter escaped the image markdown into the link text, producing literal backslashes and a base64 blob mid-sentence instead of a link. Citations now read as `[MetaMCP+1](url)`, and a link that is only an image keeps its image. ([release notes](temporal/release-notes-v0.10.3.md))
+- 🧮 **Math from every renderer, and never twice.** TeX is now recovered from KaTeX, MathJax v3, `data-latex` attributes, and MathJax v2 scripts — the last of which had *never* worked, because the source was being stripped before math was processed. And when no TeX exists at all, the renderer's visual duplicate is dropped so a formula stops exporting as `f(x)f(x)`. ([release notes](temporal/release-notes-v0.11.0.md))
+- 🔀 **Earlier versions of regenerated or edited turns can be included.** They live in the conversation as replaced branches and were invisible to every export. Pass `includeVariants: true` to append them, labelled and in place. Off by default so nobody's existing export changes shape; when a conversation has them, the export tells you.
 
 <details>
 <summary>📝 Previous updates</summary>
+
+### v0.10.3
+
+- 🔗 **Inline citations no longer export as a wall of base64.** ChatGPT puts a favicon and a label inside one link; the exporter escaped the image markdown into the link text, producing literal backslashes and a base64 blob mid-sentence instead of a link. Citations now read as `[MetaMCP+1](url)`, and a link that is only an image keeps its image. ([release notes](temporal/release-notes-v0.10.3.md))
 
 ### v0.10.2
 
@@ -304,7 +309,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.10.3** (Current) - Inline citations export as their label instead of escaped base64
+- **v0.11.0** (Current) - Math recovered from every renderer and never duplicated; opt-in export of regenerated/edited turn history
+- **v0.10.3** - Inline citations export as their label instead of escaped base64
 - **v0.10.2** - Strips ChatGPT's screen-reader "said:" heading from every message; recovered messages keep their timestamp
 - **v0.10.1** - Sweep always finishes at the bottom; payload decides order and fills messages the sweep couldn't reach
 - **v0.10.0** - In-page progress card showing phase, messages, lines and captured content; amber warning for incomplete exports

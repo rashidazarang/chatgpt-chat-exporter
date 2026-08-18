@@ -1437,6 +1437,94 @@ test('messages the sweep could not reach are recovered from the payload', async 
 // "![Image](data:image/png;base64,…)" — escaping that into the link produced
 // `[!\[Image\](data:…)Label](url)`, which is not a link at all but a wall of
 // base64 shown as visible text.
+// ── Math across renderers ───────────────────────────────────────────────────
+test('TeX is recovered from every renderer that carries it', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Math</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="m1">
+            <p>KaTeX inline <span class="katex"><span class="katex-mathml"><math><semantics><annotation encoding="application/x-tex">\\alpha</annotation></semantics></math></span><span class="katex-html">alpha-visual</span></span> here.</p>
+            <p>MathJax v3 <mjx-container><mjx-assistive-mml><math><semantics><annotation encoding="application/x-tex">\\beta</annotation></semantics></math></mjx-assistive-mml></mjx-container> here.</p>
+            <p>Attribute source <span data-latex="\\gamma">gamma-visual</span> here.</p>
+            <p>MathJax v2 <script type="math/tex">\\delta<\/script> here.</p>
+            <span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><annotation encoding="application/x-tex">E = mc^2</annotation></semantics></math></span><span class="katex-html">display-visual</span></span></span>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/math' });
+    installInnerText(dom.window);
+
+    const body = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    }).messages[0].content;
+
+    assert.match(body, /\$\\alpha\$/, 'KaTeX annotation');
+    assert.match(body, /\$\\beta\$/, 'MathJax v3 assistive MathML');
+    assert.match(body, /\$\\gamma\$/, 'data-latex attribute');
+    assert.match(body, /\$\\delta\$/, 'MathJax v2 script');
+    assert.match(body, /\$\$E = mc\^2\$\$/, 'display math uses $$');
+
+    // The rendered-for-the-eye copy must never survive alongside the source.
+    ['alpha-visual', 'gamma-visual', 'display-visual'].forEach(visual =>
+        assert.ok(!body.includes(visual), `visual duplicate ${visual} leaked into the export`));
+});
+
+test('math with no TeX source appears once, not twice', () => {
+    // KaTeX emits an accessible MathML copy and a visual copy. With no
+    // annotation to recover, serializing both reads "f(x)f(x)".
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>No TeX</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="n1">
+            <p>The density <span class="katex"><span class="katex-mathml"><math><mi>f</mi><mo>(</mo><mi>x</mi><mo>)</mo></math></span><span class="katex-html">f(x)</span></span> is shown.</p>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/no-tex' });
+    installInnerText(dom.window);
+
+    const body = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    }).messages[0].content;
+
+    assert.equal((body.match(/f\(x\)/g) || []).length, 1, `formula should appear once, got: ${body}`);
+});
+
+// ── Variants (regenerated / edited turns) ───────────────────────────────────
+function payloadWithVariant() {
+    const payload = payloadWithMessages(['v1', 'v2']);
+    // An earlier answer to v1 that was replaced by regenerating.
+    payload.mapping['node-old'] = {
+        id: 'node-old', parent: 'node-v1', children: [],
+        message: {
+            id: 'old-answer', author: { role: 'assistant' }, create_time: 1781030821,
+            content: { content_type: 'text', parts: ['The first attempt at an answer.'] }, metadata: {}
+        }
+    };
+    payload.mapping['node-v1'].children = ['node-v2', 'node-old'];
+    return payload;
+}
+
+test('earlier versions of regenerated turns are left out by default', async () => {
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload: payloadWithVariant() }).fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.variantMessages, 0);
+    assert.equal(conversation.availableVariants, 1, 'the export knows one exists');
+    assert.ok(!engine.serializers.markdown(conversation).includes('The first attempt at an answer.'),
+        'existing exports must not silently change shape');
+});
+
+test('includeVariants adds earlier versions, labelled and in place', async () => {
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload: payloadWithVariant() }).fetch;
+
+    const conversation = await extractWithBackend(dom, { includeVariants: true });
+
+    assert.equal(conversation.variantMessages, 1);
+    const variant = conversation.messages.find(message => message.variant);
+    assert.ok(variant, 'the replaced answer is present');
+    assert.match(variant.content, /Earlier version \(replaced by a regeneration or edit\)/);
+    assert.match(variant.content, /The first attempt at an answer\./);
+    assert.equal(variant.senderType, 'assistant');
+    assert.deepEqual(conversation.messages.map(message => message.index),
+        conversation.messages.map((_, index) => index), 'indexes stay contiguous');
+});
+
 test('a citation chip exports as its label, not a wall of base64', () => {
     const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Citation</title></head><body><main>
         <div data-message-author-role="assistant" data-message-id="c1">

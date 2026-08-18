@@ -11,7 +11,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
     'use strict';
 
-    const ENGINE_VERSION = '0.10.3';
+    const ENGINE_VERSION = '0.11.0';
 
     // Pixels of slack when deciding the scroll container has reached its end.
     const BOTTOM_TOLERANCE = 4;
@@ -489,7 +489,10 @@
             'button',
             'svg',
             'style',
-            'script',
+            // MathJax v2 keeps its TeX source in <script type="math/tex">, and
+            // this ran before processMath — so that source was stripped before
+            // anything could read it, and the branch handling it was dead code.
+            'script:not([type^="math/tex"])',
             'textarea',
             'input',
             '[contenteditable="true"]',
@@ -599,29 +602,66 @@
         });
     }
 
-    function processMath(clone) {
-        const processed = new Set();
+    // Every renderer in use puts the TeX source somewhere different, and each
+    // one also emits a *visual* duplicate of the same formula. Miss the source
+    // and you do not merely lose the markup — you serialize the duplicate too,
+    // and the export reads "f(x∣μ)f(x∣μ)".
+    const MATH_ROOT_SELECTOR = '.katex-display, mjx-container[display="true"], [display="block"], .katex, mjx-container, math, [data-latex], [data-tex]';
+    // Rendered-for-the-eye copies. KaTeX and MathJax both mark theirs; dropping
+    // them leaves exactly one representation behind.
+    const MATH_VISUAL_DUPLICATE = '.katex-html, mjx-container [aria-hidden="true"], annotation-xml[encoding*="MathML" i]';
 
-        queryAll(clone, 'annotation').forEach(annotation => {
+    function texFromNode(node) {
+        // 1. MathML <annotation encoding="application/x-tex"> — KaTeX, MathJax v3.
+        for (const annotation of queryAll(node, 'annotation, annotation-xml')) {
             const encoding = (annotation.getAttribute('encoding') || '').toLowerCase();
-            if (!encoding.includes('tex') && !encoding.includes('latex')) return;
+            if (!encoding.includes('tex')) continue;
+            const tex = normalizeCodeText(annotation.textContent).trim();
+            if (tex) return tex;
+        }
+        // 2. Source kept on the element — several renderers and ChatGPT itself.
+        for (const attribute of ['data-latex', 'data-tex', 'data-formula']) {
+            const value = node.getAttribute?.(attribute);
+            if (value && value.trim()) return value.trim();
+        }
+        // 3. MathJax v2 left the source in a script tag beside the render.
+        const script = node.querySelector?.('script[type^="math/tex"]');
+        if (script) {
+            const tex = normalizeCodeText(script.textContent).trim();
+            if (tex) return tex;
+        }
+        return '';
+    }
 
-            const tex = annotation.textContent.trim();
-            if (!tex) return;
+    function isDisplayMath(node) {
+        if (matches(node, '.katex-display, mjx-container[display="true"], [display="block"]')) return true;
+        if (node.closest?.('.katex-display, mjx-container[display="true"]')) return true;
+        return String(node.getAttribute?.('display') || '').toLowerCase() === 'block';
+    }
 
-            const displayRoot = annotation.closest('.katex-display, mjx-container[display="true"], [display="block"]');
-            const mathRoot = displayRoot || annotation.closest('.katex') || annotation.closest('mjx-container') || annotation.closest('math');
-            if (!mathRoot || processed.has(mathRoot)) return;
+    function processMath(clone) {
+        const handled = new Set();
 
-            processed.add(mathRoot);
-            mathRoot.replaceWith(createTextNode(mathRoot, displayRoot ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
+        topLevelElements(queryAll(clone, MATH_ROOT_SELECTOR)).forEach(root => {
+            if (handled.has(root)) return;
+            handled.add(root);
+
+            const tex = texFromNode(root);
+            if (tex) {
+                root.replaceWith(createTextNode(root, isDisplayMath(root) ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
+                return;
+            }
+
+            // No TeX anywhere: keep the accessible copy and drop the visual one
+            // so the formula appears once rather than twice.
+            queryAll(root, MATH_VISUAL_DUPLICATE).forEach(duplicate => duplicate.remove());
         });
 
+        // A bare script left outside any renderer wrapper.
         queryAll(clone, 'script[type^="math/tex"]').forEach(script => {
-            const tex = script.textContent.trim();
+            const tex = normalizeCodeText(script.textContent).trim();
             if (!tex) return;
-            const isDisplay = /mode=display/.test(script.type);
-            script.replaceWith(createTextNode(script, isDisplay ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
+            script.replaceWith(createTextNode(script, /mode=display/.test(script.type) ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
         });
     }
 
@@ -1393,6 +1433,44 @@
             .sort((left, right) => Number(left.message.create_time || 0) - Number(right.message.create_time || 0));
     }
 
+    // Regenerating an answer, or editing a prompt, leaves the previous version
+    // in the mapping as a sibling branch. activePayloadMessages walks only the
+    // branch currently on screen, so those older versions are invisible to the
+    // export — they are part of the conversation's history but not its current
+    // reading. Off by default because including them silently would change
+    // every existing user's file; `includeVariants: true` opts in.
+    function payloadVariantMessages(payload, activeEntries) {
+        const mapping = payload?.mapping;
+        if (!mapping || typeof mapping !== 'object') return [];
+
+        const onActiveChain = new Set(activeEntries.map(entry => entry.nodeId));
+        const variants = [];
+
+        activeEntries.forEach(entry => {
+            const parentId = entry.node?.parent;
+            const siblings = parentId ? (mapping[parentId]?.children || []) : [];
+            siblings.forEach(siblingId => {
+                if (onActiveChain.has(siblingId)) return;
+                // Each discarded branch can itself be several turns deep.
+                const stack = [siblingId];
+                const seen = new Set();
+                while (stack.length > 0) {
+                    const nodeId = stack.pop();
+                    if (seen.has(nodeId) || onActiveChain.has(nodeId)) continue;
+                    seen.add(nodeId);
+                    const node = mapping[nodeId];
+                    if (!node) continue;
+                    if (node.message) {
+                        variants.push({ nodeId, node, message: node.message, supersededBy: entry });
+                    }
+                    (node.children || []).forEach(child => stack.push(child));
+                }
+            });
+        });
+
+        return variants.filter(entry => isMainPayloadMessage(entry));
+    }
+
     function isMainPayloadMessage(entry) {
         const message = entry?.message;
         const role = message?.author?.role;
@@ -1875,6 +1953,41 @@
         return { recovered, reordered };
     }
 
+    function appendPayloadVariants(conversation, payload, entries, matches, format, doc) {
+        const variants = payloadVariantMessages(payload, entries);
+        if (variants.length === 0) return 0;
+
+        const positionOfEntry = new Map();
+        matches.forEach((entry, message) => positionOfEntry.set(entry, message));
+
+        let added = 0;
+        variants.forEach(variant => {
+            const message = payloadMessageToExport(variant, conversation.providerLabel, format, doc);
+            if (!message) return;
+
+            message.variant = true;
+            message.recovered = false;
+            const note = 'Earlier version (replaced by a regeneration or edit)';
+            message.content = format === 'markdown'
+                ? `*${note}*\n\n${message.content}`
+                : `<p><em>${sanitizeHtml(note)}</em></p>${message.content}`;
+
+            // Sit next to the turn that replaced this one where we can find it,
+            // otherwise at the end rather than at an arbitrary position.
+            const superseding = positionOfEntry.get(variant.supersededBy);
+            const at = superseding ? conversation.messages.indexOf(superseding) : -1;
+            if (at >= 0) {
+                conversation.messages.splice(at + 1, 0, message);
+            } else {
+                conversation.messages.push(message);
+            }
+            added++;
+        });
+
+        conversation.messages.forEach((message, index) => { message.index = index; });
+        return added;
+    }
+
     function appendMessageEnrichment(message, markdown, html, needle) {
         if (needle && message.content.includes(needle)) return;
         message.content = `${message.content}${message.content ? '\n\n' : ''}${markdown !== null ? markdown : html}`.trim();
@@ -1920,6 +2033,23 @@
         // re-read. The payload holds its text, so rather than report a hole,
         // fill it. The DOM stays the source for everything it did capture,
         // because it carries formatting the payload's raw parts do not.
+        // Alternate versions the reader replaced. Appended after the message
+        // that superseded them, clearly labelled, so the conversation still
+        // reads in order.
+        if (options.includeVariants === true) {
+            conversation.variantMessages = appendPayloadVariants(conversation, payload, entries, matches, format, doc);
+            if (conversation.variantMessages > 0) {
+                console.log(`[Chat Exporter] ${conversation.variantMessages} earlier version(s) of edited or regenerated turns were included.`);
+            }
+        } else {
+            const available = payloadVariantMessages(payload, entries).length;
+            conversation.variantMessages = 0;
+            conversation.availableVariants = available;
+            if (available > 0) {
+                console.info(`[Chat Exporter] This conversation has ${available} earlier version(s) of regenerated or edited turns. They are not in the export; pass includeVariants: true to include them.`);
+            }
+        }
+
         // Only messages the sweep never laid eyes on. A message that *was*
         // encountered and then collapsed by content dedupe was collapsed on
         // purpose; re-adding it here would undo that decision.
