@@ -11,7 +11,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
     'use strict';
 
-    const ENGINE_VERSION = '0.10.1';
+    const ENGINE_VERSION = '0.10.2';
 
     // Pixels of slack when deciding the scroll container has reached its end.
     const BOTTOM_TOLERANCE = 4;
@@ -493,6 +493,14 @@
             'textarea',
             'input',
             '[contenteditable="true"]',
+            // Screen-reader-only labels are not conversation content. ChatGPT
+            // puts "ChatGPT said:" / "You said:" in an h4.sr-only sized 1x1px,
+            // which reached every exported message as a redundant "####"
+            // heading. Matched by class rather than by text, so a message that
+            // legitimately ends a heading with "said:" is untouched.
+            '[class*="sr-only"]',
+            '[class*="visually-hidden"]',
+            '[class*="visuallyhidden"]',
             '[class*="regenerate"]',
             '[class*="copy-button"]',
             '[data-testid*="copy"]',
@@ -1759,7 +1767,7 @@
     // Renders a payload message the DOM never showed us. Its parts are the
     // markdown the model actually produced, which is exactly what a markdown
     // export wants; HTML exports escape it and keep the paragraph breaks.
-    function payloadMessageToExport(entry, assistantName, format) {
+    function payloadMessageToExport(entry, assistantName, format, doc) {
         const message = entry.message;
         const text = payloadContentText(message.content);
         if (!text) return null;
@@ -1769,13 +1777,22 @@
             ? text
             : text.split(/\n{2,}/).map(block => `<p>${sanitizeHtml(block).replace(/\n/g, '<br>')}</p>`).join('');
 
-        return {
+        const exported = {
             sender: isUser ? 'You' : assistantName,
             senderType: isUser ? 'user' : 'assistant',
             reliableSender: true,
             recovered: true,
             content
         };
+
+        // The payload carries create_time, so a recovered message has no reason
+        // to be the only one in the file without a timestamp.
+        const iso = timestampIso(message.create_time);
+        if (iso) {
+            exported.timestampIso = iso;
+            exported.timestamp = formatMessageTimestamp(iso, doc);
+        }
+        return exported;
     }
 
     // Inserts recovered messages at their true position without reordering what
@@ -1783,7 +1800,7 @@
     // precedes it in the conversation. Recovery is skipped entirely when no
     // captured message could be matched to the payload, because then there is
     // no anchor to place anything against.
-    function alignWithPayload(conversation, mainEntries, matches, format, seenMessageIds) {
+    function alignWithPayload(conversation, mainEntries, matches, format, seenMessageIds, doc) {
         const indexOfEntry = new Map(mainEntries.map((entry, index) => [entry, index]));
         const positionOf = new Map();
         matches.forEach((entry, message) => {
@@ -1796,7 +1813,7 @@
 
         let recovered = 0;
         missing.forEach(entry => {
-            const message = payloadMessageToExport(entry, conversation.providerLabel, format);
+            const message = payloadMessageToExport(entry, conversation.providerLabel, format, doc);
             if (!message) return;
 
             const target = indexOfEntry.get(entry);
@@ -1882,7 +1899,7 @@
         // purpose; re-adding it here would undo that decision.
         if (options.recoverMissing !== false && options.seenMessageIds instanceof Set) {
             const aligned = alignWithPayload(
-                conversation, mainEntries, matches, format, options.seenMessageIds);
+                conversation, mainEntries, matches, format, options.seenMessageIds, doc);
             conversation.recoveredMessages = aligned.recovered;
             if (aligned.recovered > 0) {
                 conversation.unreachedMessages = Math.max(0, (conversation.unreachedMessages || 0) - aligned.recovered);

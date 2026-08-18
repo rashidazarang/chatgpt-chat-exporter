@@ -1428,6 +1428,57 @@ test('messages the sweep could not reach are recovered from the payload', async 
 // swapped. The sweep orders by scroll offset measured at capture time, and a
 // virtualizer that changes heights between those moments makes neighbours
 // compare wrongly.
+// Live ChatGPT (2026-08-17) labels every turn with <h4 class="sr-only
+// select-none">ChatGPT said:</h4>, sized 1x1px and positioned off-screen. It is
+// invisible to a reader and was reaching every exported message as a redundant
+// "#### ChatGPT said:" heading.
+test('screen-reader-only labels never reach the export', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>SR Only</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="sr1">
+            <h4 class="sr-only select-none">You said:</h4>
+            <p>What is the deployment order?</p>
+        </div>
+        <div data-message-author-role="assistant" data-message-id="sr2">
+            <h4 class="sr-only select-none">ChatGPT said:</h4>
+            <p>Drain the queue first.</p>
+            <h3>What the runbook said:</h3>
+            <p>It said to drain the queue.</p>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/sr-only' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    });
+
+    const exported = engine.serializers.markdown(conversation);
+    assert.ok(!exported.includes('You said:'), 'the sr-only label is chrome, not content');
+    assert.ok(!exported.includes('ChatGPT said:'));
+    assert.match(exported, /What is the deployment order\?/);
+    assert.match(exported, /Drain the queue first\./);
+
+    // Matched by class, not by text: a real heading that happens to end in
+    // "said:" is untouched.
+    assert.match(exported, /### What the runbook said:/);
+    assert.match(exported, /It said to drain the queue\./);
+});
+
+test('a recovered message carries the timestamp from the payload', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Recovered TS</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="t2"><p>The message that was on screen.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/recovered-ts' });
+    installInnerText(dom.window);
+    dom.window.fetch = chatGptBackendStub({ payload: payloadWithMessages(['t1', 't2']) }).fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.recoveredMessages, 1);
+    const recovered = conversation.messages.find(message => message.recovered);
+    assert.ok(recovered.timestampIso, 'a recovered message is not the only one without a timestamp');
+    assert.ok(recovered.timestamp);
+    assert.equal(recovered.timestampIso, new Date(1781030820 * 1000).toISOString());
+});
+
 test('payload order corrects a pair the sweep captured out of order', async () => {
     const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Swapped</title></head><body><main>
         <div data-message-author-role="user" data-message-id="s1"><p>Message body number 0.</p></div>

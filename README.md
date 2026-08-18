@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.10.1-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.10.2-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -80,16 +80,21 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.10.1
+## 🔧 What's New in v0.10.2
+
+- 🧹 **`#### ChatGPT said:` no longer appears above every message.** ChatGPT labels each turn with a 1×1px off-screen heading for screen readers; the exporter was reading it as content, so it opened *every* message in every export. Screen-reader-only elements are now stripped as the chrome they are — matched by class, so a heading that genuinely ends in "said:" survives. ([release notes](temporal/release-notes-v0.10.2.md))
+- 🕓 **Recovered messages now carry their timestamp** — they were the only ones in a file without one, while the payload had it all along.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.10.1
 
 Two silent defects, found by auditing a real 32-message export against ChatGPT's own record of it. ([release notes](temporal/release-notes-v0.10.1.md))
 
 - 📉 **The last two messages could be missing.** A sweep that stalls gives up wherever it happens to be, and the final read ran at that position — one conversation stopped at 85% and shipped without its newest messages. The sweep now always finishes at the bottom.
 - 🔀 **An answer could appear before its own question.** Ordering used scroll offsets measured at capture time, which a virtualizer can make incomparable. Where ChatGPT's record accounts for every message, it now decides the order.
 - 🧩 **Messages the sweep can't reach are recovered rather than reported as a hole** — rendered from ChatGPT's own record and placed correctly. A ChatGPT export is now complete whenever the private API is reachable.
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.10.0
 
@@ -295,7 +300,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.10.1** (Current) - Sweep always finishes at the bottom; payload decides order and fills messages the sweep couldn't reach
+- **v0.10.2** (Current) - Strips ChatGPT's screen-reader "said:" heading from every message; recovered messages keep their timestamp
+- **v0.10.1** - Sweep always finishes at the bottom; payload decides order and fills messages the sweep couldn't reach
 - **v0.10.0** - In-page progress card showing phase, messages, lines and captured content; amber warning for incomplete exports
 - **v0.9.8** - A hidden tab no longer consumes the export budget; long sweeps report progress
 - **v0.9.7** - Sweep ~4× faster: waits for the DOM to settle instead of a fixed delay per scroll step
