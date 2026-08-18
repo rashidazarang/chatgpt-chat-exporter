@@ -1384,13 +1384,112 @@ test('an export short of the conversation is not reported as complete', async ()
     const backend = chatGptBackendStub({ payload: payloadWithMessages(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']) });
     dom.window.fetch = backend.fetch;
 
-    const conversation = await extractWithBackend(dom);
+    const conversation = await extractWithBackend(dom, { recoverMissing: false });
 
     assert.equal(conversation.messages.length, 2);
     assert.equal(conversation.expectedMessages, 6);
     assert.equal(conversation.unreachedMessages, 4, 'm1..m4 were never encountered by the sweep');
     assert.equal(conversation.missedMessages, 0, 'nothing mounted-but-unreadable — the old check saw a clean run');
     assert.equal(conversation.complete, false, 'a short export must not claim to be complete');
+});
+
+test('messages the sweep could not reach are recovered from the payload', async () => {
+    // The real failure this comes from: a sweep stalled at 85% of a long
+    // conversation and shipped without its last two messages. They were not
+    // mis-read — they were never in the DOM, so there was nothing to re-read.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Recovered</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="m5"><p>The fifth message in this conversation.</p></div>
+        <div data-message-author-role="assistant" data-message-id="m6"><p>The sixth message in this conversation.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/recovered' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']) });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.recoveredMessages, 4);
+    assert.equal(conversation.messages.length, 6, 'the export holds the whole conversation');
+    assert.equal(conversation.unreachedMessages, 0);
+    assert.equal(conversation.complete, true, 'nothing is missing, so nothing is warned about');
+
+    // Recovered messages take their true position rather than being appended.
+    const bodies = conversation.messages.map(message => message.content);
+    assert.match(bodies[0], /Message body number 0\./);
+    assert.match(bodies[4], /The fifth message in this conversation\./);
+    assert.match(bodies[5], /The sixth message in this conversation\./);
+    assert.deepEqual(conversation.messages.map(message => message.senderType),
+        ['user', 'assistant', 'user', 'assistant', 'user', 'assistant'],
+        'recovered messages keep the conversation alternating correctly');
+    assert.deepEqual(conversation.messages.map(message => message.index), [0, 1, 2, 3, 4, 5]);
+});
+
+// A real export came out with message 25 ahead of message 24 — same timestamp,
+// swapped. The sweep orders by scroll offset measured at capture time, and a
+// virtualizer that changes heights between those moments makes neighbours
+// compare wrongly.
+test('payload order corrects a pair the sweep captured out of order', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Swapped</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="s1"><p>Message body number 0.</p></div>
+        <div data-message-author-role="assistant" data-message-id="s4"><p>Message body number 3.</p></div>
+        <div data-message-author-role="user" data-message-id="s3"><p>Message body number 2.</p></div>
+        <div data-message-author-role="assistant" data-message-id="s2"><p>Message body number 1.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/swapped' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['s1', 's2', 's3', 's4']) });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.messages.length, 4);
+    assert.equal(conversation.recoveredMessages, 0, 'nothing was missing — only the order was wrong');
+    assert.deepEqual(conversation.messages.map(message => message.content.match(/number (\d)/)[1]),
+        ['0', '1', '2', '3'], 'the conversation reads in the order it actually happened');
+    assert.deepEqual(conversation.messages.map(message => message.senderType),
+        ['user', 'assistant', 'user', 'assistant']);
+    assert.deepEqual(conversation.messages.map(message => message.index), [0, 1, 2, 3]);
+});
+
+test('payload order is not imposed when it cannot account for every message', async () => {
+    // A message the payload does not know about (a branch the DOM shows but the
+    // active chain omits) means the payload is not a complete ordering, so the
+    // sweep's own order stands rather than being half-rewritten.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Partial</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="k1"><p>Message body number 0.</p></div>
+        <div data-message-author-role="assistant" data-message-id="unknown-to-payload"><p>An answer the payload chain omits entirely.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/partial' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['k1', 'k2']) });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom, { recoverMissing: false });
+
+    assert.equal(conversation.messages.length, 2);
+    assert.match(conversation.messages[0].content, /Message body number 0\./);
+    assert.match(conversation.messages[1].content, /the payload chain omits entirely/);
+});
+
+test('a recovered message is escaped in HTML exports', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Recovered HTML</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="h2"><p>The message that was on screen.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/recovered-html' });
+    installInnerText(dom.window);
+
+    const payload = payloadWithMessages(['h1', 'h2']);
+    payload.mapping['node-h1'].message.content.parts = ['Watch out for <script>alert(1)</script> & friends.'];
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'html',
+        scroll: false, awaitStreaming: false
+    });
+
+    assert.equal(conversation.recoveredMessages, 1);
+    const html = engine.serializers.html(conversation);
+    assert.ok(html.includes('&lt;script&gt;'), 'payload text is escaped, never injected as markup');
+    assert.ok(!html.includes('<script>alert(1)</script>'));
 });
 
 test('deliberate dedupe of identical turns is not mistaken for a missing message', async () => {

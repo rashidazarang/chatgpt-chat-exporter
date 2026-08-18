@@ -203,6 +203,12 @@
                     parts.bar.style.background = '#f59e0b';
                 } else {
                     parts.bar.style.background = '#22c55e';
+                    // Recovery is worth saying out loud: the reader's file is
+                    // complete, but part of it did not come off the screen.
+                    if (event.recoveredMessages) {
+                        parts.status.textContent =
+                            `Export complete — ${formatCount(event.recoveredMessages)} recovered from ChatGPT's record`;
+                    }
                 }
 
                 if (options.linger === false) {

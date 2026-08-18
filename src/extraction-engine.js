@@ -11,7 +11,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
     'use strict';
 
-    const ENGINE_VERSION = '0.10.0';
+    const ENGINE_VERSION = '0.10.1';
 
     // Pixels of slack when deciding the scroll container has reached its end.
     const BOTTOM_TOLERANCE = 4;
@@ -1756,6 +1756,82 @@
         return dataUrl ? { dataUrl, size: bytes.byteLength } : null;
     }
 
+    // Renders a payload message the DOM never showed us. Its parts are the
+    // markdown the model actually produced, which is exactly what a markdown
+    // export wants; HTML exports escape it and keep the paragraph breaks.
+    function payloadMessageToExport(entry, assistantName, format) {
+        const message = entry.message;
+        const text = payloadContentText(message.content);
+        if (!text) return null;
+
+        const isUser = message.author?.role === 'user';
+        const content = format === 'markdown'
+            ? text
+            : text.split(/\n{2,}/).map(block => `<p>${sanitizeHtml(block).replace(/\n/g, '<br>')}</p>`).join('');
+
+        return {
+            sender: isUser ? 'You' : assistantName,
+            senderType: isUser ? 'user' : 'assistant',
+            reliableSender: true,
+            recovered: true,
+            content
+        };
+    }
+
+    // Inserts recovered messages at their true position without reordering what
+    // the DOM gave us: each one lands after the last captured message that
+    // precedes it in the conversation. Recovery is skipped entirely when no
+    // captured message could be matched to the payload, because then there is
+    // no anchor to place anything against.
+    function alignWithPayload(conversation, mainEntries, matches, format, seenMessageIds) {
+        const indexOfEntry = new Map(mainEntries.map((entry, index) => [entry, index]));
+        const positionOf = new Map();
+        matches.forEach((entry, message) => {
+            if (indexOfEntry.has(entry)) positionOf.set(message, indexOfEntry.get(entry));
+        });
+        if (positionOf.size === 0) return { recovered: 0, reordered: 0 };
+
+        const missing = mainEntries.filter(entry =>
+            !seenMessageIds.has(String(entry.message.id || entry.nodeId)));
+
+        let recovered = 0;
+        missing.forEach(entry => {
+            const message = payloadMessageToExport(entry, conversation.providerLabel, format);
+            if (!message) return;
+
+            const target = indexOfEntry.get(entry);
+            let insertAt = conversation.messages.length;
+            for (let index = 0; index < conversation.messages.length; index++) {
+                const position = positionOf.get(conversation.messages[index]);
+                if (position !== undefined && position > target) {
+                    insertAt = index;
+                    break;
+                }
+            }
+            conversation.messages.splice(insertAt, 0, message);
+            positionOf.set(message, target);
+            recovered++;
+        });
+
+        // The sweep orders messages by scroll offset, measured at whatever
+        // moment each one was captured. A virtualizer that changes heights
+        // between those moments can make two neighbours compare wrongly — a
+        // real export came out with an answer ahead of the question that
+        // prompted it. The payload chain is the conversation's actual order, so
+        // where it covers every message, it decides.
+        let reordered = 0;
+        const everyMessagePlaced = conversation.messages.every(message => positionOf.has(message));
+        if (everyMessagePlaced) {
+            const before = conversation.messages.slice();
+            conversation.messages.sort((left, right) => positionOf.get(left) - positionOf.get(right));
+            reordered = conversation.messages.reduce(
+                (count, message, index) => count + (before[index] === message ? 0 : 1), 0);
+        }
+
+        conversation.messages.forEach((message, index) => { message.index = index; });
+        return { recovered, reordered };
+    }
+
     function appendMessageEnrichment(message, markdown, html, needle) {
         if (needle && message.content.includes(needle)) return;
         message.content = `${message.content}${message.content ? '\n\n' : ''}${markdown !== null ? markdown : html}`.trim();
@@ -1789,11 +1865,32 @@
         // has. Comparing *ids the sweep actually encountered* — not counts —
         // keeps deliberate content dedupe (two identical "ok" turns collapse by
         // design) from reading as a missing message.
+        const mainEntries = entries.filter(isMainPayloadMessage);
+        conversation.expectedMessages = mainEntries.length;
         if (options.seenMessageIds instanceof Set) {
-            const mainEntries = entries.filter(isMainPayloadMessage);
-            conversation.expectedMessages = mainEntries.length;
             conversation.unreachedMessages = mainEntries.filter(entry =>
                 !options.seenMessageIds.has(String(entry.message.id || entry.nodeId))).length;
+        }
+
+        // A virtualizer can end a sweep anywhere, and a message the sweep never
+        // reached is simply absent from the DOM — there is nothing left to
+        // re-read. The payload holds its text, so rather than report a hole,
+        // fill it. The DOM stays the source for everything it did capture,
+        // because it carries formatting the payload's raw parts do not.
+        // Only messages the sweep never laid eyes on. A message that *was*
+        // encountered and then collapsed by content dedupe was collapsed on
+        // purpose; re-adding it here would undo that decision.
+        if (options.recoverMissing !== false && options.seenMessageIds instanceof Set) {
+            const aligned = alignWithPayload(
+                conversation, mainEntries, matches, format, options.seenMessageIds);
+            conversation.recoveredMessages = aligned.recovered;
+            if (aligned.recovered > 0) {
+                conversation.unreachedMessages = Math.max(0, (conversation.unreachedMessages || 0) - aligned.recovered);
+                console.log(`[Chat Exporter] ${aligned.recovered} message(s) the scroll sweep could not reach were recovered from ChatGPT's own record of this conversation.`);
+            }
+            if (aligned.reordered > 0) {
+                console.log(`[Chat Exporter] ${aligned.reordered} message(s) were put back into conversation order using ChatGPT's own record.`);
+            }
         }
 
         for (const [message, entry] of matches.entries()) {
@@ -2193,9 +2290,20 @@
                     if (++stalls >= MAX_SCROLL_STALLS) break;
                 }
 
-                // The virtualizer may still have been mounting turns as the last
-                // step landed.
-                if (!outOfTime()) await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
+                // However the sweep ended — bottom reached, stalled, or out of
+                // steps — finish at the bottom. A stall can end the loop
+                // anywhere, and the final capture used to run at whatever
+                // position that happened to be: a real conversation stalled at
+                // 85% and shipped without its last two messages, which are
+                // exactly the ones a reader notices are missing.
+                if (!outOfTime()) {
+                    scroller.scrollTop = scroller.scrollHeight;
+                    await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
+                    capture();
+                    if (pendingKeys.size > 0 && !outOfTime()) {
+                        await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
+                    }
+                }
                 capture();
             } finally {
                 // Whatever happened, the reader gets their scroll position back.
@@ -2242,7 +2350,8 @@
             percent: 100,
             complete: conversation.complete,
             expectedMessages: conversation.expectedMessages || 0,
-            unreachedMessages: conversation.unreachedMessages || 0
+            unreachedMessages: conversation.unreachedMessages || 0,
+            recoveredMessages: conversation.recoveredMessages || 0
         });
         if (!conversation.complete) {
             console.warn(`[Chat Exporter] Export may be incomplete: ${conversation.messages.length} messages captured, ${pendingKeys.size} turn(s) never finished rendering${outOfTime() ? ', and the sweep ran out of time' : ''}. Keep the tab in the foreground and try again.`);
@@ -2688,6 +2797,7 @@
                 (conversation.expectedMessages ? ` of ${conversation.expectedMessages} in the conversation` : '') +
                 (conversation.missedMessages ? `, ${conversation.missedMessages} turn(s) never finished rendering` : '') +
                 (conversation.unreachedMessages ? `, ${conversation.unreachedMessages} never reached by the scroll sweep` : '') +
+                (conversation.recoveredMessages ? `, ${conversation.recoveredMessages} recovered from ChatGPT's record` : '') +
                 '.\n\nKeep the ChatGPT tab in the foreground while exporting, then try again' +
                 (conversation.unreachedMessages ? ' with a larger maxDuration' : '') + '.';
             if (typeof win?.alert === 'function') win.alert(message);

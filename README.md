@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.10.0-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.10.1-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -80,15 +80,23 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.10.0
+## 🔧 What's New in v0.10.1
+
+Two silent defects, found by auditing a real 32-message export against ChatGPT's own record of it. ([release notes](temporal/release-notes-v0.10.1.md))
+
+- 📉 **The last two messages could be missing.** A sweep that stalls gives up wherever it happens to be, and the final read ran at that position — one conversation stopped at 85% and shipped without its newest messages. The sweep now always finishes at the bottom.
+- 🔀 **An answer could appear before its own question.** Ordering used scroll offsets measured at capture time, which a virtualizer can make incomparable. Where ChatGPT's record accounts for every message, it now decides the order.
+- 🧩 **Messages the sweep can't reach are recovered rather than reported as a hole** — rendered from ChatGPT's own record and placed correctly. A ChatGPT export is now complete whenever the private API is reachable.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.10.0
 
 - 📊 **Exports now show their work.** A small card appears over the conversation while the export runs — phase, progress bar, how many messages and lines have been read, and a preview of the message it just captured. A long export no longer looks like a frozen tab. ([release notes](temporal/release-notes-v0.10.0.md))
 - 🟠 **An incomplete export doesn't end on a green bar**: if the sweep finishes short of the count ChatGPT's own payload reports, the card turns amber and says how many messages never loaded. It also tells you when a background tab has paused it.
 - 🧷 **Built so it can't break anything**: no `innerHTML` (Trusted Types safe), it can never be captured into your export, it never intercepts a click, and a progress card that fails to draw costs you a progress bar rather than your file.
 - ▶️ **Still one paste** — nothing about running an export changes.
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.9.8
 
@@ -287,7 +295,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.10.0** (Current) - In-page progress card showing phase, messages, lines and captured content; amber warning for incomplete exports
+- **v0.10.1** (Current) - Sweep always finishes at the bottom; payload decides order and fills messages the sweep couldn't reach
+- **v0.10.0** - In-page progress card showing phase, messages, lines and captured content; amber warning for incomplete exports
 - **v0.9.8** - A hidden tab no longer consumes the export budget; long sweeps report progress
 - **v0.9.7** - Sweep ~4× faster: waits for the DOM to settle instead of a fixed delay per scroll step
 - **v0.9.6** - Export completeness checked against ChatGPT's own message count; sweep-budget warning for long conversations
