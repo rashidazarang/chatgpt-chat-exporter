@@ -1183,6 +1183,71 @@ test('the file endpoint reports failure as HTTP 200 with an error envelope', asy
         'no image bytes ever arrived');
 });
 
+// The payload is the only source that knows how many messages a conversation
+// actually has. A sweep that stops early can capture every turn it saw and
+// still be short — the pre-0.9.6 check could not see that.
+function payloadWithMessages(ids) {
+    const mapping = {};
+    ids.forEach((id, index) => {
+        mapping[`node-${id}`] = {
+            id: `node-${id}`,
+            parent: index === 0 ? null : `node-${ids[index - 1]}`,
+            children: index === ids.length - 1 ? [] : [`node-${ids[index + 1]}`],
+            message: {
+                id,
+                author: { role: index % 2 === 0 ? 'user' : 'assistant' },
+                create_time: 1781030820 + index,
+                content: { content_type: 'text', parts: [`Message body number ${index}.`] },
+                metadata: {}
+            }
+        };
+    });
+    return { title: 'Ground Truth', current_node: `node-${ids[ids.length - 1]}`, mapping };
+}
+
+test('an export short of the conversation is not reported as complete', async () => {
+    // The page holds two turns; the conversation has six. Nothing about the two
+    // in the DOM looks wrong — they capture cleanly.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Truncated</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="m5"><p>The fifth message in this conversation.</p></div>
+        <div data-message-author-role="assistant" data-message-id="m6"><p>The sixth message in this conversation.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/truncated' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']) });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.messages.length, 2);
+    assert.equal(conversation.expectedMessages, 6);
+    assert.equal(conversation.unreachedMessages, 4, 'm1..m4 were never encountered by the sweep');
+    assert.equal(conversation.missedMessages, 0, 'nothing mounted-but-unreadable — the old check saw a clean run');
+    assert.equal(conversation.complete, false, 'a short export must not claim to be complete');
+});
+
+test('deliberate dedupe of identical turns is not mistaken for a missing message', async () => {
+    // Two turns with byte-identical content collapse to one by design
+    // (contentHash). Counting messages would call that a missing message;
+    // counting encountered ids does not.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Dedupe</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="d1"><p>Exactly the same message text here.</p></div>
+        <div data-message-author-role="user" data-message-id="d2"><p>Exactly the same message text here.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/dedupe' });
+    installInnerText(dom.window);
+
+    const backend = chatGptBackendStub({ payload: payloadWithMessages(['d1', 'd2']) });
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await extractWithBackend(dom);
+
+    assert.equal(conversation.messages.length, 1, 'identical turns collapse, as designed');
+    assert.equal(conversation.expectedMessages, 2);
+    assert.equal(conversation.unreachedMessages, 0,
+        'both ids were seen — the sweep reached everything, so this is not incompleteness');
+    assert.equal(conversation.complete, true);
+});
+
 test('ChatGPT metadata enrichment is bounded and never blocks the DOM export', async () => {
     const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Metadata Timeout</title></head><body><main>
         <div data-message-author-role="user" data-message-id="message-timeout-user"><p>Keep this prompt even if metadata stalls.</p></div>
@@ -1362,6 +1427,50 @@ test('the selector doctor reports a healthy page and names the drift on an unhea
     assert.ok(bad.messagesFound > 0, 'the export still works, which is what makes the drift silent');
     assert.ok(bad.warnings.some(warning => /Falling back to selector #4/.test(warning)),
         'the doctor must name the fallback rather than report a clean bill of health');
+});
+
+// Modelled on a real conversation: a 129522px scroller in a 936px viewport
+// needs ~184 scroll steps, which cannot finish inside the default 120s budget.
+// The only symptom used to be a short file and a warning after the fact.
+test('the doctor warns when a conversation cannot be swept inside its budget', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Very Long</title></head><body><main id="scroller">
+        <div data-message-author-role="user" data-message-id="a"><p>A question in a very long conversation.</p></div>
+        <div data-message-author-role="assistant" data-message-id="b"><p>An answer in a very long conversation.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/very-long' });
+    installInnerText(dom.window);
+    dom.window.fetch = async () => null;
+
+    const scroller = dom.window.document.getElementById('scroller');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => 129522, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => 936, configurable: true });
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'chatgpt' });
+
+    assert.ok(report.sweep, 'a scrollable conversation gets an estimate');
+    assert.equal(report.sweep.steps, 184);
+    assert.equal(report.sweep.budgetSeconds, 120);
+    assert.equal(report.sweep.fitsBudget, false);
+    assert.ok(report.warnings.some(w => /scroll steps/.test(w) && /maxDuration/.test(w)),
+        'the warning must name the cost and how to raise the budget');
+});
+
+test('a conversation that fits its budget is not warned about', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Short</title></head><body><main id="scroller">
+        <div data-message-author-role="user" data-message-id="a"><p>A question in a short conversation.</p></div>
+        <div data-message-author-role="assistant" data-message-id="b"><p>An answer in a short conversation.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/short' });
+    installInnerText(dom.window);
+    dom.window.fetch = async () => null;
+
+    const scroller = dom.window.document.getElementById('scroller');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => 6000, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => 936, configurable: true });
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'chatgpt' });
+    assert.equal(report.sweep.fitsBudget, true);
+    assert.ok(!report.warnings.some(w => /scroll steps/.test(w)));
 });
 
 test('the doctor reports each provider against its own turn scope', async () => {

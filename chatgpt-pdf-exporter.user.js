@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - PDF
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.9.5
+// @version      0.9.6
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @match        https://chat.openai.com/*
@@ -28,7 +28,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.9.5';
+        const ENGINE_VERSION = '0.9.6';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -1780,6 +1780,17 @@
             const recaps = payloadReasoningRecaps(entries);
             let embeddedBytes = 0;
 
+            // The payload is ground truth for how many messages the conversation
+            // has. Comparing *ids the sweep actually encountered* — not counts —
+            // keeps deliberate content dedupe (two identical "ok" turns collapse by
+            // design) from reading as a missing message.
+            if (options.seenMessageIds instanceof Set) {
+                const mainEntries = entries.filter(isMainPayloadMessage);
+                conversation.expectedMessages = mainEntries.length;
+                conversation.unreachedMessages = mainEntries.filter(entry =>
+                    !options.seenMessageIds.has(String(entry.message.id || entry.nodeId))).length;
+            }
+
             for (const [message, entry] of matches.entries()) {
                 const nativeMessage = entry.message;
                 if (!message.timestamp) {
@@ -1937,6 +1948,9 @@
 
             const state = { seen: new Set(), messages: [], container };
             const seenKeys = new Set();
+            // Every message id the sweep encountered, whether or not it was
+            // captured or deduped — the evidence for "did we actually get there".
+            const seenMessageIds = new Set();
             // Turns that were on screen but had nothing to serialize yet. They are
             // the reason for the return pass below.
             const pendingKeys = new Set();
@@ -1944,6 +1958,8 @@
             const capture = () => {
                 messageSelector = messageSelector || resolveMessageSelector(doc, provider);
                 findMessageCandidates(doc, messageSelector).forEach(messageElement => {
+                    const encounteredId = providerMessageId(messageElement, provider);
+                    if (encounteredId) seenMessageIds.add(encounteredId);
                     const key = messageKey(messageElement, provider);
                     if (seenKeys.has(key)) return;
                     // A virtualizer mounts the turn before it fills in the text, so
@@ -2066,7 +2082,7 @@
             const conversation = buildConversation(doc, provider, options, sortByConversationOrder(state.messages, provider));
             if (!outOfTime()) {
                 try {
-                    await enrichChatGptConversation(conversation, doc, format, { ...options, metadataDeadline: deadline });
+                    await enrichChatGptConversation(conversation, doc, format, { ...options, metadataDeadline: deadline, seenMessageIds });
                 } catch (error) {
                     // Metadata is an enhancement over the DOM capture. A changed
                     // private endpoint must never prevent the conversation export.
@@ -2078,7 +2094,15 @@
             // Turns that were on screen but never became readable. Saying so beats
             // handing over a short file that looks complete.
             conversation.missedMessages = pendingKeys.size;
-            conversation.complete = pendingKeys.size === 0 && !outOfTime() && settled;
+            // An export can look clean and still be short: every turn the sweep saw
+            // was captured, but the sweep never reached the top. Only the payload
+            // can tell us that, and it is the difference between a heuristic and
+            // proof.
+            const unreached = conversation.unreachedMessages || 0;
+            conversation.complete = pendingKeys.size === 0 && unreached === 0 && !outOfTime() && settled;
+            if (unreached > 0) {
+                console.warn(`[Chat Exporter] ${unreached} of ${conversation.expectedMessages} messages in this conversation were never reached by the scroll sweep. Raise maxDuration and keep the tab in the foreground.`);
+            }
             if (!settled) {
                 console.warn('[Chat Exporter] The answer was still being written when the export ran out of time; the last message may be cut off.');
             }
@@ -2160,6 +2184,28 @@
             };
         }
 
+        // A long conversation can need more wall clock than the sweep is allowed,
+        // and the only symptom is a short file with a warning after the fact. The
+        // page itself says how far it has to scroll, so the cost is knowable up
+        // front.
+        function estimateSweep(container, options) {
+            if (!container) return null;
+            const scrollDelay = options.scrollDelay ?? 350;
+            const budget = options.maxDuration ?? DEFAULT_MAX_DURATION;
+            const step = Math.max(container.clientHeight * 0.75, 200);
+            const steps = Math.ceil(Math.max(0, container.scrollHeight - container.clientHeight) / step);
+            // Each step waits once; a step whose turns mount late waits twice.
+            const bestMs = steps * scrollDelay;
+            const worstMs = steps * scrollDelay * 2;
+            return {
+                steps,
+                estimatedSeconds: Math.round(bestMs / 1000),
+                worstCaseSeconds: Math.round(worstMs / 1000),
+                budgetSeconds: Math.round(budget / 1000),
+                fitsBudget: worstMs <= budget
+            };
+        }
+
         async function diagnose(options = {}) {
             const doc = resolveDocument(options.document);
             const provider = providerFor(options.provider, doc);
@@ -2195,6 +2241,7 @@
                 scrollContainer: container
                     ? `${container.tagName.toLowerCase()} (${container.scrollHeight}px in ${container.clientHeight}px)`
                     : 'none — single-pass export',
+                sweep: estimateSweep(container, options),
                 messagesFound: messages.length,
                 domTimestamps: queryAll(doc, MESSAGE_TIMESTAMP_SELECTOR).length
             };
@@ -2207,7 +2254,11 @@
             report.warnings = [
                 report.messagesFound === 0 ? 'No messages matched any selector — the exporter would fail on this page.' : '',
                 winner > 0 ? `Falling back to selector #${winner + 1} of ${report.messageSelectors.length}; earlier entries no longer match.` : '',
-                !selectorTitle ? 'Every titleSelector missed; the title comes from the tab.' : '',
+                // Not a warning for a provider that prefers the tab on purpose —
+                // crying wolf about designed behaviour is how real warnings get
+                // ignored.
+                !selectorTitle && !provider.preferDocumentTitle
+                    ? 'Every titleSelector missed; the title comes from the tab.' : '',
                 // The failure that shipped in v0.9.4: a selector matched page chrome
                 // (Gemini's model picker) and won over an accurate tab title.
                 selectorTitle && documentTitle && selectorTitle.title !== documentTitle
@@ -2215,7 +2266,21 @@
                     : '',
                 report.api && report.api.reason !== 'ok' && report.api.reason !== 'no-conversation-id'
                     ? `Per-message metadata is unavailable here (${report.api.reason}).` : '',
-                report.hidden ? 'This tab is in the background; a real export would be throttled.' : ''
+                report.hidden ? 'This tab is in the background; a real export would be throttled.' : '',
+                report.sweep && !report.sweep.fitsBudget
+                    ? `This conversation needs about ${report.sweep.steps} scroll steps — ${report.sweep.estimatedSeconds}s at best, ${report.sweep.worstCaseSeconds}s if turns mount slowly — against a ${report.sweep.budgetSeconds}s budget. Export with a larger maxDuration, e.g. ChatExporterEngine.exportConversationFull({ provider: '${provider.id}', format: 'markdown', maxDuration: ${Math.max(120, Math.ceil(report.sweep.worstCaseSeconds * 1.5 / 30) * 30)}000 }).`
+                    : '',
+            ].filter(Boolean);
+
+            // Context, not problems. Mixing the two is how a warning list stops
+            // being read at all.
+            report.notes = [
+                report.api?.reason === 'ok' && report.api.payloadMessages > report.messagesFound
+                    ? `The conversation has ${report.api.payloadMessages} messages; ${report.messagesFound} are in the page right now. A real export scrolls to reach the rest — this check does not.`
+                    : '',
+                report.sweep && report.sweep.fitsBudget
+                    ? `About ${report.sweep.steps} scroll steps, ~${report.sweep.estimatedSeconds}s of a ${report.sweep.budgetSeconds}s budget.`
+                    : ''
             ].filter(Boolean);
 
             return report;
@@ -2475,8 +2540,11 @@
             if (conversation.complete === false && options.notify !== false) {
                 const win = getWindow(doc);
                 const message = `Chat Exporter: this export may be incomplete — ${conversation.messages.length} messages captured` +
+                    (conversation.expectedMessages ? ` of ${conversation.expectedMessages} in the conversation` : '') +
                     (conversation.missedMessages ? `, ${conversation.missedMessages} turn(s) never finished rendering` : '') +
-                    '.\n\nKeep the ChatGPT tab in the foreground while exporting, then try again.';
+                    (conversation.unreachedMessages ? `, ${conversation.unreachedMessages} never reached by the scroll sweep` : '') +
+                    '.\n\nKeep the ChatGPT tab in the foreground while exporting, then try again' +
+                    (conversation.unreachedMessages ? ' with a larger maxDuration' : '') + '.';
                 if (typeof win?.alert === 'function') win.alert(message);
             }
 

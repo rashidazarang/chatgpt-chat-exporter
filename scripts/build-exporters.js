@@ -44,6 +44,7 @@ ${indent(engineSource, 4)}
         console.table(report.messageSelectors);
         console.table(report.contentSelectors);
         if (report.api) console.log('Private API:', report.api);
+        report.notes.forEach(note => console.log('[Chat Exporter] ' + note));
         if (report.warnings.length) {
             report.warnings.forEach(warning => console.warn('[Chat Exporter] ' + warning));
         } else {

@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.9.5-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.9.6-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -80,14 +80,20 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.9.5
+## 🔧 What's New in v0.9.6
+
+- 📏 **A short export no longer claims to be complete**: the old check could pass while the sweep quietly stopped before the top of a long conversation. The export now compares against the message count ChatGPT's own payload reports — ground truth instead of a heuristic. ([release notes](temporal/release-notes-v0.9.6.md))
+- ⏱️ **Long conversations warn you *before* you export**: a 129,522px conversation needs ~184 scroll steps and can't finish inside the default 120s budget. `selector-doctor.js` now measures that from the page and tells you the `maxDuration` to pass.
+- 🔕 **Fewer, better warnings**: two that fired on perfectly healthy pages were demoted to informational notes. A warning list that cries wolf stops being read.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.9.5
 
 - 🏷️ **A Gemini chat could export titled "Flash-Lite"** — the model name, not the conversation. Gemini renders its model picker under a class matching one of its own title selectors, and it outranked the tab title. That selector is removed, and Gemini now trusts the tab title, which is verified accurate. Found on the first real run of v0.9.4's own health check. ([release notes](temporal/release-notes-v0.9.5.md))
 - 🩺 **`selector-doctor.js` now catches this whole class of bug**: it warns when a title selector matched something the browser tab disagrees with — "one of them is page chrome."
 - 🔍 **Lesson recorded in the repo docs**: page chrome mounts *after* first paint, so a single point-in-time probe is not evidence that a selector is safe. v0.9.4 shipped on exactly that mistake.
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.9.4
 
@@ -263,7 +269,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.9.5** (Current) - Fixes a Gemini chat exporting titled with the model name; doctor flags title selectors that disagree with the tab
+- **v0.9.6** (Current) - Export completeness checked against ChatGPT's own message count; sweep-budget warning for long conversations
+- **v0.9.5** - Fixes a Gemini chat exporting titled with the model name; doctor flags title selectors that disagree with the tab
 - **v0.9.4** - Provider-layer hardening: per-provider turn scope, Gemini title/filename suffix fixed, new `selector-doctor.js` health check
 - **v0.9.3** - Fixes the `404` on `backend-api/conversation/…`: private-API calls now carry the page's bearer token up front, with workspace-account and signed-file-link handling
 - **v0.9.2** - Embedded image/image-only turn support (#33); per-turn timestamps, uploaded/generated files, and visible reasoning recaps (#32)
