@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.10.2-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.10.3-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -80,13 +80,17 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.10.2
+## 🔧 What's New in v0.10.3
 
-- 🧹 **`#### ChatGPT said:` no longer appears above every message.** ChatGPT labels each turn with a 1×1px off-screen heading for screen readers; the exporter was reading it as content, so it opened *every* message in every export. Screen-reader-only elements are now stripped as the chrome they are — matched by class, so a heading that genuinely ends in "said:" survives. ([release notes](temporal/release-notes-v0.10.2.md))
-- 🕓 **Recovered messages now carry their timestamp** — they were the only ones in a file without one, while the payload had it all along.
+- 🔗 **Inline citations no longer export as a wall of base64.** ChatGPT puts a favicon and a label inside one link; the exporter escaped the image markdown into the link text, producing literal backslashes and a base64 blob mid-sentence instead of a link. Citations now read as `[MetaMCP+1](url)`, and a link that is only an image keeps its image. ([release notes](temporal/release-notes-v0.10.3.md))
 
 <details>
 <summary>📝 Previous updates</summary>
+
+### v0.10.2
+
+- 🧹 **`#### ChatGPT said:` no longer appears above every message.** ChatGPT labels each turn with a 1×1px off-screen heading for screen readers; the exporter was reading it as content, so it opened *every* message in every export. Screen-reader-only elements are now stripped as the chrome they are — matched by class, so a heading that genuinely ends in "said:" survives. ([release notes](temporal/release-notes-v0.10.2.md))
+- 🕓 **Recovered messages now carry their timestamp** — they were the only ones in a file without one, while the payload had it all along.
 
 ### v0.10.1
 
@@ -300,7 +304,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.10.2** (Current) - Strips ChatGPT's screen-reader "said:" heading from every message; recovered messages keep their timestamp
+- **v0.10.3** (Current) - Inline citations export as their label instead of escaped base64
+- **v0.10.2** - Strips ChatGPT's screen-reader "said:" heading from every message; recovered messages keep their timestamp
 - **v0.10.1** - Sweep always finishes at the bottom; payload decides order and fills messages the sweep couldn't reach
 - **v0.10.0** - In-page progress card showing phase, messages, lines and captured content; amber warning for incomplete exports
 - **v0.9.8** - A hidden tab no longer consumes the export budget; long sweeps report progress

@@ -1432,6 +1432,50 @@ test('messages the sweep could not reach are recovered from the payload', async 
 // select-none">ChatGPT said:</h4>, sized 1x1px and positioned off-screen. It is
 // invisible to a reader and was reaching every exported message as a redundant
 // "#### ChatGPT said:" heading.
+// ChatGPT renders an inline citation as a favicon plus a label inside one <a>.
+// Media is serialized before links, so the link text already held
+// "![Image](data:image/png;base64,…)" — escaping that into the link produced
+// `[!\[Image\](data:…)Label](url)`, which is not a link at all but a wall of
+// base64 shown as visible text.
+test('a citation chip exports as its label, not a wall of base64', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Citation</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="c1">
+            <p>The repository corroborates this claim.
+            <a href="https://metamcp.org/reference/contributing?utm_source=chatgpt.com"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==" alt="">MetaMCP+1</a></p>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/citation' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    });
+    const body = conversation.messages[0].content;
+
+    assert.match(body, /\[MetaMCP\+1\]\(https:\/\/metamcp\.org\/reference\/contributing/,
+        'the citation reads as its label');
+    assert.ok(!body.includes('!\\['), 'no escaped image markdown left inside a link');
+    assert.ok(!body.includes('data:image'), 'the favicon does not become visible text');
+});
+
+test('a link that is only an image keeps the image and stays a link', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Image Link</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="i1">
+            <p>See the chart below for the breakdown of results.
+            <a href="https://example.com/report"><img src="https://example.com/chart.png" alt="Quarterly chart"></a></p>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/image-link' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    });
+    const body = conversation.messages[0].content;
+
+    assert.match(body, /\[!\[Quarterly chart\]\(https:\/\/example\.com\/chart\.png\)\]\(https:\/\/example\.com\/report\)/,
+        'an image-only link nests properly instead of losing the picture');
+    assert.ok(!body.includes('\\!'), 'our own generated syntax is not escaped');
+});
+
 test('screen-reader-only labels never reach the export', () => {
     const dom = new JSDOM(`<!DOCTYPE html><html><head><title>SR Only</title></head><body><main>
         <div data-message-author-role="user" data-message-id="sr1">

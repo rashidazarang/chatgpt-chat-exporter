@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - Markdown
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.10.2
+// @version      0.10.3
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @match        https://chat.openai.com/*
@@ -28,7 +28,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.10.2';
+        const ENGINE_VERSION = '0.10.3';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -739,6 +739,31 @@
             });
         }
 
+        // Markdown this pass generated for media sitting inside a link. Media is
+        // processed first, so by the time a link is serialized its text already
+        // contains `![alt](src)` or a `[Image: name]` placeholder.
+        const GENERATED_IMAGE_MARKDOWN = /!\[[^\]]*\]\([^)]*\)/g;
+        const GENERATED_MEDIA_PLACEHOLDER = /\[(?:Image|Canvas or chart|Video|Audio|Media)(?::[^\]]*)?\]/g;
+
+        // ChatGPT's inline citations are a favicon plus a label inside one link.
+        // Escaping the image markdown into the link text produced
+        // `[!\[Image\](data:image/png;base64,…)Label](url)` — not a link at all,
+        // just a wall of base64 rendered as visible text. Take the label instead,
+        // and keep the image only when it is all the link has.
+        function markdownLink(link, href) {
+            const raw = String(link.textContent || '');
+            const images = raw.match(GENERATED_IMAGE_MARKDOWN) || [];
+            const label = normalizeWhitespace(
+                raw.replace(GENERATED_IMAGE_MARKDOWN, ' ').replace(GENERATED_MEDIA_PLACEHOLDER, ' ')
+            );
+
+            if (label) return `[${escapeMarkdownLinkText(label)}](${escapeMarkdownUrl(href)})`;
+            // Nothing but an image: nest it properly rather than escaping our own
+            // syntax, so the picture survives and the link still works.
+            if (images.length > 0) return `[${images[0]}](${escapeMarkdownUrl(href)})`;
+            return `[${escapeMarkdownLinkText(href)}](${escapeMarkdownUrl(href)})`;
+        }
+
         function processLinks(clone, format, replacements) {
             queryAll(clone, 'a[href]').forEach(link => {
                 if (link.closest('pre, code, code-block')) return;
@@ -746,10 +771,11 @@
                 const href = String(link.href || link.getAttribute('href') || '').trim();
                 if (isUnsafeHref(href)) return;
 
-                const text = normalizeWhitespace(link.textContent) || href;
+                // HTML keeps its media as opaque placeholders, so nesting is
+                // already correct there — <a><img></a> needs no special handling.
                 const replacement = format === 'markdown'
-                    ? `[${escapeMarkdownLinkText(text)}](${escapeMarkdownUrl(href)})`
-                    : addReplacement(replacements, `<a href="${sanitizeHtml(href)}">${sanitizeHtml(text)}</a>`);
+                    ? markdownLink(link, href)
+                    : addReplacement(replacements, `<a href="${sanitizeHtml(href)}">${sanitizeHtml(normalizeWhitespace(link.textContent) || href)}</a>`);
 
                 link.replaceWith(createTextNode(link, replacement));
             });
