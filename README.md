@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.9.7-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.9.8-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -80,14 +80,19 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.9.7
+## 🔧 What's New in v0.9.8
+
+- ⏸️ **A background tab no longer eats your export budget.** The sweep waited for a hidden tab *on its own clock*, so a backgrounded tab burned the whole time limit doing nothing and saved a fragment. Worse, raising the limit to help a long conversation only bought a longer stall. The wait now has its own budget and gives the time back. ([release notes](temporal/release-notes-v0.9.8.md))
+- 📣 **Long exports report progress** every 5 seconds instead of going silent for minutes — silence is indistinguishable from a hang.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.9.7
 
 - ⚡ **Exports are about 4× faster.** The sweep slept a fixed 350ms per scroll step whether or not the page had finished rendering — on a long conversation that timer *was* the export. It now watches the DOM and continues the moment it settles, capped at the old delay, so it can only be faster and never less thorough. Measured 11086ms → 2848ms on a 40-message fixture, byte-identical output. ([release notes](temporal/release-notes-v0.9.7.md))
 - 🎯 **One loop deliberately still waits**: pinning to the top of a conversation waits on a *network* fetch of older history, which produces no DOM activity until it arrives. Speeding that up would start the sweep below the real top and drop your oldest messages.
 - 🔕 **Budget warning rebalanced** to match the new speed — a long conversation that now finishes comfortably is no longer flagged.
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v0.9.6
 
@@ -275,7 +280,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.9.7** (Current) - Sweep ~4× faster: waits for the DOM to settle instead of a fixed delay per scroll step
+- **v0.9.8** (Current) - A hidden tab no longer consumes the export budget; long sweeps report progress
+- **v0.9.7** - Sweep ~4× faster: waits for the DOM to settle instead of a fixed delay per scroll step
 - **v0.9.6** - Export completeness checked against ChatGPT's own message count; sweep-budget warning for long conversations
 - **v0.9.5** - Fixes a Gemini chat exporting titled with the model name; doctor flags title selectors that disagree with the tab
 - **v0.9.4** - Provider-layer hardening: per-provider turn scope, Gemini title/filename suffix fixed, new `selector-doctor.js` health check

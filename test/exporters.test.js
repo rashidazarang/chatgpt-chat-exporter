@@ -2087,6 +2087,61 @@ test('a sweep waits for a hidden tab to come back before scrolling', async () =>
     assert.equal(conversation.complete, true);
 });
 
+test('a tab that stays hidden does not eat the export budget waiting', async () => {
+    // Before v0.9.8 the hidden wait ran `while (doc.hidden && !outOfTime())`,
+    // so a backgrounded tab burned the entire maxDuration doing nothing and
+    // raising the budget only bought a longer stall.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Stays Hidden</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/stays-hidden',
+        pretendToBeVisual: true
+    });
+    installVirtualizedConversation(dom.window, 12);
+    Object.defineProperty(dom.window.document, 'hidden', { get: () => true, configurable: true });
+
+    const started = Date.now();
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0,
+        maxHiddenWait: 200,
+        maxDuration: 10000
+    });
+    const elapsed = Date.now() - started;
+
+    assert.ok(elapsed < 4000, `a permanently hidden tab must not spend the 10s budget waiting (took ${elapsed}ms)`);
+    assert.ok(conversation.messages.length > 0, 'it still exports what is on the page');
+});
+
+test('time spent waiting on a hidden tab is given back to the sweep', async () => {
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Paused Clock</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/paused-clock',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 24;
+    installVirtualizedConversation(dom.window, totalMessages);
+
+    let hidden = true;
+    Object.defineProperty(dom.window.document, 'hidden', { get: () => hidden, configurable: true });
+    dom.window.setTimeout(() => { hidden = false; }, 600);
+
+    // The wait alone would have left ~100ms of a 700ms budget — far less than
+    // the ~600ms of scrolling this conversation needs.
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 30,
+        awaitStreaming: false,
+        maxHiddenWait: 5000,
+        maxDuration: 700
+    });
+
+    assert.equal(hidden, false);
+    assert.equal(conversation.messages.length, totalMessages,
+        'the sweep gets its full budget once the reader comes back');
+});
+
 test('an answer still being written is waited for, not exported half-finished', async () => {
     const dom = new JSDOM(`<!DOCTYPE html>
 <html><head><title>Streaming</title></head><body><main>

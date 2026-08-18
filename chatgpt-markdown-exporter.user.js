@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - Markdown
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.9.7
+// @version      0.9.8
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @match        https://chat.openai.com/*
@@ -28,7 +28,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.9.7';
+        const ENGINE_VERSION = '0.9.8';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -50,6 +50,15 @@
         // step whether or not the virtualizer had already finished — on a long
         // conversation that is most of the export's wall clock.
         const RENDER_QUIET_INTERVAL = 60;
+
+        // Total time the sweep will wait for a hidden tab to come back before
+        // giving up and exporting what is on the page. Separate from maxDuration:
+        // waiting on the reader is not the export spending its budget.
+        const MAX_HIDDEN_WAIT = 60000;
+
+        // How often a long sweep says where it has got to. Minutes of silence read
+        // as a hang.
+        const PROGRESS_INTERVAL = 5000;
         // Random run token so conversation text can never collide with (or inject
         // through) the internal block placeholders used during serialization.
         const MARKER_PREFIX = `__CHAT_EXPORTER_BLOCK_${Math.random().toString(36).slice(2, 10)}_`;
@@ -2032,19 +2041,51 @@
 
             // An export must not be able to hang the page: every phase runs against
             // one wall-clock budget, however slow the provider is.
-            const deadline = now(win) + (options.maxDuration ?? DEFAULT_MAX_DURATION);
+            // Extended, not consumed, while the tab is hidden — see awaitVisible.
+            let deadline = now(win) + (options.maxDuration ?? DEFAULT_MAX_DURATION);
             const outOfTime = () => now(win) >= deadline;
+            let hiddenBudget = options.maxHiddenWait ?? MAX_HIDDEN_WAIT;
 
             // A hidden tab gets its timers throttled and its off-screen rendering
             // suspended, so the sweep crawls and the provider may never mount the
             // turns being scrolled to. Waiting beats exporting a fragment.
+            // Waiting for the reader used to be charged to the export's own clock:
+            // a backgrounded tab burned the whole maxDuration doing nothing, said
+            // so once, and then saved whatever happened to be mounted. The wait now
+            // draws on its own budget and gives the time back, so raising
+            // maxDuration no longer just buys a longer stall.
             const awaitVisible = async () => {
                 if (!doc.hidden) return true;
-                console.warn('[Chat Exporter] This tab is in the background — the export is waiting for you to bring it to the front. A hidden tab throttles the scroll sweep.');
-                while (doc.hidden && !outOfTime()) {
+                if (hiddenBudget <= 0) return false;
+
+                console.warn('[Chat Exporter] This tab is in the background — bring it to the front to continue. The export clock is paused while it waits.');
+                const startedHidden = now(win);
+                while (doc.hidden && now(win) - startedHidden < hiddenBudget) {
                     await wait(200);
                 }
-                return !doc.hidden;
+
+                const waited = now(win) - startedHidden;
+                hiddenBudget -= waited;
+                // Time spent waiting on a person is not time spent exporting.
+                deadline += waited;
+
+                if (doc.hidden) {
+                    console.warn(`[Chat Exporter] Still in the background after ${Math.round(waited / 1000)}s — exporting only what is currently on the page.`);
+                    return false;
+                }
+                console.log('[Chat Exporter] Tab is back in front — resuming the sweep.');
+                return true;
+            };
+
+            // Minutes of silence during a long sweep are indistinguishable from a
+            // hang, which is how a working export gets abandoned.
+            let lastProgress = now(win);
+            const reportProgress = scroller => {
+                if (now(win) - lastProgress < PROGRESS_INTERVAL) return;
+                lastProgress = now(win);
+                const travel = Math.max(1, scroller.scrollHeight - scroller.clientHeight);
+                const percent = Math.min(99, Math.max(0, Math.round((scroller.scrollTop / travel) * 100)));
+                console.log(`[Chat Exporter] Sweeping… ${percent}% · ${state.messages.length} messages captured so far.`);
             };
 
             // Wait for the newest answer to stop growing before anything is read,
@@ -2116,6 +2157,8 @@
                             await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
                             capture();
                         }
+
+                        reportProgress(scroller);
 
                         if (scroller.scrollTop > beforeTop || state.messages.length > beforeCount) {
                             stalls = 0;
