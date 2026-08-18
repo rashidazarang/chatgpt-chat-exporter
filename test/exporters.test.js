@@ -1450,6 +1450,28 @@ test('the doctor warns when a conversation cannot be swept inside its budget', a
     assert.ok(report.sweep, 'a scrollable conversation gets an estimate');
     assert.equal(report.sweep.steps, 184);
     assert.equal(report.sweep.budgetSeconds, 120);
+    // Before the mutation-driven settle this needed 64s at best and did not
+    // fit; the same page now costs about 11s and clears the default budget.
+    assert.ok(report.sweep.estimatedSeconds <= 15, `expected a fast sweep, got ${report.sweep.estimatedSeconds}s`);
+    assert.equal(report.sweep.fitsBudget, true);
+    assert.ok(!report.warnings.some(w => /scroll steps/.test(w)),
+        'a conversation that comfortably fits must not be warned about');
+});
+
+test('the doctor still warns when a conversation genuinely cannot fit its budget', async () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Enormous</title></head><body><main id="scroller">
+        <div data-message-author-role="user" data-message-id="a"><p>A question in an enormous conversation.</p></div>
+        <div data-message-author-role="assistant" data-message-id="b"><p>An answer in an enormous conversation.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/enormous' });
+    installInnerText(dom.window);
+    dom.window.fetch = async () => null;
+
+    const scroller = dom.window.document.getElementById('scroller');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => 1000000, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => 936, configurable: true });
+
+    const report = await engine.diagnose({ document: dom.window.document, provider: 'chatgpt' });
     assert.equal(report.sweep.fitsBudget, false);
     assert.ok(report.warnings.some(w => /scroll steps/.test(w) && /maxDuration/.test(w)),
         'the warning must name the cost and how to raise the budget');

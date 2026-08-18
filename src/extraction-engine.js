@@ -11,7 +11,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
     'use strict';
 
-    const ENGINE_VERSION = '0.9.6';
+    const ENGINE_VERSION = '0.9.7';
 
     // Pixels of slack when deciding the scroll container has reached its end.
     const BOTTOM_TOLERANCE = 4;
@@ -27,6 +27,12 @@
     // How long to watch the newest answer before deciding it has stopped
     // growing. Short enough not to be felt on an idle conversation.
     const STREAM_SETTLE_INTERVAL = 250;
+
+    // How long the conversation container must stop mutating before a scroll
+    // step counts as rendered. The sweep used to sleep a fixed scrollDelay per
+    // step whether or not the virtualizer had already finished — on a long
+    // conversation that is most of the export's wall clock.
+    const RENDER_QUIET_INTERVAL = 60;
     // Random run token so conversation text can never collide with (or inject
     // through) the internal block placeholders used during serialization.
     const MARKER_PREFIX = `__CHAT_EXPORTER_BLOCK_${Math.random().toString(36).slice(2, 10)}_`;
@@ -1881,6 +1887,55 @@
         return root && root.scrollHeight > root.clientHeight + 10 ? root : null;
     }
 
+    // Wait for the provider to finish mounting whatever the scroll revealed,
+    // instead of sleeping a fixed guess. Resolves as soon as the container has
+    // been quiet for `quiet` ms, and never waits longer than the old fixed
+    // delay — so this can only be faster, never less thorough. Falls back to
+    // the plain sleep where MutationObserver is unavailable.
+    function awaitRenderSettled(doc, container, maxWait, quiet) {
+        const win = getWindow(doc);
+        const setTimer = win?.setTimeout?.bind(win) || setTimeout;
+        const clearTimer = win?.clearTimeout?.bind(win) || clearTimeout;
+        const ObserverCtor = win?.MutationObserver || (typeof MutationObserver !== 'undefined' ? MutationObserver : null);
+
+        if (typeof ObserverCtor !== 'function' || !container || typeof container.isConnected !== 'boolean') {
+            return new Promise(resolve => setTimer(resolve, maxWait));
+        }
+
+        return new Promise(resolve => {
+            let quietTimer = null;
+            let settled = false;
+            const observer = new ObserverCtor(() => {
+                clearTimer(quietTimer);
+                quietTimer = setTimer(finish, quiet);
+            });
+
+            function finish() {
+                if (settled) return;
+                settled = true;
+                clearTimer(quietTimer);
+                clearTimer(ceiling);
+                try {
+                    observer.disconnect();
+                } catch (error) {
+                    // Already gone; nothing to release.
+                }
+                resolve();
+            }
+
+            const ceiling = setTimer(finish, maxWait);
+            try {
+                observer.observe(container, { childList: true, subtree: true, characterData: true });
+            } catch (error) {
+                finish();
+                return;
+            }
+            // Nothing mounting at all still costs one quiet interval, not a
+            // full delay.
+            quietTimer = setTimer(finish, quiet);
+        });
+    }
+
     // An answer still being written would be exported half-finished. Rather
     // than hunt for a "stop generating" button — a test id that changes with
     // every redesign — watch whether the newest message is still growing.
@@ -1923,6 +1978,7 @@
         const provider = providerFor(options.provider, doc);
         const format = options.format || 'markdown';
         const scrollDelay = options.scrollDelay ?? 350;
+        const renderQuiet = options.renderQuiet ?? RENDER_QUIET_INTERVAL;
         const maxScrollSteps = options.maxScrollSteps ?? 400;
         const win = getWindow(doc);
         const wait = ms => new Promise(resolve => (win?.setTimeout || setTimeout)(resolve, ms));
@@ -1995,6 +2051,12 @@
                 let guard = 0;
                 while (stableHeights < 2 && guard++ < maxScrollSteps && !outOfTime()) {
                     scroller.scrollTop = 0;
+                    // Deliberately the full delay, not the mutation-driven
+                    // settle: this loop waits on a *network* fetch of older
+                    // history, which produces no DOM mutation until it lands.
+                    // Settling on quiet here would declare "no more history"
+                    // after 60ms and start the sweep below the real top. It
+                    // runs a handful of times, so it is not worth the risk.
                     await wait(scrollDelay);
                     stableHeights = scroller.scrollHeight === previousHeight ? stableHeights + 1 : 0;
                     previousHeight = scroller.scrollHeight;
@@ -2025,7 +2087,7 @@
                     const beforeTop = scroller.scrollTop;
                     const beforeCount = state.messages.length;
                     scroller.scrollTop = beforeTop + Math.max(scroller.clientHeight * 0.75, 200);
-                    await wait(scrollDelay);
+                    await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
                     capture();
 
                     // Turns mount before their text renders. Give the ones that were
@@ -2034,7 +2096,7 @@
                     // that snap back to the newest message make a return trip
                     // impossible.
                     if (pendingKeys.size > 0 && !outOfTime()) {
-                        await wait(scrollDelay);
+                        await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
                         capture();
                     }
 
@@ -2048,7 +2110,7 @@
 
                 // The virtualizer may still have been mounting turns as the last
                 // step landed.
-                if (!outOfTime()) await wait(scrollDelay);
+                if (!outOfTime()) await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
                 capture();
             } finally {
                 // Whatever happened, the reader gets their scroll position back.
@@ -2174,18 +2236,25 @@
     function estimateSweep(container, options) {
         if (!container) return null;
         const scrollDelay = options.scrollDelay ?? 350;
+        const renderQuiet = options.renderQuiet ?? RENDER_QUIET_INTERVAL;
         const budget = options.maxDuration ?? DEFAULT_MAX_DURATION;
         const step = Math.max(container.clientHeight * 0.75, 200);
         const steps = Math.ceil(Math.max(0, container.scrollHeight - container.clientHeight) / step);
-        // Each step waits once; a step whose turns mount late waits twice.
-        const bestMs = steps * scrollDelay;
+        // A step costs one quiet interval when the provider renders promptly,
+        // and is capped at scrollDelay when it does not — twice that for a step
+        // whose turns mount late enough to need the second look.
+        const bestMs = steps * renderQuiet;
         const worstMs = steps * scrollDelay * 2;
         return {
             steps,
             estimatedSeconds: Math.round(bestMs / 1000),
             worstCaseSeconds: Math.round(worstMs / 1000),
             budgetSeconds: Math.round(budget / 1000),
-            fitsBudget: worstMs <= budget
+            // Judged on the typical cost with headroom, not the pathological
+            // ceiling: a provider that never settles would blow any budget, and
+            // warning about that on every long conversation is the same crying
+            // wolf that got two other warnings demoted.
+            fitsBudget: bestMs * 2 <= budget
         };
     }
 
