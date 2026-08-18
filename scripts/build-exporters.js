@@ -4,6 +4,7 @@ const path = require('node:path');
 const repoRoot = path.resolve(__dirname, '..');
 const engineSource = fs.readFileSync(path.join(repoRoot, 'src', 'extraction-engine.js'), 'utf8').trim();
 const userscriptUiSource = fs.readFileSync(path.join(repoRoot, 'src', 'userscript-ui.js'), 'utf8').trim();
+const progressOverlaySource = fs.readFileSync(path.join(repoRoot, 'src', 'progress-overlay.js'), 'utf8').trim();
 const { version } = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
 const checkOnly = process.argv.includes('--check');
 
@@ -18,10 +19,20 @@ function runner(provider, format) {
 
 ${indent(engineSource, 4)}
 
+${indent(progressOverlaySource, 4)}
+
+    // The progress card is an enhancement: if it cannot be created, the export
+    // runs exactly as it always has.
+    const progress = globalThis.ChatExporterProgress.create(document);
+
     globalThis.ChatExporterEngine.exportConversationFull({
         provider: '${provider}',
-        format: '${format}'
-    }).catch(error => console.error('[Chat Exporter] Export failed.', error));
+        format: '${format}',
+        onProgress: progress.onProgress
+    }).catch(error => {
+        progress.destroy();
+        console.error('[Chat Exporter] Export failed.', error);
+    });
 })();
 `;
 }
@@ -81,9 +92,14 @@ function userscript(name, description) {
 
 ${indent(engineSource, 4)}
 
+${indent(progressOverlaySource, 4)}
+
 ${indent(userscriptUiSource, 4)}
 
-    globalThis.ChatExporterUi.install({ engine: globalThis.ChatExporterEngine });
+    globalThis.ChatExporterUi.install({
+        engine: globalThis.ChatExporterEngine,
+        progress: globalThis.ChatExporterProgress
+    });
 })();
 `;
 }

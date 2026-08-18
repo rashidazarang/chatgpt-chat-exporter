@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.9.8-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.10.0-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -80,13 +80,20 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.9.8
+## 🔧 What's New in v0.10.0
 
-- ⏸️ **A background tab no longer eats your export budget.** The sweep waited for a hidden tab *on its own clock*, so a backgrounded tab burned the whole time limit doing nothing and saved a fragment. Worse, raising the limit to help a long conversation only bought a longer stall. The wait now has its own budget and gives the time back. ([release notes](temporal/release-notes-v0.9.8.md))
-- 📣 **Long exports report progress** every 5 seconds instead of going silent for minutes — silence is indistinguishable from a hang.
+- 📊 **Exports now show their work.** A small card appears over the conversation while the export runs — phase, progress bar, how many messages and lines have been read, and a preview of the message it just captured. A long export no longer looks like a frozen tab. ([release notes](temporal/release-notes-v0.10.0.md))
+- 🟠 **An incomplete export doesn't end on a green bar**: if the sweep finishes short of the count ChatGPT's own payload reports, the card turns amber and says how many messages never loaded. It also tells you when a background tab has paused it.
+- 🧷 **Built so it can't break anything**: no `innerHTML` (Trusted Types safe), it can never be captured into your export, it never intercepts a click, and a progress card that fails to draw costs you a progress bar rather than your file.
+- ▶️ **Still one paste** — nothing about running an export changes.
 
 <details>
 <summary>📝 Previous updates</summary>
+
+### v0.9.8
+
+- ⏸️ **A background tab no longer eats your export budget.** The sweep waited for a hidden tab *on its own clock*, so a backgrounded tab burned the whole time limit doing nothing and saved a fragment. Worse, raising the limit to help a long conversation only bought a longer stall. The wait now has its own budget and gives the time back. ([release notes](temporal/release-notes-v0.9.8.md))
+- 📣 **Long exports report progress** every 5 seconds instead of going silent for minutes — silence is indistinguishable from a hang.
 
 ### v0.9.7
 
@@ -280,7 +287,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [EXPORTER_GUIDE.md](EXPORTER_GUIDE.md
 
 ## 🚀 Version History
 
-- **v0.9.8** (Current) - A hidden tab no longer consumes the export budget; long sweeps report progress
+- **v0.10.0** (Current) - In-page progress card showing phase, messages, lines and captured content; amber warning for incomplete exports
+- **v0.9.8** - A hidden tab no longer consumes the export budget; long sweeps report progress
 - **v0.9.7** - Sweep ~4× faster: waits for the DOM to settle instead of a fixed delay per scroll step
 - **v0.9.6** - Export completeness checked against ChatGPT's own message count; sweep-budget warning for long conversations
 - **v0.9.5** - Fixes a Gemini chat exporting titled with the model name; doctor flags title selectors that disagree with the tab

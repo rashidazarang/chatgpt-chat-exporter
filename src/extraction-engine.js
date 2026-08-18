@@ -11,7 +11,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
     'use strict';
 
-    const ENGINE_VERSION = '0.9.8';
+    const ENGINE_VERSION = '0.10.0';
 
     // Pixels of slack when deciding the scroll container has reached its end.
     const BOTTOM_TOLERANCE = 4;
@@ -1120,6 +1120,12 @@
     }
 
     function isValidMessage(element, provider) {
+        // Our own progress UI is in the page while the sweep runs. It lives
+        // outside the conversation container and carries no message markers, so
+        // it should never match — this is belt and braces, because a UI element
+        // captured as a message would end up in the reader's export.
+        if (element?.closest?.('[data-chat-exporter-ui]')) return false;
+
         const scope = messageScope(element, provider);
         const text = normalizeWhitespace(scope?.textContent);
         const richCount = richContentCount(scope);
@@ -1262,6 +1268,7 @@
         if (messageId) message.providerMessageId = messageId;
         if (timestamp) Object.assign(message, timestamp);
         state.messages.push(message);
+        state.lines = (state.lines || 0) + String(content).split('\n').length;
         return true;
     }
 
@@ -1994,7 +2001,19 @@
 
         const container = options.scroll === false ? null : findScrollContainer(doc, provider);
 
-        const state = { seen: new Set(), messages: [], container };
+        // A callback, never a DOM node: the engine is used headless in tests and
+        // must not grow a dependency on a document it can draw into. A listener
+        // that throws is the listener's problem, never the export's.
+        const emitProgress = event => {
+            if (typeof options.onProgress !== 'function') return;
+            try {
+                options.onProgress(event);
+            } catch (error) {
+                // A broken progress UI must not cost the reader their export.
+            }
+        };
+
+        const state = { seen: new Set(), messages: [], container, lines: 0 };
         const seenKeys = new Set();
         // Every message id the sweep encountered, whether or not it was
         // captured or deduped — the evidence for "did we actually get there".
@@ -2042,6 +2061,7 @@
             if (hiddenBudget <= 0) return false;
 
             console.warn('[Chat Exporter] This tab is in the background — bring it to the front to continue. The export clock is paused while it waits.');
+            emitProgress(describe('hidden'));
             const startedHidden = now(win);
             while (doc.hidden && now(win) - startedHidden < hiddenBudget) {
                 await wait(200);
@@ -2057,6 +2077,7 @@
                 return false;
             }
             console.log('[Chat Exporter] Tab is back in front — resuming the sweep.');
+            emitProgress(describe('resumed'));
             return true;
         };
 
@@ -2073,6 +2094,20 @@
 
         // Wait for the newest answer to stop growing before anything is read,
         // whether or not there is a container to sweep.
+        const describe = phase => {
+            const last = state.messages[state.messages.length - 1];
+            return {
+                phase,
+                messages: state.messages.length,
+                lines: state.lines || 0,
+                lastSender: last ? last.sender : '',
+                lastPreview: last ? normalizeWhitespace(String(last.content).replace(/<[^>]+>/g, ' ')).slice(0, 90) : ''
+            };
+        };
+
+        emitProgress({ ...describe('start'), provider: provider.id });
+
+        if (options.awaitStreaming !== false) emitProgress(describe('streaming'));
         const settled = options.awaitStreaming === false
             ? true
             : await awaitStreamingSettled(doc, provider, wait, outOfTime);
@@ -2142,6 +2177,13 @@
                     }
 
                     reportProgress(scroller);
+                    {
+                        const travel = Math.max(1, scroller.scrollHeight - scroller.clientHeight);
+                        emitProgress({
+                            ...describe('sweep'),
+                            percent: Math.min(99, Math.max(0, Math.round((scroller.scrollTop / travel) * 100)))
+                        });
+                    }
 
                     if (scroller.scrollTop > beforeTop || state.messages.length > beforeCount) {
                         stalls = 0;
@@ -2168,6 +2210,7 @@
         }
 
         const conversation = buildConversation(doc, provider, options, sortByConversationOrder(state.messages, provider));
+        emitProgress({ ...describe('metadata'), percent: 100 });
         if (!outOfTime()) {
             try {
                 await enrichChatGptConversation(conversation, doc, format, { ...options, metadataDeadline: deadline, seenMessageIds });
@@ -2194,6 +2237,13 @@
         if (!settled) {
             console.warn('[Chat Exporter] The answer was still being written when the export ran out of time; the last message may be cut off.');
         }
+        emitProgress({
+            ...describe('done'),
+            percent: 100,
+            complete: conversation.complete,
+            expectedMessages: conversation.expectedMessages || 0,
+            unreachedMessages: conversation.unreachedMessages || 0
+        });
         if (!conversation.complete) {
             console.warn(`[Chat Exporter] Export may be incomplete: ${conversation.messages.length} messages captured, ${pendingKeys.size} turn(s) never finished rendering${outOfTime() ? ', and the sweep ran out of time' : ''}. Keep the tab in the foreground and try again.`);
         }

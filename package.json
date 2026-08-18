@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-chat-exporter",
-  "version": "0.9.8",
+  "version": "0.10.0",
   "description": "Export ChatGPT and Google Gemini conversations to Markdown, HTML, or PDF-ready files from the browser console or as userscripts.",
   "main": "src/extraction-engine.js",
   "scripts": {

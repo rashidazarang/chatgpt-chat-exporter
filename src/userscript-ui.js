@@ -388,10 +388,22 @@
         let bypassNativeShare = false;
         let lastShareButton = null;
 
-        const runExport = format => (engine.exportConversationFull || engine.exportConversation).call(engine, {
-            provider: 'chatgpt',
-            format
-        });
+        // The launcher already says "Exporting…", but a sweep takes seconds and
+        // a label alone does not show it is still working. The card is optional:
+        // a build without one exports exactly as before.
+        const runExport = format => {
+            const card = options.progress ? options.progress.create(doc) : null;
+            return Promise.resolve()
+                .then(() => (engine.exportConversationFull || engine.exportConversation).call(engine, {
+                    provider: 'chatgpt',
+                    format,
+                    onProgress: card ? card.onProgress : undefined
+                }))
+                .catch(error => {
+                    if (card) card.destroy();
+                    throw error;
+                });
+        };
 
         // A full export scrolls the whole conversation, which takes seconds.
         // Say so on the launcher, and don't let a second click start a second

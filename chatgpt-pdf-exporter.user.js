@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - PDF
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.9.8
+// @version      0.10.0
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @match        https://chat.openai.com/*
@@ -28,7 +28,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.9.8';
+        const ENGINE_VERSION = '0.10.0';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -1137,6 +1137,12 @@
         }
 
         function isValidMessage(element, provider) {
+            // Our own progress UI is in the page while the sweep runs. It lives
+            // outside the conversation container and carries no message markers, so
+            // it should never match — this is belt and braces, because a UI element
+            // captured as a message would end up in the reader's export.
+            if (element?.closest?.('[data-chat-exporter-ui]')) return false;
+
             const scope = messageScope(element, provider);
             const text = normalizeWhitespace(scope?.textContent);
             const richCount = richContentCount(scope);
@@ -1279,6 +1285,7 @@
             if (messageId) message.providerMessageId = messageId;
             if (timestamp) Object.assign(message, timestamp);
             state.messages.push(message);
+            state.lines = (state.lines || 0) + String(content).split('\n').length;
             return true;
         }
 
@@ -2011,7 +2018,19 @@
 
             const container = options.scroll === false ? null : findScrollContainer(doc, provider);
 
-            const state = { seen: new Set(), messages: [], container };
+            // A callback, never a DOM node: the engine is used headless in tests and
+            // must not grow a dependency on a document it can draw into. A listener
+            // that throws is the listener's problem, never the export's.
+            const emitProgress = event => {
+                if (typeof options.onProgress !== 'function') return;
+                try {
+                    options.onProgress(event);
+                } catch (error) {
+                    // A broken progress UI must not cost the reader their export.
+                }
+            };
+
+            const state = { seen: new Set(), messages: [], container, lines: 0 };
             const seenKeys = new Set();
             // Every message id the sweep encountered, whether or not it was
             // captured or deduped — the evidence for "did we actually get there".
@@ -2059,6 +2078,7 @@
                 if (hiddenBudget <= 0) return false;
 
                 console.warn('[Chat Exporter] This tab is in the background — bring it to the front to continue. The export clock is paused while it waits.');
+                emitProgress(describe('hidden'));
                 const startedHidden = now(win);
                 while (doc.hidden && now(win) - startedHidden < hiddenBudget) {
                     await wait(200);
@@ -2074,6 +2094,7 @@
                     return false;
                 }
                 console.log('[Chat Exporter] Tab is back in front — resuming the sweep.');
+                emitProgress(describe('resumed'));
                 return true;
             };
 
@@ -2090,6 +2111,20 @@
 
             // Wait for the newest answer to stop growing before anything is read,
             // whether or not there is a container to sweep.
+            const describe = phase => {
+                const last = state.messages[state.messages.length - 1];
+                return {
+                    phase,
+                    messages: state.messages.length,
+                    lines: state.lines || 0,
+                    lastSender: last ? last.sender : '',
+                    lastPreview: last ? normalizeWhitespace(String(last.content).replace(/<[^>]+>/g, ' ')).slice(0, 90) : ''
+                };
+            };
+
+            emitProgress({ ...describe('start'), provider: provider.id });
+
+            if (options.awaitStreaming !== false) emitProgress(describe('streaming'));
             const settled = options.awaitStreaming === false
                 ? true
                 : await awaitStreamingSettled(doc, provider, wait, outOfTime);
@@ -2159,6 +2194,13 @@
                         }
 
                         reportProgress(scroller);
+                        {
+                            const travel = Math.max(1, scroller.scrollHeight - scroller.clientHeight);
+                            emitProgress({
+                                ...describe('sweep'),
+                                percent: Math.min(99, Math.max(0, Math.round((scroller.scrollTop / travel) * 100)))
+                            });
+                        }
 
                         if (scroller.scrollTop > beforeTop || state.messages.length > beforeCount) {
                             stalls = 0;
@@ -2185,6 +2227,7 @@
             }
 
             const conversation = buildConversation(doc, provider, options, sortByConversationOrder(state.messages, provider));
+            emitProgress({ ...describe('metadata'), percent: 100 });
             if (!outOfTime()) {
                 try {
                     await enrichChatGptConversation(conversation, doc, format, { ...options, metadataDeadline: deadline, seenMessageIds });
@@ -2211,6 +2254,13 @@
             if (!settled) {
                 console.warn('[Chat Exporter] The answer was still being written when the export ran out of time; the last message may be cut off.');
             }
+            emitProgress({
+                ...describe('done'),
+                percent: 100,
+                complete: conversation.complete,
+                expectedMessages: conversation.expectedMessages || 0,
+                unreachedMessages: conversation.unreachedMessages || 0
+            });
             if (!conversation.complete) {
                 console.warn(`[Chat Exporter] Export may be incomplete: ${conversation.messages.length} messages captured, ${pendingKeys.size} turn(s) never finished rendering${outOfTime() ? ', and the sweep ran out of time' : ''}. Keep the tab in the foreground and try again.`);
             }
@@ -2713,6 +2763,237 @@
         };
     });
 
+    (function initChatExporterProgress(root, factory) {
+        const progress = factory();
+
+        if (root) {
+            root.ChatExporterProgress = progress;
+        }
+
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = progress;
+        }
+    })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterProgress() {
+        'use strict';
+
+        // A card pinned over the conversation while a sweep runs, so a long export
+        // shows its work instead of looking like a frozen tab.
+        //
+        // Three rules govern everything here, and each one is a bug this project
+        // has already paid for:
+        //
+        //  1. No HTML injection sinks. ChatGPT deployments can enforce Trusted
+        //     Types, where innerHTML and friends throw. Nodes are built with
+        //     createElement/textContent only, and styles are set per-property
+        //     rather than injected as a stylesheet.
+        //  2. The overlay can never break an export. Every entry point is wrapped;
+        //     a failure here costs the reader a progress bar, never their file.
+        //  3. The overlay must not be exportable. It carries data-chat-exporter-ui
+        //     so the engine can exclude it, sits outside the conversation
+        //     container, and is position: fixed so it cannot change the container's
+        //     scroll height mid-sweep.
+
+        const CONTAINER_ID = 'chat-exporter-progress';
+        const LINGER_AFTER_DONE = 2600;
+
+        const PHASE_LABEL = {
+            start: 'Preparing export…',
+            streaming: 'Waiting for the answer to finish…',
+            hidden: 'Paused — bring this tab to the front',
+            resumed: 'Resuming…',
+            sweep: 'Reading conversation…',
+            metadata: 'Adding timestamps and attachments…',
+            done: 'Export complete'
+        };
+
+        function styleOf(element, styles) {
+            Object.keys(styles).forEach(property => {
+                try {
+                    element.style[property] = styles[property];
+                } catch (error) {
+                    // A refused property is cosmetic; keep going.
+                }
+            });
+        }
+
+        function element(doc, tag, styles, text) {
+            const node = doc.createElement(tag);
+            if (styles) styleOf(node, styles);
+            if (text !== undefined) node.textContent = text;
+            return node;
+        }
+
+        function formatCount(value) {
+            const number = Number(value) || 0;
+            return number >= 1000 ? `${Math.floor(number / 1000)},${String(number % 1000).padStart(3, '0')}` : String(number);
+        }
+
+        function build(doc) {
+            const card = element(doc, 'div', {
+                position: 'fixed',
+                left: '20px',
+                bottom: '20px',
+                zIndex: '2147483646',
+                width: '300px',
+                maxWidth: 'calc(100vw - 40px)',
+                padding: '14px 16px',
+                borderRadius: '12px',
+                background: 'rgba(24, 24, 27, 0.94)',
+                color: '#f4f4f5',
+                font: '13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+                boxShadow: '0 8px 28px rgba(0, 0, 0, 0.32)',
+                // The reader must never have to fight this for a click.
+                pointerEvents: 'none',
+                transition: 'opacity 240ms ease'
+            });
+            card.id = CONTAINER_ID;
+            card.setAttribute('data-chat-exporter-ui', 'progress');
+            // Announced politely rather than stealing focus from the page.
+            card.setAttribute('role', 'status');
+            card.setAttribute('aria-live', 'polite');
+
+            const title = element(doc, 'div', {
+                fontWeight: '600',
+                letterSpacing: '0.01em',
+                marginBottom: '8px'
+            }, 'Chat Exporter');
+
+            const status = element(doc, 'div', {
+                color: '#d4d4d8',
+                marginBottom: '10px'
+            }, PHASE_LABEL.start);
+
+            const track = element(doc, 'div', {
+                height: '5px',
+                borderRadius: '999px',
+                background: 'rgba(255, 255, 255, 0.14)',
+                overflow: 'hidden'
+            });
+            const bar = element(doc, 'div', {
+                height: '100%',
+                width: '0%',
+                borderRadius: '999px',
+                background: '#22c55e',
+                transition: 'width 200ms ease'
+            });
+            track.appendChild(bar);
+
+            const stats = element(doc, 'div', {
+                marginTop: '10px',
+                color: '#a1a1aa',
+                fontVariantNumeric: 'tabular-nums'
+            }, '0 messages');
+
+            const preview = element(doc, 'div', {
+                marginTop: '6px',
+                color: '#71717a',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+            }, '');
+
+            card.appendChild(title);
+            card.appendChild(status);
+            card.appendChild(track);
+            card.appendChild(stats);
+            card.appendChild(preview);
+
+            return { card, status, bar, stats, preview };
+        }
+
+        function create(doc, options = {}) {
+            const noop = { onProgress() {}, destroy() {} };
+            if (!doc || typeof doc.createElement !== 'function' || !doc.body) return noop;
+
+            let parts = null;
+            try {
+                doc.getElementById(CONTAINER_ID)?.remove();
+                parts = build(doc);
+                doc.body.appendChild(parts.card);
+            } catch (error) {
+                console.warn('[Chat Exporter] Progress display unavailable; the export continues.', error);
+                return noop;
+            }
+
+            const win = doc.defaultView;
+            const setTimer = win?.setTimeout?.bind(win) || setTimeout;
+            let removed = false;
+
+            const destroy = () => {
+                if (removed) return;
+                removed = true;
+                try {
+                    parts.card.remove();
+                } catch (error) {
+                    // Already detached.
+                }
+            };
+
+            const onProgress = event => {
+                if (removed || !event) return;
+                try {
+                    const phase = String(event.phase || '');
+                    parts.status.textContent = PHASE_LABEL[phase] || PHASE_LABEL.sweep;
+
+                    if (typeof event.percent === 'number') {
+                        parts.bar.style.width = `${Math.max(0, Math.min(100, event.percent))}%`;
+                    }
+                    if (phase === 'hidden') {
+                        parts.bar.style.background = '#f59e0b';
+                    } else if (phase !== 'done') {
+                        parts.bar.style.background = '#22c55e';
+                    }
+
+                    const pieces = [`${formatCount(event.messages)} message${event.messages === 1 ? '' : 's'}`];
+                    if (event.lines) pieces.push(`${formatCount(event.lines)} lines`);
+                    if (phase === 'done' && event.expectedMessages) {
+                        pieces[0] = `${formatCount(event.messages)} of ${formatCount(event.expectedMessages)} messages`;
+                    }
+                    parts.stats.textContent = pieces.join(' · ');
+
+                    if (event.lastPreview) {
+                        parts.preview.textContent = event.lastSender
+                            ? `${event.lastSender}: ${event.lastPreview}`
+                            : event.lastPreview;
+                    }
+
+                    if (phase !== 'done') return;
+
+                    // Say plainly when the file is short: a green bar over an
+                    // incomplete export is worse than no bar at all.
+                    if (event.complete === false) {
+                        parts.status.textContent = event.unreachedMessages
+                            ? `Incomplete — ${formatCount(event.unreachedMessages)} message(s) never loaded`
+                            : 'Finished, but this export may be incomplete';
+                        parts.bar.style.background = '#f59e0b';
+                    } else {
+                        parts.bar.style.background = '#22c55e';
+                    }
+
+                    if (options.linger === false) {
+                        destroy();
+                        return;
+                    }
+                    setTimer(() => {
+                        try {
+                            parts.card.style.opacity = '0';
+                        } catch (error) {
+                            // Cosmetic only.
+                        }
+                        setTimer(destroy, 260);
+                    }, LINGER_AFTER_DONE);
+                } catch (error) {
+                    // A progress card that cannot draw itself gets out of the way.
+                    destroy();
+                }
+            };
+
+            return { onProgress, destroy };
+        }
+
+        return { create, CONTAINER_ID };
+    });
+
     (function initChatExporterUi(root, factory) {
         const ui = factory();
 
@@ -3103,10 +3384,22 @@
             let bypassNativeShare = false;
             let lastShareButton = null;
 
-            const runExport = format => (engine.exportConversationFull || engine.exportConversation).call(engine, {
-                provider: 'chatgpt',
-                format
-            });
+            // The launcher already says "Exporting…", but a sweep takes seconds and
+            // a label alone does not show it is still working. The card is optional:
+            // a build without one exports exactly as before.
+            const runExport = format => {
+                const card = options.progress ? options.progress.create(doc) : null;
+                return Promise.resolve()
+                    .then(() => (engine.exportConversationFull || engine.exportConversation).call(engine, {
+                        provider: 'chatgpt',
+                        format,
+                        onProgress: card ? card.onProgress : undefined
+                    }))
+                    .catch(error => {
+                        if (card) card.destroy();
+                        throw error;
+                    });
+            };
 
             // A full export scrolls the whole conversation, which takes seconds.
             // Say so on the launcher, and don't let a second click start a second
@@ -3260,5 +3553,8 @@
         };
     });
 
-    globalThis.ChatExporterUi.install({ engine: globalThis.ChatExporterEngine });
+    globalThis.ChatExporterUi.install({
+        engine: globalThis.ChatExporterEngine,
+        progress: globalThis.ChatExporterProgress
+    });
 })();

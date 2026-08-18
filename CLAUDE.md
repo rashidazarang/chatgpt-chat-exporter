@@ -13,6 +13,7 @@ ChatGPT Chat Exporter is a browser-based tool for exporting ChatGPT and Google G
 - `exporter-markdown.js`, `exporter-html.js`, `exporter-pdf.js` — ChatGPT console scripts
 - `gemini-exporter-markdown.js` — Gemini console script
 - `selector-doctor.js` — console health check for either provider's selector cascade
+- `src/progress-overlay.js` — the in-page progress card, bundled into every console runner and userscript
 - `src/userscript-ui.js` — native ChatGPT conversation-menu and Share-menu integration
 - `chatgpt-markdown-exporter.user.js`, `chatgpt-pdf-exporter.user.js` — generated userscripts with Markdown and PDF menu actions
 
@@ -48,6 +49,25 @@ Legacy directories `core/` and `archived/` are historical prototypes; they are n
 - **Credentials stop at the origin**: `/backend-api/files/download/*` answers with a signed link to a third-party CDN. Attaching the bearer token to that hop would hand the reader's ChatGPT session to another host — authenticate same-origin only (`isSameOrigin`). That endpoint also reports failure as **HTTP 200** with `{"status":"error",…}`, so `response.ok` proves nothing
 - **Turn-level attachments and metadata**: ChatGPT can render an image/file beside an empty `data-message-author-role` node, so validation and content selection inspect the enclosing `conversation-turn-*` wrapper. The async path then makes a bounded best-effort read of the current conversation payload to add message timestamps, attachment names/bytes, generated sandbox links, and user-visible `reasoning_recap` content; the whole enrichment pass is capped at 15s and failure must never block the DOM export (issues #32, #33)
 - **Raster media only**: safe PNG/JPEG/GIF/WebP/AVIF/BMP data may be embedded; SVG data is never embedded. Per-image and total byte caps protect the browser, with HTTPS URLs/placeholders as fallbacks
+
+### Progress overlay design (`src/progress-overlay.js`)
+
+- **The engine emits events; it never draws.** `options.onProgress` is a
+  callback, so the engine stays usable headless in jsdom. A listener that throws
+  is swallowed — a broken progress card must never cost the reader their export
+- **Same Trusted-Types rule as the userscript UI**: nodes via
+  `createElement`/`textContent`, styles set per-property. No `innerHTML`, and no
+  injected stylesheet (`style-src` is a CSP surface too). A test builds the card
+  with every HTML sink throwing
+- **The card must not be exportable by the sweep watching it.** It is a direct
+  child of `body` (outside the conversation container), carries no message
+  markers, and is `position: fixed` so it cannot change the container's
+  `scrollHeight` mid-sweep. `isValidMessage` also refuses anything inside
+  `[data-chat-exporter-ui]` — belt and braces for the day someone moves it
+- **`pointer-events: none`**: the reader must never have to fight it for a click
+- **An incomplete export must not end on a green bar.** The `done` event carries
+  `complete` / `unreachedMessages`, and the card turns amber and names the
+  shortfall
 
 ### Userscript UI design (`src/userscript-ui.js`)
 

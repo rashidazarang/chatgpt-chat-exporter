@@ -5,6 +5,7 @@ const test = require('node:test');
 const { JSDOM } = require('jsdom');
 const engine = require('../src/extraction-engine.js');
 const userscriptUi = require('../src/userscript-ui.js');
+const progressOverlay = require('../src/progress-overlay.js');
 
 const repoRoot = path.resolve(__dirname, '..');
 
@@ -787,6 +788,172 @@ test('built userscript installs and exports on a page that enforces Trusted Type
 
     assert.equal(downloads.length, 1);
     assert.match(await downloads[0].blob.text(), /Does the export button still work here\?/);
+});
+
+// ── Progress overlay ────────────────────────────────────────────────────────
+// It is drawn into a page the exporter is simultaneously reading, on
+// deployments that enforce Trusted Types, for a large number of installed
+// users. Each test below is a way that could go wrong.
+
+function progressPage() {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Progress</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="p1"><p>A question worth exporting today.</p></div>
+        <div data-message-author-role="assistant" data-message-id="p2"><p>An answer worth exporting today.</p></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/progress' });
+    installInnerText(dom.window);
+    dom.window.fetch = async () => null;
+    return dom;
+}
+
+test('the progress card builds without any HTML injection sink', () => {
+    const dom = progressPage();
+    const blocked = () => { throw new Error('Trusted Types blocked this assignment'); };
+    Object.defineProperty(dom.window.Element.prototype, 'innerHTML', { set: blocked, get: () => '' });
+    Object.defineProperty(dom.window.Element.prototype, 'outerHTML', { set: blocked, get: () => '' });
+    dom.window.Element.prototype.insertAdjacentHTML = blocked;
+    dom.window.document.write = blocked;
+
+    const card = progressOverlay.create(dom.window.document);
+    card.onProgress({ phase: 'sweep', percent: 40, messages: 3, lines: 12, lastSender: 'You', lastPreview: 'hello' });
+
+    const node = dom.window.document.getElementById(progressOverlay.CONTAINER_ID);
+    assert.ok(node, 'the card must mount where innerHTML throws');
+    assert.match(node.textContent, /3 messages/);
+    assert.match(node.textContent, /12 lines/);
+    card.destroy();
+    assert.equal(dom.window.document.getElementById(progressOverlay.CONTAINER_ID), null);
+});
+
+test('the progress card is never captured as a message by the export it is watching', async () => {
+    const dom = progressPage();
+    const card = progressOverlay.create(dom.window.document);
+    card.onProgress({ phase: 'sweep', percent: 50, messages: 1, lines: 4, lastSender: 'You', lastPreview: 'A question worth exporting' });
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false,
+        chatGptMetadata: false
+    });
+
+    assert.equal(conversation.messages.length, 2, 'the card must not become a third message');
+    const exported = engine.serializers.markdown(conversation);
+    assert.ok(!exported.includes('Chat Exporter'), 'no part of our own UI may reach the reader\'s file');
+    assert.ok(!exported.includes('Reading conversation'), 'nor its status text');
+    card.destroy();
+});
+
+// The structural protection is that the card lives outside the conversation
+// container. This guard is what saves the day someone moves it inside — which
+// is exactly the kind of change that looks harmless in review.
+test('anything marked as exporter UI is refused even where a message would be taken', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>UI Inside</title></head><body><main>
+        <div data-message-author-role="user" data-message-id="real"><p>A genuine message in the conversation.</p></div>
+        <div data-chat-exporter-ui="progress">
+            <div data-message-author-role="assistant"><p>Reading conversation… 14 messages captured so far.</p></div>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/ui-inside' });
+    installInnerText(dom.window);
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown'
+    });
+
+    assert.equal(conversation.messages.length, 1, 'only the real message is exported');
+    assert.match(conversation.messages[0].content, /A genuine message/);
+    assert.ok(!engine.serializers.markdown(conversation).includes('Reading conversation'));
+});
+
+test('an export survives a progress listener that throws on every event', async () => {
+    const dom = progressPage();
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false,
+        chatGptMetadata: false,
+        onProgress: () => { throw new Error('progress UI exploded'); }
+    });
+
+    assert.equal(conversation.messages.length, 2, 'a broken UI must never cost the reader their export');
+});
+
+test('progress events report the phases and the content being read', async () => {
+    const dom = progressPage();
+    const events = [];
+
+    await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scroll: false,
+        awaitStreaming: false,
+        chatGptMetadata: false,
+        onProgress: event => events.push(event)
+    });
+
+    const phases = events.map(event => event.phase);
+    assert.ok(phases.includes('start'), 'the reader learns it started');
+    assert.ok(phases.includes('done'), 'and that it finished');
+
+    const done = events[events.length - 1];
+    assert.equal(done.phase, 'done');
+    assert.equal(done.messages, 2);
+    assert.ok(done.lines > 0, 'lines read are reported');
+    assert.equal(done.complete, true);
+    assert.ok(done.lastPreview.length > 0, 'the last captured message is shown');
+    assert.ok(!done.lastPreview.includes('<'), 'the preview is plain text, not markup');
+});
+
+test('a page with no body still exports rather than failing on the card', async () => {
+    const dom = progressPage();
+    const detached = dom.window.document.implementation.createHTMLDocument('no body');
+    detached.documentElement.removeChild(detached.body);
+    const card = progressOverlay.create(detached);
+    assert.doesNotThrow(() => card.onProgress({ phase: 'sweep', messages: 1 }));
+    assert.doesNotThrow(() => card.destroy());
+});
+
+test('built Markdown exporter mounts the progress card and cleans it up', async () => {
+    const dom = new JSDOM(chatGptFixture(), {
+        url: 'https://chatgpt.com/c/progress-runner',
+        runScripts: 'outside-only',
+        pretendToBeVisual: true
+    });
+    const { window } = dom;
+    installInnerText(window);
+
+    const seen = [];
+    const downloads = [];
+    window.URL.createObjectURL = blob => { downloads.push(blob); return 'blob:x'; };
+    window.URL.revokeObjectURL = () => {};
+    window.alert = () => {};
+    window.console = console;
+    window.HTMLAnchorElement.prototype.click = function click() {};
+
+    // Watch for the card while the sweep is in flight.
+    const watcher = setInterval(() => {
+        if (window.document.getElementById('chat-exporter-progress')) seen.push(true);
+    }, 5);
+
+    window.eval(readScript('exporter-markdown.js'));
+
+    const deadline = Date.now() + 5000;
+    while (downloads.length === 0 && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    clearInterval(watcher);
+
+    assert.ok(downloads.length > 0, 'the export still downloads');
+    assert.ok(seen.length > 0, 'the card was visible during the export');
+    assert.ok(!(await downloads[0].text()).includes('Chat Exporter'),
+        'the card never reaches the exported file');
 });
 
 test('ChatGPT markdown exporter preserves CodeMirror code, MathJax, tables, links, and media', async () => {
