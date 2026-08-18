@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-0.12.0-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-0.12.1-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -80,7 +80,15 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.12.0
+## 🔧 What's New in v0.12.1
+
+- 🧮 **Gemini maths export as real TeX** — `$$W_s = -C_s + \delta[\ldots]$$` instead of the rendered glyph soup. Gemini keeps its source in a `data-math` attribute the exporter wasn't reading. Verified live: 42 formulas, 42 recovered. ([release notes](temporal/release-notes-v0.12.1.md))
+- 🛟 **Fixes a v0.12.0/v0.11.0 regression that would have deleted every formula from a Gemini export.** Gemini renders KaTeX with no accessible copy alongside, so the de-duplication introduced in v0.11.0 removed the only copy there was. It is now conditional on something surviving it.
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v0.12.0
 
 **ChatGPT Markdown exports now read ChatGPT's own record of the conversation instead of scraping the page.** ([release notes](temporal/release-notes-v0.12.0.md))
 
@@ -91,12 +99,7 @@ No install, no server, no account: everything runs locally in your browser.
 
 Unchanged and still reading the page: HTML and PDF (which need rendered HTML), Gemini, shared links, temporary chats, and any case where the record is unavailable. `sourceFromPayload: false` forces the old behaviour.
 
-### ⚠️ ChatGPT and Gemini are not equivalent
-
-Gemini exposes no conversation record, so Gemini exports have **no timestamps, no completeness check, no message recovery, and no order correction**. They are a faithful read of the page, which is all Gemini makes possible.
-
-<details>
-<summary>📝 Previous updates</summary>
+**⚠️ ChatGPT and Gemini are not equivalent.** Gemini exposes no conversation record, so Gemini exports have **no timestamps, no completeness check, no message recovery, and no order correction**. They are a faithful read of the page, which is all Gemini makes possible.
 
 ### v0.11.0
 
@@ -324,7 +327,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/EXPORTER_GUIDE.md](docs/EXPORTE
 
 ## 🚀 Version History
 
-- **v0.12.0** (Current) - ChatGPT Markdown reads the conversation record instead of scraping the page: no scrolling, complete by construction, real citation titles
+- **v0.12.1** (Current) - Gemini maths export as TeX; fixes a regression that would have deleted them entirely
+- **v0.12.0** - ChatGPT Markdown reads the conversation record instead of scraping the page: no scrolling, complete by construction, real citation titles
 - **v0.11.0** - Math recovered from every renderer and never duplicated; opt-in export of regenerated/edited turn history
 - **v0.10.3** - Inline citations export as their label instead of escaped base64
 - **v0.10.2** - Strips ChatGPT's screen-reader "said:" heading from every message; recovered messages keep their timestamp

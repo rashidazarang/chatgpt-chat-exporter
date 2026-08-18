@@ -1623,6 +1623,55 @@ test('TeX is recovered from every renderer that carries it', () => {
         assert.ok(!body.includes(visual), `visual duplicate ${visual} leaked into the export`));
 });
 
+// Live Gemini (2026-08-18) renders KaTeX with .katex-html ALONE — no
+// .katex-mathml, no <annotation>, no MathML at all — and keeps the TeX in a
+// data-math attribute on the wrapper *around* the render. 42 formulas in one
+// message, all recovered.
+test('Gemini maths export as TeX from the wrapper that carries it', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Math - Google Gemini</title></head><body><main>
+        <div class="conversation-container">
+            <user-query><div class="query-text">Explain the model.</div></user-query>
+            <model-response><message-content><div class="response-container">
+                <p>The switch condition is
+                    <span data-math="C_s + pD &lt; C_r"><span class="katex"><span class="katex-html" aria-hidden="true">Cs+pD&lt;Cr</span></span></span>
+                    in equilibrium.</p>
+                <div class="math-block" data-math="W_s = -C_s + \\delta [p(V - D) + (1 - p)\\Pi_s]">
+                    <span class="katex-display"><span class="katex"><span class="katex-html" aria-hidden="true">Ws=−Cs+δ[p(V−D)+(1−p)Πs]</span></span></span>
+                </div>
+            </div></message-content></model-response>
+        </div>
+    </main></body></html>`, { url: 'https://gemini.google.com/app/math' });
+    installInnerText(dom.window);
+
+    const body = engine.extractConversation({
+        document: dom.window.document, provider: 'gemini', format: 'markdown'
+    }).messages[1].content;
+
+    assert.match(body, /\$C_s \+ pD < C_r\$/, 'inline maths use single $');
+    assert.match(body, /\$\$W_s = -C_s \+ \\delta \[p\(V - D\) \+ \(1 - p\)\\Pi_s\]\$\$/,
+        'the block is display maths, from the wrapper attribute');
+    // The rendered glyph soup must not survive alongside the source.
+    assert.ok(!body.includes('Cs+pD'), `visual KaTeX glyphs leaked: ${body}`);
+});
+
+test('a formula with only a visual copy is kept, not deleted', () => {
+    // The v0.11.0 de-duplication removed .katex-html whenever no TeX was found.
+    // Gemini has no MathML beside it, so that would have emptied every formula
+    // in the export rather than de-duplicating anything.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Only Visual</title></head><body><main>
+        <div data-message-author-role="assistant" data-message-id="v1">
+            <p>The bound is <span class="katex"><span class="katex-html" aria-hidden="true">x &lt; y</span></span> here.</p>
+        </div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/only-visual' });
+    installInnerText(dom.window);
+
+    const body = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    }).messages[0].content;
+
+    assert.match(body, /x < y/, `the only copy of the formula must survive, got: ${body}`);
+});
+
 test('math with no TeX source appears once, not twice', () => {
     // KaTeX emits an accessible MathML copy and a visual copy. With no
     // annotation to recover, serializing both reads "f(x)f(x)".

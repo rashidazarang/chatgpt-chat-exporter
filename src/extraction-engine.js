@@ -11,7 +11,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
     'use strict';
 
-    const ENGINE_VERSION = '0.12.0';
+    const ENGINE_VERSION = '0.12.1';
 
     // Pixels of slack when deciding the scroll container has reached its end.
     const BOTTOM_TOLERANCE = 4;
@@ -606,7 +606,7 @@
     // one also emits a *visual* duplicate of the same formula. Miss the source
     // and you do not merely lose the markup — you serialize the duplicate too,
     // and the export reads "f(x∣μ)f(x∣μ)".
-    const MATH_ROOT_SELECTOR = '.katex-display, mjx-container[display="true"], [display="block"], .katex, mjx-container, math, [data-latex], [data-tex]';
+    const MATH_ROOT_SELECTOR = '[data-math], [data-latex], [data-tex], [data-formula], .katex-display, mjx-container[display="true"], [display="block"], .katex, mjx-container, math';
     // Rendered-for-the-eye copies. KaTeX and MathJax both mark theirs; dropping
     // them leaves exactly one representation behind.
     const MATH_VISUAL_DUPLICATE = '.katex-html, mjx-container [aria-hidden="true"], annotation-xml[encoding*="MathML" i]';
@@ -620,7 +620,8 @@
             if (tex) return tex;
         }
         // 2. Source kept on the element — several renderers and ChatGPT itself.
-        for (const attribute of ['data-latex', 'data-tex', 'data-formula']) {
+        // Gemini uses data-math, on the wrapper *around* the rendered KaTeX.
+        for (const attribute of ['data-math', 'data-latex', 'data-tex', 'data-formula']) {
             const value = node.getAttribute?.(attribute);
             if (value && value.trim()) return value.trim();
         }
@@ -634,8 +635,11 @@
     }
 
     function isDisplayMath(node) {
-        if (matches(node, '.katex-display, mjx-container[display="true"], [display="block"]')) return true;
+        if (matches(node, '.katex-display, mjx-container[display="true"], [display="block"], [class*="math-block"]')) return true;
         if (node.closest?.('.katex-display, mjx-container[display="true"]')) return true;
+        // A source-carrying wrapper sits *outside* the rendered block, so the
+        // display marker is a descendant rather than an ancestor.
+        if (node.querySelector?.('.katex-display, mjx-container[display="true"]')) return true;
         return String(node.getAttribute?.('display') || '').toLowerCase() === 'block';
     }
 
@@ -652,9 +656,13 @@
                 return;
             }
 
-            // No TeX anywhere: keep the accessible copy and drop the visual one
-            // so the formula appears once rather than twice.
-            queryAll(root, MATH_VISUAL_DUPLICATE).forEach(duplicate => duplicate.remove());
+            // No TeX anywhere. Drop the visual copy *only* if an accessible one
+            // survives it. Gemini renders KaTeX as .katex-html alone — with no
+            // MathML beside it — so removing the duplicate there would delete
+            // the formula rather than de-duplicate it.
+            if (root.querySelector?.('.katex-mathml, math, mjx-assistive-mml')) {
+                queryAll(root, MATH_VISUAL_DUPLICATE).forEach(duplicate => duplicate.remove());
+            }
         });
 
         // A bare script left outside any renderer wrapper.
