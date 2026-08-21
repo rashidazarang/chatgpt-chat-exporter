@@ -1388,6 +1388,37 @@ test('stripping citation markers never eats ordinary punctuation', async () => {
     assert.ok(!/[\uE200-\uE20F]/.test(body), 'the marker itself is gone');
 });
 
+test('non-citation payload references never remove spaces from an answer', async () => {
+    // Current ChatGPT payloads can attach non-web bookkeeping references to a
+    // model response. One observed shape uses a literal space as matched_text
+    // and has no items. Treating every content_reference as a citation used to
+    // evaluate split(' ').join('') over the whole response.
+    const payload = payloadWithMessages(['s1', 's2']);
+    payload.mapping['node-s2'].message.content.parts = [
+        '# File reconciliation and hot evolution\n\n' +
+        'The system must not silently invent and run an unvalidated capability provider midway through a live Run.\n\n' +
+        '```text\nLocal divergence is stored as one ordered patch series\n```'
+    ];
+    payload.mapping['node-s2'].message.metadata.content_references = [{
+        matched_text: ' ',
+        type: 'non_web_reference',
+        items: []
+    }];
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+    const body = conversation.messages[1].content;
+
+    assert.match(body, /^# File reconciliation and hot evolution/m);
+    assert.match(body, /The system must not silently invent and run an unvalidated capability provider midway through a live Run\./);
+    assert.match(body, /Local divergence is stored as one ordered patch series/);
+    assert.doesNotMatch(body, /Thesystemmustnot|Localdivergenceisstored/);
+});
+
 test('an image-only turn survives the payload path', async () => {
     // payloadContentText yields '' for a multimodal part, which used to drop the
     // message entirely.

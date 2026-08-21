@@ -1464,7 +1464,13 @@
             if (Array.isArray(references)) {
                 references.forEach(reference => {
                     const marker = reference?.matched_text;
-                    if (!marker || !result.includes(marker)) return;
+                    // content_references is not limited to web citations. Current
+                    // ChatGPT payloads can include bookkeeping entries whose
+                    // matched_text is a single space and which carry no URL. If we
+                    // treat that as an unresolved citation, split(' ').join('')
+                    // glues every word in the answer together — including headings
+                    // and code. Whitespace is content, never a citation marker.
+                    if (typeof marker !== 'string' || !marker.trim() || !result.includes(marker)) return;
 
                     const item = (Array.isArray(reference.items) ? reference.items : [])
                         .find(candidate => candidate?.url && !isUnsafeHref(String(candidate.url)));
