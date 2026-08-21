@@ -62,6 +62,7 @@ No install, no server, no account: everything runs locally in your browser.
    - **Markdown (.md):** [exporter-markdown.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-markdown.js)
    - **HTML (.html):** [exporter-html.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-html.js)
    - **PDF (print-ready HTML):** [exporter-pdf.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-pdf.js)
+   - To omit ChatGPT's per-answer reasoning/progress blocks, change `const INCLUDE_REASONING = true` to `false` before pasting.
 4. The file downloads automatically, named after your conversation title
 
 ### Google Gemini

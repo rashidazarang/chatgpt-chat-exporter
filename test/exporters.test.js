@@ -1109,7 +1109,8 @@ test('ChatGPT payload enrichment adds timestamps, attachments, generated files, 
 
     assert.equal(conversation.messages[1].timestampIso, new Date(1781030880 * 1000).toISOString());
     assert.match(conversation.messages[1].content, /\[File: ABC_Workbook\.xlsx\]\(sandbox:\/mnt\/data\/ABC_Workbook\.xlsx\)/);
-    assert.match(conversation.messages[1].content, /\*\*Reasoning:\*\* Checked workbook formulas and output paths\./);
+    assert.match(conversation.messages[1].content,
+        /<small><strong>Reasoning \/ progress:<\/strong><br>\nChecked workbook formulas and output paths\.<\/small>/);
     assert.ok(requested.some(url => url.includes('/backend-api/files/download/file-image-api')),
         'image bytes are embedded from the authenticated file endpoint');
     assert.equal(conversation.metadataStatus, 'enriched');
@@ -1211,7 +1212,8 @@ test('a 404 "conversation_inaccessible" is an auth failure, not a missing conver
     assert.equal(conversation.metadataStatus, 'enriched',
         'the page bearer token must be used, not waited for behind a 401 that never comes');
     assert.equal(conversation.messages[0].timestampIso, new Date(1781030820 * 1000).toISOString());
-    assert.match(conversation.messages[1].content, /\*\*Reasoning:\*\* Checked workbook formulas and output paths\./);
+    assert.match(conversation.messages[1].content,
+        /<small><strong>Reasoning \/ progress:<\/strong><br>\nChecked workbook formulas and output paths\.<\/small>/);
 
     const unauthenticated = backend.conversationCalls().filter(call => !call.headers.Authorization);
     assert.equal(unauthenticated.length, 0,
@@ -1332,6 +1334,56 @@ test('Markdown is read from the payload without touching the page', async () => 
         ['user','assistant','user','assistant','user','assistant']);
     assert.ok(conversation.messages.every(message => message.timestampIso),
         'every message carries the payload timestamp');
+});
+
+test('payload reasoning progress is folded into the final response, not exported as separate turns', async () => {
+    // Reasoning models store these updates in the active payload chain as
+    // assistant/text messages, but ChatGPT renders them inside the final
+    // response's "Worked for…" disclosure rather than as conversation turns.
+    const payload = payloadWithMessages(['r1', 'r2', 'r3', 'r4', 'r5', 'r6']);
+    const shapes = [
+        ['user', 'Design the workflow architecture.'],
+        ['assistant', 'I’ll compare the possible runtime boundaries first.'],
+        ['assistant', 'The architecture is converging on a smaller core.'],
+        ['assistant', '# Final design\n\nKeep the portable boundary small.'],
+        ['user', 'Now simplify the update model.'],
+        ['assistant', 'Use a deterministic three-way merge.']
+    ];
+    shapes.forEach(([role, text], index) => {
+        const message = payload.mapping[`node-r${index + 1}`].message;
+        message.author.role = role;
+        message.content.parts = [text];
+    });
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.deepEqual(conversation.messages.map(message => message.senderType),
+        ['user', 'assistant', 'user', 'assistant']);
+    assert.equal(conversation.expectedMessages, 4);
+    assert.match(conversation.messages[1].content, /# Final design/);
+    assert.match(conversation.messages[1].content, /<small><strong>Reasoning \/ progress:<\/strong>/);
+    assert.match(conversation.messages[1].content, /I’ll compare the possible runtime boundaries first\./);
+    assert.match(conversation.messages[1].content, /The architecture is converging on a smaller core\./);
+    assert.ok(conversation.messages[1].content.indexOf('Reasoning / progress:') <
+        conversation.messages[1].content.indexOf('# Final design'),
+    'progress is placed immediately before the answer it led to');
+    assert.equal(conversation.messages.filter(message => message.senderType === 'assistant').length, 2,
+        'progress stays inside its final answer instead of becoming extra turns');
+
+    const withoutReasoning = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        awaitStreaming: false,
+        includeReasoning: false
+    });
+    assert.doesNotMatch(withoutReasoning.messages[1].content, /Reasoning \/ progress:/);
+    assert.doesNotMatch(withoutReasoning.messages[1].content, /I’ll compare/);
 });
 
 test('ChatGPT citation markers become sources, not private-use garbage', async () => {

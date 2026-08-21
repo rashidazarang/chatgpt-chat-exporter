@@ -4,6 +4,9 @@
 (() => {
     'use strict';
 
+    // Set to false to omit ChatGPT's per-answer reasoning/progress updates.
+    const INCLUDE_REASONING = true;
+
     (function initChatExporterEngine(root, factory) {
         const engine = factory();
 
@@ -1571,8 +1574,23 @@
             return !['thoughts', 'reasoning_recap', 'code', 'execution_output', 'tool_result'].includes(contentType);
         }
 
+        // Reasoning models can store progress updates as ordinary assistant/text
+        // messages in the payload even though the UI renders them inside one
+        // "Worked for…" disclosure. Content type alone cannot distinguish those
+        // updates from the final answer. At the conversation level the distinction
+        // is structural: one user turn may have many assistant records, but only
+        // the last eligible assistant record before the next user turn is the
+        // visible response.
+        function mainPayloadMessages(entries) {
+            const eligible = entries.filter(isMainPayloadMessage);
+            return eligible.filter((entry, index) => {
+                if (entry.message?.author?.role !== 'assistant') return true;
+                return eligible[index + 1]?.message?.author?.role !== 'assistant';
+            });
+        }
+
         function payloadMessageMatches(conversation, entries) {
-            const mainEntries = entries.filter(isMainPayloadMessage);
+            const mainEntries = mainPayloadMessages(entries);
             const byId = new Map(mainEntries.map(entry => [String(entry.message.id || entry.nodeId), entry]));
             const used = new Set();
             const matches = new Map();
@@ -1600,7 +1618,13 @@
 
         function payloadReasoningRecaps(entries) {
             const recaps = new Map();
+            const mainEntries = new Set(mainPayloadMessages(entries));
             let pending = [];
+
+            const appendPending = value => {
+                const text = stripPayloadMarkers(value).trim();
+                if (text && !pending.includes(text)) pending.push(text);
+            };
 
             entries.forEach(entry => {
                 const message = entry.message;
@@ -1608,8 +1632,7 @@
                 const contentType = String(message?.content?.content_type || '').toLowerCase();
 
                 if (role === 'assistant' && contentType === 'reasoning_recap') {
-                    const text = payloadContentText(message.content);
-                    if (text) pending.push(text);
+                    appendPending(payloadContentText(message.content));
                     return;
                 }
 
@@ -1618,7 +1641,16 @@
                     return;
                 }
 
-                if (role === 'assistant' && isMainPayloadMessage(entry) && pending.length > 0) {
+                // ChatGPT stores the updates shown in its "Worked for…"
+                // disclosure as ordinary assistant/text records immediately before
+                // the visible answer. They are not separate conversation turns,
+                // but dropping them loses content the reader can inspect in the UI.
+                if (role === 'assistant' && isMainPayloadMessage(entry) && !mainEntries.has(entry)) {
+                    appendPending(payloadContentText(message.content));
+                    return;
+                }
+
+                if (role === 'assistant' && mainEntries.has(entry) && pending.length > 0) {
                     recaps.set(String(message.id || entry.nodeId), pending.join('\n\n'));
                     pending = [];
                 }
@@ -2089,6 +2121,16 @@
             message.content = `${message.content}${message.content ? '\n\n' : ''}${markdown !== null ? markdown : html}`.trim();
         }
 
+        function prependReasoning(message, recap, format) {
+            if (!recap || message.content.includes(recap)) return;
+
+            const body = sanitizeHtml(recap).replace(/\n/g, '<br>\n');
+            const markup = format === 'markdown'
+                ? `<small><strong>Reasoning / progress:</strong><br>\n${body}</small>`
+                : `<small class="reasoning-recap"><strong>Reasoning / progress:</strong><br>${body}</small>`;
+            message.content = `${markup}${message.content ? '\n\n' : ''}${message.content}`.trim();
+        }
+
         // ─── Payload-first rendering ────────────────────────────────────────────
         // The payload is the markdown the model produced; the DOM is a rendering of
         // it. Reading the source directly avoids every artifact that comes from
@@ -2102,7 +2144,7 @@
         async function renderConversationFromPayload(payload, doc, provider, options) {
             const format = 'markdown';
             const entries = activePayloadMessages(payload);
-            const mainEntries = entries.filter(isMainPayloadMessage);
+            const mainEntries = mainPayloadMessages(entries);
             if (mainEntries.length === 0) return null;
 
             const recaps = payloadReasoningRecaps(entries);
@@ -2140,9 +2182,7 @@
                 }
 
                 const recap = recaps.get(String(entry.message.id || entry.nodeId));
-                if (recap && !message.content.includes(recap)) {
-                    appendMessageEnrichment(message, `**Reasoning:** ${recap}`, null, recap);
-                }
+                if (options.includeReasoning !== false) prependReasoning(message, recap, format);
 
                 const citations = payloadCitations(entry.message);
                 if (citations.length > 0) {
@@ -2219,7 +2259,7 @@
             // has. Comparing *ids the sweep actually encountered* — not counts —
             // keeps deliberate content dedupe (two identical "ok" turns collapse by
             // design) from reading as a missing message.
-            const mainEntries = entries.filter(isMainPayloadMessage);
+            const mainEntries = mainPayloadMessages(entries);
             conversation.expectedMessages = mainEntries.length;
             if (options.seenMessageIds instanceof Set) {
                 conversation.unreachedMessages = mainEntries.filter(entry =>
@@ -2313,11 +2353,7 @@
 
                 const nativeId = String(nativeMessage.id || entry.nodeId);
                 const recap = recaps.get(nativeId);
-                if (recap && !message.content.includes(recap)) {
-                    const markdown = `**Reasoning:** ${recap}`;
-                    const html = `<div class="reasoning-recap"><strong>Reasoning:</strong> ${sanitizeHtml(recap).replace(/\n/g, '<br>')}</div>`;
-                    appendMessageEnrichment(message, format === 'markdown' ? markdown : null, html, recap);
-                }
+                if (options.includeReasoning !== false) prependReasoning(message, recap, format);
             }
 
             conversation.metadataStatus = 'enriched';
@@ -2865,7 +2901,7 @@
                 tokenObtained: Boolean(probeOptions.chatGptAuth.token),
                 accountScoped: Boolean(probeOptions.chatGptAuth.accountId),
                 payloadMessages: result.reason === 'ok'
-                    ? activePayloadMessages(result.body).filter(isMainPayloadMessage).length
+                    ? mainPayloadMessages(activePayloadMessages(result.body)).length
                     : 0
             };
         }
@@ -3539,6 +3575,7 @@
     globalThis.ChatExporterEngine.exportConversationFull({
         provider: 'chatgpt',
         format: 'html',
+        includeReasoning: INCLUDE_REASONING,
         onProgress: progress.onProgress
     }).catch(error => {
         progress.destroy();

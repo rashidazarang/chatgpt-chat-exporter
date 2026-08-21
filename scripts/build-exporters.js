@@ -17,6 +17,9 @@ function runner(provider, format) {
     return `${GENERATED_NOTICE}(() => {
     'use strict';
 
+    // Set to false to omit ChatGPT's per-answer reasoning/progress updates.
+    const INCLUDE_REASONING = true;
+
 ${indent(engineSource, 4)}
 
 ${indent(progressOverlaySource, 4)}
@@ -28,6 +31,7 @@ ${indent(progressOverlaySource, 4)}
     globalThis.ChatExporterEngine.exportConversationFull({
         provider: '${provider}',
         format: '${format}',
+        includeReasoning: INCLUDE_REASONING,
         onProgress: progress.onProgress
     }).catch(error => {
         progress.destroy();
