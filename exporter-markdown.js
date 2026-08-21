@@ -122,8 +122,12 @@
                     '[data-message-content], [data-testid*="content"]',
                     '.whitespace-pre-wrap, [class*="whitespace"]'
                 ],
+                // ChatGPT keeps the conversation name in document.title. Its
+                // message bodies also contain ordinary h1 elements, so preferring
+                // the selector cascade makes the title depend on which virtualized
+                // answer happens to be mounted when export starts.
+                preferDocumentTitle: true,
                 titleSelectors: [
-                    'h1:not([class*="hidden"])',
                     '[class*="conversation-title"]',
                     '[data-testid*="conversation-title"]'
                 ]
