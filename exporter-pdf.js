@@ -1424,7 +1424,11 @@
         // U+E200 "cite" U+E202 "turn1search0" U+E201. They are invisible machinery,
         // not text — rendering payload markdown without removing them puts
         // "citeturn1search0" in the middle of a sentence.
-        const PAYLOAD_CITATION_MARKER = /\uE200[\s\S]*?\uE201/g;
+        // The inner match excludes the delimiters instead of using a lazy
+        // [\s\S]*?: markers never nest, so real input matches identically, and a
+        // payload full of unclosed U+E200s scans linearly instead of quadratically
+        // (CodeQL js/polynomial-redos).
+        const PAYLOAD_CITATION_MARKER = /\uE200[^\uE200\uE201]*\uE201/g;
         const PAYLOAD_PRIVATE_USE = /[\uE200-\uE20F]/g;
 
         function stripPayloadMarkers(value) {
