@@ -39,15 +39,14 @@ No install, no server, no account: everything runs locally in your browser.
    - [Violentmonkey](https://violentmonkey.github.io/) (Chrome, Firefox)
    - [Greasemonkey](https://addons.mozilla.org/en-US/firefox/addon/greasemonkey/) (Firefox)
 
-2. Install either userscript. Both installers expose Markdown and PDF export actions, so existing installations keep working without needing both scripts:
+2. Install either userscript from GitHub. Both installers expose Markdown and PDF export actions, so existing installations keep working without needing both scripts:
 
-   **From GreasyFork (Recommended):**
-   - [Markdown Exporter](https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown)
-   - [PDF Exporter](https://greasyfork.org/en/scripts/530790-chatgpt-chat-exporter-pdf)
-
-   **Directly from GitHub:**
    - [Markdown Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/chatgpt-markdown-exporter.user.js)
    - [PDF Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/chatgpt-pdf-exporter.user.js)
+
+   > **Previously installed from GreasyFork?** That listing went stale at an old
+   > version numbered 1.0.0 and no longer works (issue #34). Reinstall from the
+   > GitHub links above — from v1.1.0 the scripts update themselves from GitHub.
 
 3. Open a ChatGPT conversation, then either:
    - Open the conversation's **•••** menu and choose **Export to Markdown** or **Export to PDF**.
@@ -81,13 +80,21 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v0.12.1
+## 🔧 What's New in v1.1.0
 
-- 🧮 **Gemini maths export as real TeX** — `$$W_s = -C_s + \delta[\ldots]$$` instead of the rendered glyph soup. Gemini keeps its source in a `data-math` attribute the exporter wasn't reading. Verified live: 42 formulas, 42 recovered. ([release notes](temporal/release-notes-v0.12.1.md))
-- 🛟 **Fixes a v0.12.0/v0.11.0 regression that would have deleted every formula from a Gemini export.** Gemini renders KaTeX with no accessible copy alongside, so the de-duplication introduced in v0.11.0 removed the only copy there was. It is now conditional on something surviving it.
+- 📦 **GitHub is now the one true install source** (issue #34). The GreasyFork listing went stale at a version numbered 1.0.0, which made working GitHub installs look like downgrades. This release jumps past it, and the userscripts now carry `@downloadURL`/`@updateURL` headers so they update themselves from GitHub. If you installed from GreasyFork, reinstall once from the links above. ([release notes](temporal/release-notes-v1.1.0.md))
+- 🏷️ **ChatGPT exports use the conversation's tab title.** Answer bodies can contain ordinary `<h1>` headings, and treating the first mounted one as metadata produced unstable titles like "Final architecture". (#36, thanks @zvictor)
+- 🧠 **Reasoning progress folds into its final answer.** ChatGPT stores visible "Worked for…" progress as separate assistant records; they now render as a labelled `<small>` block before the answer instead of masquerading as turns. Console users can set `INCLUDE_REASONING = false` to omit them. (#37, thanks @zvictor)
+- 🧯 **Fixed whitespace loss from bookkeeping references.** A `content_references` entry whose `matched_text` is a single space could glue every word of an answer together. Whitespace is content, never a citation marker. (#35, thanks @zvictor)
+- 🛡️ **Citation markers strip in linear time** — resolves the CodeQL polynomial-ReDoS finding on hostile payloads.
 
 <details>
 <summary>📝 Previous updates</summary>
+
+### v0.12.1
+
+- 🧮 **Gemini maths export as real TeX** — `$$W_s = -C_s + \delta[\ldots]$$` instead of the rendered glyph soup. Gemini keeps its source in a `data-math` attribute the exporter wasn't reading. Verified live: 42 formulas, 42 recovered. ([release notes](temporal/release-notes-v0.12.1.md))
+- 🛟 **Fixes a v0.12.0/v0.11.0 regression that would have deleted every formula from a Gemini export.** Gemini renders KaTeX with no accessible copy alongside, so the de-duplication introduced in v0.11.0 removed the only copy there was. It is now conditional on something surviving it.
 
 ### v0.12.0
 

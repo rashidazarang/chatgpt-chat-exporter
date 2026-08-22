@@ -72,13 +72,21 @@ ${indent(engineSource, 4)}
 `;
 }
 
-function userscriptHeader(name, version, description) {
+function userscriptHeader(name, version, description, fileName) {
+    // GitHub is the canonical distribution channel (issue #34): the GreasyFork
+    // listing went stale at a higher version number, so installs from GitHub
+    // must carry their own update/download URLs to keep updating from GitHub.
+    const rawUrl = `https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/${fileName}`;
     return `// ==UserScript==
 // @name         ${name}
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
 // @version      ${version}
 // @description  ${description}
 // @author       rashidazarang
+// @homepageURL  https://github.com/rashidazarang/chatgpt-chat-exporter
+// @supportURL   https://github.com/rashidazarang/chatgpt-chat-exporter/issues
+// @downloadURL  ${rawUrl}
+// @updateURL    ${rawUrl}
 // @match        https://chat.openai.com/*
 // @match        https://chatgpt.com/*
 // @match        https://chatgpt.com/c/*
@@ -90,8 +98,8 @@ function userscriptHeader(name, version, description) {
 `;
 }
 
-function userscript(name, description) {
-    return `${userscriptHeader(name, version, description)}(() => {
+function userscript(name, description, fileName) {
+    return `${userscriptHeader(name, version, description, fileName)}(() => {
     'use strict';
 
 ${indent(engineSource, 4)}
@@ -121,11 +129,13 @@ const outputs = new Map([
     ['selector-doctor.js', doctor()],
     ['chatgpt-markdown-exporter.user.js', userscript(
         'ChatGPT Chat Exporter - Markdown',
-        'Export ChatGPT conversations to Markdown or PDF from the native conversation menus'
+        'Export ChatGPT conversations to Markdown or PDF from the native conversation menus',
+        'chatgpt-markdown-exporter.user.js'
     )],
     ['chatgpt-pdf-exporter.user.js', userscript(
         'ChatGPT Chat Exporter - PDF',
-        'Export ChatGPT conversations to Markdown or PDF from the native conversation menus'
+        'Export ChatGPT conversations to Markdown or PDF from the native conversation menus',
+        'chatgpt-pdf-exporter.user.js'
     )]
 ]);
 

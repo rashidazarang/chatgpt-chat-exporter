@@ -1,9 +1,13 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - Markdown
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      0.12.1
+// @version      1.1.0
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
+// @homepageURL  https://github.com/rashidazarang/chatgpt-chat-exporter
+// @supportURL   https://github.com/rashidazarang/chatgpt-chat-exporter/issues
+// @downloadURL  https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/chatgpt-markdown-exporter.user.js
+// @updateURL    https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/chatgpt-markdown-exporter.user.js
 // @match        https://chat.openai.com/*
 // @match        https://chatgpt.com/*
 // @match        https://chatgpt.com/c/*
