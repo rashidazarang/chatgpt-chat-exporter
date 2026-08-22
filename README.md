@@ -39,14 +39,19 @@ No install, no server, no account: everything runs locally in your browser.
    - [Violentmonkey](https://violentmonkey.github.io/) (Chrome, Firefox)
    - [Greasemonkey](https://addons.mozilla.org/en-US/firefox/addon/greasemonkey/) (Firefox)
 
-2. Install either userscript from GitHub. Both installers expose Markdown and PDF export actions, so existing installations keep working without needing both scripts:
+2. Install either userscript. Both installers expose Markdown and PDF export actions, so existing installations keep working without needing both scripts:
 
+   **From GitHub (canonical):**
    - [Markdown Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/chatgpt-markdown-exporter.user.js)
    - [PDF Exporter](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/chatgpt-pdf-exporter.user.js)
 
-   > **Previously installed from GreasyFork?** That listing went stale at an old
-   > version numbered 1.0.0 and no longer works (issue #34). Reinstall from the
-   > GitHub links above — from v1.1.0 the scripts update themselves from GitHub.
+   **From GreasyFork** (auto-synced from GitHub since v1.1.0):
+   - [Markdown Exporter](https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown)
+   - [PDF Exporter](https://greasyfork.org/en/scripts/530790-chatgpt-chat-exporter-pdf)
+
+   Both sources serve the same code and update automatically. The GreasyFork
+   listing was stale before v1.1.0 (issue #34); if an installed copy reports a
+   version below 1.1.0, update it or reinstall from either link above.
 
 3. Open a ChatGPT conversation, then either:
    - Open the conversation's **•••** menu and choose **Export to Markdown** or **Export to PDF**.
@@ -82,7 +87,7 @@ No install, no server, no account: everything runs locally in your browser.
 
 ## 🔧 What's New in v1.1.0
 
-- 📦 **GitHub is now the one true install source** (issue #34). The GreasyFork listing went stale at a version numbered 1.0.0, which made working GitHub installs look like downgrades. This release jumps past it, and the userscripts now carry `@downloadURL`/`@updateURL` headers so they update themselves from GitHub. If you installed from GreasyFork, reinstall once from the links above. ([release notes](temporal/release-notes-v1.1.0.md))
+- 📦 **GitHub is now the canonical install source, and GreasyFork syncs from it** (issue #34). The GreasyFork listing had gone stale at a version numbered 1.0.0, which made working GitHub installs look like downgrades. This release jumps past it, the userscripts carry `@downloadURL`/`@updateURL` headers so GitHub installs update themselves, and the GreasyFork listing now auto-syncs from this repo — existing installs from either source pick up updates automatically. ([release notes](temporal/release-notes-v1.1.0.md))
 - 🏷️ **ChatGPT exports use the conversation's tab title.** Answer bodies can contain ordinary `<h1>` headings, and treating the first mounted one as metadata produced unstable titles like "Final architecture". (#36, thanks @zvictor)
 - 🧠 **Reasoning progress folds into its final answer.** ChatGPT stores visible "Worked for…" progress as separate assistant records; they now render as a labelled `<small>` block before the answer instead of masquerading as turns. Console users can set `INCLUDE_REASONING = false` to omit them. (#37, thanks @zvictor)
 - 🧯 **Fixed whitespace loss from bookkeeping references.** A `content_references` entry whose `matched_text` is a single space could glue every word of an answer together. Whitespace is content, never a citation marker. (#35, thanks @zvictor)
