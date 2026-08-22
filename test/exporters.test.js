@@ -2286,9 +2286,40 @@ test('a title selector matching page chrome cannot outrank the tab title', async
         'the selector that matched the model picker is gone, not merely outranked');
 });
 
-// ChatGPT still keeps [class*="conversation-title"] in its cascade: it matches
-// nothing on the live site today, and there is no evidence its tab title is the
-// better source. The doctor is what makes that bet visible if it ever goes bad.
+test('ChatGPT answer headings never become the conversation title', () => {
+    // Long virtualized conversations mount only a moving window of turns. The
+    // first h1 here could therefore be any answer heading — the supplied page
+    // produced both "Final architecture" and "Revised design" depending on
+    // scroll position, while the tab consistently held the real name.
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Dynamic Workflow Triggers</title></head><body><main>
+        <div data-message-author-role="assistant"><div class="markdown">
+            <h1>Final architecture</h1><p>The strongest design has three layers.</p>
+        </div></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/title-from-tab' });
+
+    const conversation = engine.extractConversation({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown'
+    });
+
+    assert.equal(conversation.title, 'Dynamic Workflow Triggers');
+    assert.match(conversation.messages[0].content, /# Final architecture/,
+        'the answer heading remains content; it just is not promoted to the file title');
+
+    const genericTab = new JSDOM(`<!DOCTYPE html><html><head><title>ChatGPT</title></head><body><main>
+        <div data-message-author-role="assistant"><div class="markdown">
+            <h1>Final architecture</h1><p>The strongest design has three layers.</p>
+        </div></div>
+    </main></body></html>`, { url: 'https://chatgpt.com/c/generic-title' });
+    const genericConversation = engine.extractConversation({
+        document: genericTab.window.document, provider: 'chatgpt', format: 'markdown'
+    });
+    assert.equal(genericConversation.title, 'Conversation with ChatGPT',
+        'even a generic tab title must not make an answer heading look like conversation metadata');
+});
+
+// ChatGPT keeps the selector cascade as a diagnostic and as a fallback for a
+// generic tab title. When it disagrees with a usable tab title, the tab wins
+// and the doctor still exposes the disagreement.
 test('the doctor flags a title selector that disagrees with the tab', async () => {
     const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Migration Runbook</title></head><body><main>
         <div class="conversation-title-pill">GPT-5 Thinking</div>
