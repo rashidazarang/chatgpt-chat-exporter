@@ -1126,7 +1126,8 @@ function chatGptBackendStub(options = {}) {
         requiredAccountId = '',
         accountIds = [],
         payload = chatGptConversationPayload(),
-        conversationStatus = null
+        conversationStatus = null,
+        taskStreams = {}
     } = options;
 
     const calls = [];
@@ -1136,6 +1137,13 @@ function chatGptBackendStub(options = {}) {
         status,
         headers: headersOf({ 'content-type': 'application/json' }),
         json: async () => body
+    });
+    const text = (status, body) => ({
+        ok: status >= 200 && status < 300,
+        status,
+        headers: headersOf({ 'content-type': 'text/event-stream' }),
+        text: async () => body,
+        json: async () => ({})
     });
     const refused = () => json(404, {
         detail: {
@@ -1168,6 +1176,15 @@ function chatGptBackendStub(options = {}) {
             if (headers.Authorization !== `Bearer ${token}`) return refused();
             if (requiredAccountId && headers['ChatGPT-Account-Id'] !== requiredAccountId) return refused();
             return json(200, payload);
+        }
+
+        if (url.includes('/backend-api/tasks/')) {
+            if (headers.Authorization !== `Bearer ${token}`) return refused();
+            if (requiredAccountId && headers['ChatGPT-Account-Id'] !== requiredAccountId) return refused();
+            const taskId = decodeURIComponent(url.match(/\/backend-api\/tasks\/([^/]+)\/stream/)?.[1] || '');
+            return taskId in taskStreams
+                ? text(200, taskStreams[taskId])
+                : json(404, { detail: 'Task not found' });
         }
 
         throw new Error(`Unexpected fetch: ${url}`);
@@ -1397,19 +1414,21 @@ test('a Deep Research async result is exported as its visible assistant turn', a
     report.content = { content_type: 'tool_result', parts: ['{"session_id":"deep-research-fixture"}'] };
     report.metadata = {
         is_visually_hidden_from_conversation: true,
-        venus_widget_state: {
-            report_message: {
-                id: 'deep-research-report-message',
-                author: { role: 'assistant' },
-                content: {
-                    content_type: 'text',
-                    parts: [
-                        '# Modern documentation platforms for open-source projects in August 2026\n\n' +
-                        '## Executive summary\n\nThe publishing layer is becoming AI-ready.'
-                    ]
-                },
-                metadata: {}
-            }
+        chatgpt_sdk: {
+            widget_state: JSON.stringify({
+                report_message: {
+                    id: 'deep-research-report-message',
+                    author: { role: 'assistant' },
+                    content: {
+                        content_type: 'text',
+                        parts: [
+                            '# Modern documentation platforms for open-source projects in August 2026\n\n' +
+                            '## Executive summary\n\nThe publishing layer is becoming AI-ready.'
+                        ]
+                    },
+                    metadata: {}
+                }
+            })
         }
     };
 
@@ -1476,6 +1495,74 @@ test('a Deep Research report can use the app text fallback', async () => {
     assert.deepEqual(conversation.messages.map(message => message.senderType), ['user', 'assistant']);
     assert.match(conversation.messages[1].content, /^# Text-backed research report/m);
     assert.match(conversation.messages[1].content, /Recovered from the app state\./);
+});
+
+test('a Deep Research task stream recovers the cross-origin iframe report', async () => {
+    const payload = payloadWithMessages(['stream-user', 'stream-task', 'stream-follow-user', 'stream-follow-answer']);
+    const task = payload.mapping['node-stream-task'].message;
+    task.author = { role: 'tool', name: 'research_kickoff_tool.start_research_task' };
+    task.content = { content_type: 'tool_result', parts: ['Research task started.'] };
+    task.metadata = {
+        async_task_id: 'deepresch_fixture_stream',
+        async_task_type: 'research',
+        async_task_title: 'Current Deep Research fixture'
+    };
+
+    const stream = [
+        'data: {"task_status":"completed","task_id":"deepresch_fixture_stream"}',
+        '',
+        'data: {"final_message":{"id":"stream-final-report","author":{"role":"assistant"},"content":{"content_type":"text","parts":["# Stream-backed research report\\n\\n## Findings\\n\\nRecovered outside the cross-origin iframe."]},"metadata":{}}}',
+        '',
+        'data: [DONE]',
+        ''
+    ].join('\n');
+    const backend = chatGptBackendStub({
+        payload,
+        taskStreams: { deepresch_fixture_stream: stream }
+    });
+    const dom = payloadDom();
+    dom.window.fetch = backend.fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.deepEqual(conversation.messages.map(message => message.senderType),
+        ['user', 'assistant', 'user', 'assistant']);
+    assert.equal(conversation.expectedMessages, 4);
+    assert.match(conversation.messages[1].content, /^# Stream-backed research report/m);
+    assert.match(conversation.messages[1].content, /Recovered outside the cross-origin iframe\./);
+
+    const request = backend.calls.find(call => call.url.includes('/backend-api/tasks/deepresch_fixture_stream/stream'));
+    assert.ok(request, 'the completed Deep Research task stream is requested');
+    assert.match(request.url, /parent_conversation_id=conversation-api/);
+    assert.match(request.url, /message_id=stream-task/);
+});
+
+test('a Deep Research connector can persist the report directly in its tool message', async () => {
+    const payload = payloadWithMessages(['direct-user', 'direct-report']);
+    const report = payload.mapping['node-direct-report'].message;
+    report.author = { role: 'tool', name: 'connector_openai_deep_research' };
+    report.content = {
+        content_type: 'text',
+        parts: [
+            '# Direct connector research report\n\n' +
+            '## Executive summary\n\n' +
+            'The report was persisted directly in the connector result.\n\n' +
+            'Detailed evidence. '.repeat(80)
+        ]
+    };
+    report.metadata = { is_visually_hidden_from_conversation: true };
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.deepEqual(conversation.messages.map(message => message.senderType), ['user', 'assistant']);
+    assert.match(conversation.messages[1].content, /^# Direct connector research report/m);
+    assert.match(conversation.messages[1].content, /persisted directly in the connector result/);
 });
 
 test('ChatGPT citation markers become sources, not private-use garbage', async () => {
