@@ -1578,14 +1578,108 @@
             return variants.filter(entry => isMainPayloadMessage(entry));
         }
 
+        function payloadEmbeddedReport(message) {
+            const metadata = message?.metadata;
+            if (!metadata || typeof metadata !== 'object') return null;
+
+            const objectValue = value => {
+                if (value && typeof value === 'object') return value;
+                if (typeof value !== 'string' || !value.trim()) return null;
+                try {
+                    const parsed = JSON.parse(value);
+                    return parsed && typeof parsed === 'object' ? parsed : null;
+                } catch (error) {
+                    return null;
+                }
+            };
+
+            // App-backed tool results are persisted under chatgpt_sdk. In current
+            // Deep Research conversations widget_state is a JSON string, even though
+            // the Apps SDK presents its parsed value to the iframe as widgetState.
+            const sdk = objectValue(metadata.chatgpt_sdk);
+            const widgetState = objectValue(sdk?.widget_state ?? sdk?.widgetState);
+            const sdkToolMetadata = objectValue(
+                sdk?.tool_response_metadata ?? sdk?.toolResponseMetadata);
+
+            // The current Deep Research app receives this object as its
+            // toolResponseMetadata and renders report_message inside a
+            // cross-origin internal://deep-research iframe.
+            const states = [
+                widgetState,
+                objectValue(widgetState?.venus_widget_state),
+                sdkToolMetadata,
+                objectValue(sdkToolMetadata?.venus_widget_state),
+                metadata.venus_widget_state,
+                metadata.tool_response_metadata?.venus_widget_state,
+                metadata.toolResponseMetadata?.venus_widget_state
+            ];
+            for (const state of states) {
+                const report = state?.report_message;
+                if (report && typeof report === 'object') return report;
+            }
+            return null;
+        }
+
+        function payloadRenderableMessage(message) {
+            const report = payloadEmbeddedReport(message);
+            if (!report) return message;
+            const reportContent = report.content || (typeof report.text === 'string'
+                ? { content_type: 'text', parts: [report.text] }
+                : message.content);
+            return {
+                ...message,
+                ...report,
+                content: reportContent,
+                author: { ...report.author, role: 'assistant' },
+                create_time: report.create_time ?? message.create_time,
+                metadata: { ...message.metadata, ...report.metadata }
+            };
+        }
+
+        function isDirectDeepResearchResult(message) {
+            const author = String(message?.author?.name || '').toLowerCase();
+            const metadata = message?.metadata;
+            const markedResearch = /deep[_-]?research|research_kickoff/.test(author) ||
+                String(metadata?.async_task_type || '').toLowerCase() === 'research' ||
+                Boolean(metadata?.deep_research_version);
+            if (!markedResearch) return false;
+
+            const contentType = String(message?.content?.content_type || '').toLowerCase();
+            const text = payloadContentText(message?.content);
+            // Some connector runs persist the report directly in the tool message
+            // without widget_state or an async-result flag. A substantial Markdown
+            // document is distinguishable from the short JSON/session kickoff result.
+            return ['text', 'multimodal_text'].includes(contentType) &&
+                text.length > 1000 && /^\s*#{1,3}\s+\S/m.test(text);
+        }
+
+        function isAsyncPayloadResult(message) {
+            return message?.metadata?.is_async_task_result_message === true ||
+                Boolean(payloadEmbeddedReport(message)) ||
+                isDirectDeepResearchResult(message);
+        }
+
         function isMainPayloadMessage(entry) {
             const message = entry?.message;
-            const role = message?.author?.role;
+            const asyncResult = isAsyncPayloadResult(message);
+            const rendered = payloadRenderableMessage(message);
+            const role = asyncResult ? 'assistant' : rendered?.author?.role;
             if (role !== 'user' && role !== 'assistant') return false;
-            if (message.metadata?.is_visually_hidden_from_conversation) return false;
+            // Deep Research now renders its completed report through a sandboxed
+            // app iframe. The backing result can therefore be a visually-hidden
+            // tool message even though the iframe is a visible assistant turn. The
+            // private conversation record marks that message explicitly; keeping
+            // it is the only page-context route to the cross-origin report text.
+            if (message.metadata?.is_visually_hidden_from_conversation && !asyncResult) return false;
 
-            const contentType = String(message.content?.content_type || '').toLowerCase();
-            return !['thoughts', 'reasoning_recap', 'code', 'execution_output', 'tool_result'].includes(contentType);
+            const contentType = String(rendered?.content?.content_type || '').toLowerCase();
+            return asyncResult || !['thoughts', 'reasoning_recap', 'code', 'execution_output', 'tool_result'].includes(contentType);
+        }
+
+        function payloadMessageRole(message) {
+            return isAsyncPayloadResult(message)
+                ? 'assistant'
+                : message?.author?.role;
         }
 
         // Reasoning models can store progress updates as ordinary assistant/text
@@ -1598,8 +1692,8 @@
         function mainPayloadMessages(entries) {
             const eligible = entries.filter(isMainPayloadMessage);
             return eligible.filter((entry, index) => {
-                if (entry.message?.author?.role !== 'assistant') return true;
-                return eligible[index + 1]?.message?.author?.role !== 'assistant';
+                if (payloadMessageRole(entry.message) !== 'assistant') return true;
+                return payloadMessageRole(eligible[index + 1]?.message) !== 'assistant';
             });
         }
 
@@ -1617,7 +1711,7 @@
                 if (!entry && positionalFallbackIsSafe) {
                     entry = mainEntries.find(candidate => {
                         if (used.has(candidate)) return false;
-                        const role = candidate.message.author?.role;
+                        const role = payloadMessageRole(candidate.message);
                         return role === message.senderType;
                     }) || null;
                 }
@@ -1901,6 +1995,185 @@
             return result;
         }
 
+        async function attemptChatGptText(doc, options, endpoint) {
+            const timeout = metadataRequestTimeout(doc, options);
+            if (timeout <= 0) return { reason: 'timeout' };
+
+            const response = await fetchWithTimeout(doc, endpoint, {
+                headers: {
+                    ...chatGptAuthHeaders(options.chatGptAuth),
+                    Accept: 'text/event-stream'
+                }
+            }, timeout);
+            if (!response) return { reason: 'network' };
+
+            if (response.ok) {
+                try {
+                    return { reason: 'ok', body: await response.text() };
+                } catch (error) {
+                    return { reason: 'network' };
+                }
+            }
+
+            const body = await readJsonBody(response);
+            if (isChatGptAuthFailure(response, body)) return { reason: 'auth' };
+            return { reason: `status:${response.status}` };
+        }
+
+        async function fetchChatGptText(doc, options, endpoint) {
+            const auth = options.chatGptAuth || (options.chatGptAuth = createChatGptAuth(options));
+            await readChatGptToken(doc, options);
+            if (auth.signedOut && !auth.token) return { reason: 'signed-out' };
+
+            let result = await attemptChatGptText(doc, options, endpoint);
+            if (result.reason !== 'auth') return result;
+
+            const stale = auth.token;
+            const refreshed = await readChatGptToken(doc, options, true);
+            if (refreshed && refreshed !== stale) {
+                result = await attemptChatGptText(doc, options, endpoint);
+                if (result.reason !== 'auth') return result;
+            }
+
+            for (const accountId of await readChatGptAccountIds(doc, options)) {
+                if (accountId === auth.accountId) continue;
+                auth.accountId = accountId;
+                result = await attemptChatGptText(doc, options, endpoint);
+                if (result.reason !== 'auth') return result;
+            }
+
+            auth.accountId = '';
+            return result;
+        }
+
+        function deepResearchTaskId(message) {
+            const metadata = message?.metadata;
+            const taskId = metadata?.async_task_id ?? metadata?.asyncTaskId;
+            if (typeof taskId !== 'string' || !taskId) return '';
+            const taskType = String(metadata?.async_task_type || '').toLowerCase();
+            return /^deepresch_/i.test(taskId) || taskType === 'research' || metadata?.deep_research_version
+                ? taskId
+                : '';
+        }
+
+        function deepResearchFinalMessage(stream) {
+            let finalMessage = null;
+            String(stream || '').split(/\r?\n/).forEach(line => {
+                const match = line.match(/^data:\s*(.+)$/);
+                if (!match || match[1] === '[DONE]') return;
+                try {
+                    const event = JSON.parse(match[1]);
+                    const candidate = event?.final_message ?? event?.finalMessage;
+                    if (candidate) finalMessage = candidate;
+                } catch (error) {
+                    // A malformed progress event does not invalidate a later final
+                    // message in the same stream.
+                }
+            });
+            return finalMessage;
+        }
+
+        function normalizeDeepResearchFinalMessage(value, taskMessage, taskId) {
+            let report = value?.message && typeof value.message === 'object' ? value.message : value;
+            if (typeof report === 'string') {
+                report = { content: { content_type: 'text', parts: [report] } };
+            }
+            if (!report || typeof report !== 'object') return null;
+
+            const content = report.content || (typeof report.text === 'string'
+                ? { content_type: 'text', parts: [report.text] }
+                : null);
+            if (!payloadContentText(content)) return null;
+
+            return {
+                ...report,
+                id: report.id || `${taskMessage?.id || taskId}:deep-research-result`,
+                author: { ...report.author, role: 'assistant' },
+                content,
+                create_time: report.create_time ?? taskMessage?.create_time,
+                metadata: {
+                    ...taskMessage?.metadata,
+                    ...report.metadata,
+                    async_task_id: taskId,
+                    is_async_task_result_message: true,
+                    is_visually_hidden_from_conversation: false
+                }
+            };
+        }
+
+        async function hydrateDeepResearchEntries(entries, doc, options) {
+            const conversationId = chatGptConversationId(doc);
+            if (!conversationId || !Array.isArray(entries) || entries.length === 0) return entries;
+
+            const additions = new Map();
+            for (let index = 0; index < entries.length; index++) {
+                const entry = entries[index];
+                const taskId = deepResearchTaskId(entry.message);
+                if (!taskId || isAsyncPayloadResult(entry.message)) continue;
+
+                const alreadyPresent = entries.some(candidate =>
+                    candidate !== entry &&
+                    isAsyncPayloadResult(candidate.message) &&
+                    deepResearchTaskId(candidate.message) === taskId);
+                if (alreadyPresent) continue;
+
+                const endpoint = `/backend-api/tasks/${encodeURIComponent(taskId)}/stream?` +
+                    `parent_conversation_id=${encodeURIComponent(conversationId)}` +
+                    `&message_id=${encodeURIComponent(entry.message?.id || entry.nodeId)}`;
+                const result = await fetchChatGptText(doc, options, endpoint);
+                if (result.reason !== 'ok') {
+                    console.warn(`[Chat Exporter] Deep Research task ${taskId} could not be read (${result.reason}).`);
+                    continue;
+                }
+
+                const message = normalizeDeepResearchFinalMessage(
+                    deepResearchFinalMessage(result.body), entry.message, taskId);
+                if (!message) {
+                    console.warn(`[Chat Exporter] Deep Research task ${taskId} returned no completed report.`);
+                    continue;
+                }
+
+                let insertion = entries.findIndex((candidate, candidateIndex) =>
+                    candidateIndex > index && candidate.message?.author?.role === 'user');
+                if (insertion < 0) insertion = entries.length;
+                const synthetic = {
+                    nodeId: message.id,
+                    node: { message, parent: entry.nodeId, children: [] },
+                    message
+                };
+                const at = additions.get(insertion) || [];
+                at.push(synthetic);
+                additions.set(insertion, at);
+                console.log('[Chat Exporter] Recovered a Deep Research report from its completed task record.');
+            }
+
+            const hydrated = [];
+            for (let index = 0; index <= entries.length; index++) {
+                hydrated.push(...(additions.get(index) || []));
+                if (index < entries.length) hydrated.push(entries[index]);
+            }
+
+            const hasDeepResearchFrame = Boolean(
+                doc.querySelector?.('iframe[title="internal://deep-research"]'));
+            if (hasDeepResearchFrame && !hydrated.some(entry => isAsyncPayloadResult(entry.message))) {
+                const carriers = hydrated.map(entry => {
+                    const message = entry.message;
+                    const metadata = message?.metadata;
+                    const sdk = metadata?.chatgpt_sdk;
+                    return {
+                        role: message?.author?.role || '',
+                        author: message?.author?.name || '',
+                        contentType: message?.content?.content_type || '',
+                        metadataKeys: metadata && typeof metadata === 'object' ? Object.keys(metadata) : [],
+                        sdkKeys: sdk && typeof sdk === 'object' ? Object.keys(sdk) : []
+                    };
+                }).filter(candidate =>
+                    candidate.role === 'tool' || candidate.author || candidate.sdkKeys.length > 0);
+                console.warn('[Chat Exporter] Deep Research iframe found, but its report was not present in the stored conversation.', carriers);
+            }
+            return hydrated;
+        }
+
         function chatGptMetadataNote(reason) {
             if (reason === 'signed-out') {
                 return 'this tab has no signed-in ChatGPT session';
@@ -2008,14 +2281,14 @@
         // markdown the model actually produced, which is exactly what a markdown
         // export wants; HTML exports escape it and keep the paragraph breaks.
         function payloadMessageToExport(entry, assistantName, format, doc, options = {}) {
-            const message = entry.message;
+            const message = payloadRenderableMessage(entry.message);
             const text = resolvePayloadCitations(payloadContentText(message.content), message, format);
             // No text is not the same as no message: an image-only turn carries its
             // content in attachments, which the caller appends.
             const allowEmpty = options.allowEmpty === true;
             if (!text && !allowEmpty) return null;
 
-            const isUser = message.author?.role === 'user';
+            const isUser = payloadMessageRole(message) === 'user';
             const content = !text ? '' : (format === 'markdown'
                 ? text
                 : text.split(/\n{2,}/).map(block => `<p>${sanitizeHtml(block).replace(/\n/g, '<br>')}</p>`).join(''));
@@ -2157,7 +2430,7 @@
         // markdown parser to produce.
         async function renderConversationFromPayload(payload, doc, provider, options) {
             const format = 'markdown';
-            const entries = activePayloadMessages(payload);
+            const entries = await hydrateDeepResearchEntries(activePayloadMessages(payload), doc, options);
             const mainEntries = mainPayloadMessages(entries);
             if (mainEntries.length === 0) return null;
 
@@ -2198,7 +2471,7 @@
                 const recap = recaps.get(String(entry.message.id || entry.nodeId));
                 if (options.includeReasoning !== false) prependReasoning(message, recap, format);
 
-                const citations = payloadCitations(entry.message);
+                const citations = payloadCitations(payloadRenderableMessage(entry.message));
                 if (citations.length > 0) {
                     message.content = `${message.content}${renderReferences(citations, format)}`.trim();
                 }
@@ -2264,7 +2537,7 @@
                 return conversation;
             }
 
-            const entries = activePayloadMessages(payload);
+            const entries = await hydrateDeepResearchEntries(activePayloadMessages(payload), doc, enrichmentOptions);
             const matches = payloadMessageMatches(conversation, entries);
             const recaps = payloadReasoningRecaps(entries);
             let embeddedBytes = 0;
