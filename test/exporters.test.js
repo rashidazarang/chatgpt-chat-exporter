@@ -1386,6 +1386,98 @@ test('payload reasoning progress is folded into the final response, not exported
     assert.doesNotMatch(withoutReasoning.messages[1].content, /I’ll compare/);
 });
 
+test('a Deep Research async result is exported as its visible assistant turn', async () => {
+    // Current ChatGPT renders the report in a cross-origin
+    // internal://deep-research iframe. Its stored source can be a hidden tool
+    // result rather than an ordinary assistant/text message, but the metadata
+    // explicitly identifies it as the visible async-task result.
+    const payload = payloadWithMessages(['dr-user', 'dr-report', 'follow-user', 'follow-answer']);
+    const report = payload.mapping['node-dr-report'].message;
+    report.author = { role: 'tool', name: 'connector_openai_deep_research' };
+    report.content = { content_type: 'tool_result', parts: ['{"session_id":"deep-research-fixture"}'] };
+    report.metadata = {
+        is_visually_hidden_from_conversation: true,
+        venus_widget_state: {
+            report_message: {
+                id: 'deep-research-report-message',
+                author: { role: 'assistant' },
+                content: {
+                    content_type: 'text',
+                    parts: [
+                        '# Modern documentation platforms for open-source projects in August 2026\n\n' +
+                        '## Executive summary\n\nThe publishing layer is becoming AI-ready.'
+                    ]
+                },
+                metadata: {}
+            }
+        }
+    };
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.deepEqual(conversation.messages.map(message => message.senderType),
+        ['user', 'assistant', 'user', 'assistant']);
+    assert.equal(conversation.expectedMessages, 4);
+    assert.match(conversation.messages[1].content,
+        /^# Modern documentation platforms for open-source projects in August 2026/m);
+    assert.match(conversation.messages[1].content, /^## Executive summary/m);
+    assert.match(conversation.messages[1].content, /The publishing layer is becoming AI-ready\./);
+});
+
+test('the legacy Deep Research async-result marker remains supported', async () => {
+    const payload = payloadWithMessages(['legacy-user', 'legacy-report']);
+    const report = payload.mapping['node-legacy-report'].message;
+    report.author = { role: 'tool', name: 'research_kickoff_tool.start_research_task' };
+    report.content = { content_type: 'tool_result', parts: ['# Legacy research report\n\nComplete result.'] };
+    report.metadata = {
+        is_async_task_result_message: true,
+        is_visually_hidden_from_conversation: true,
+        async_task_id: 'deepresch_fixture'
+    };
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.deepEqual(conversation.messages.map(message => message.senderType), ['user', 'assistant']);
+    assert.match(conversation.messages[1].content, /^# Legacy research report/m);
+});
+
+test('a Deep Research report can use the app text fallback', async () => {
+    const payload = payloadWithMessages(['dr-text-user', 'dr-text-report']);
+    const report = payload.mapping['node-dr-text-report'].message;
+    report.author = { role: 'tool', name: 'connector_openai_deep_research' };
+    report.content = { content_type: 'tool_result', parts: ['{"status":"complete"}'] };
+    report.metadata = {
+        is_visually_hidden_from_conversation: true,
+        toolResponseMetadata: {
+            venus_widget_state: {
+                report_message: {
+                    text: '# Text-backed research report\n\nRecovered from the app state.',
+                    metadata: {}
+                }
+            }
+        }
+    };
+
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.deepEqual(conversation.messages.map(message => message.senderType), ['user', 'assistant']);
+    assert.match(conversation.messages[1].content, /^# Text-backed research report/m);
+    assert.match(conversation.messages[1].content, /Recovered from the app state\./);
+});
+
 test('ChatGPT citation markers become sources, not private-use garbage', async () => {
     // Live payloads wrap citation markers in U+E200…U+E201. Rendered naively
     // they appear as "citeturn1search0" mid-sentence.

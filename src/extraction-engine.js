@@ -1569,14 +1569,66 @@
         return variants.filter(entry => isMainPayloadMessage(entry));
     }
 
+    function payloadEmbeddedReport(message) {
+        const metadata = message?.metadata;
+        if (!metadata || typeof metadata !== 'object') return null;
+
+        // The current Deep Research app receives this object as its
+        // toolResponseMetadata and renders report_message inside a
+        // cross-origin internal://deep-research iframe.
+        const states = [
+            metadata.venus_widget_state,
+            metadata.tool_response_metadata?.venus_widget_state,
+            metadata.toolResponseMetadata?.venus_widget_state
+        ];
+        for (const state of states) {
+            const report = state?.report_message;
+            if (report && typeof report === 'object') return report;
+        }
+        return null;
+    }
+
+    function payloadRenderableMessage(message) {
+        const report = payloadEmbeddedReport(message);
+        if (!report) return message;
+        const reportContent = report.content || (typeof report.text === 'string'
+            ? { content_type: 'text', parts: [report.text] }
+            : message.content);
+        return {
+            ...message,
+            ...report,
+            content: reportContent,
+            author: { ...report.author, role: 'assistant' },
+            create_time: report.create_time ?? message.create_time,
+            metadata: { ...message.metadata, ...report.metadata }
+        };
+    }
+
+    function isAsyncPayloadResult(message) {
+        return message?.metadata?.is_async_task_result_message === true || Boolean(payloadEmbeddedReport(message));
+    }
+
     function isMainPayloadMessage(entry) {
         const message = entry?.message;
-        const role = message?.author?.role;
+        const asyncResult = isAsyncPayloadResult(message);
+        const rendered = payloadRenderableMessage(message);
+        const role = asyncResult ? 'assistant' : rendered?.author?.role;
         if (role !== 'user' && role !== 'assistant') return false;
-        if (message.metadata?.is_visually_hidden_from_conversation) return false;
+        // Deep Research now renders its completed report through a sandboxed
+        // app iframe. The backing result can therefore be a visually-hidden
+        // tool message even though the iframe is a visible assistant turn. The
+        // private conversation record marks that message explicitly; keeping
+        // it is the only page-context route to the cross-origin report text.
+        if (message.metadata?.is_visually_hidden_from_conversation && !asyncResult) return false;
 
-        const contentType = String(message.content?.content_type || '').toLowerCase();
-        return !['thoughts', 'reasoning_recap', 'code', 'execution_output', 'tool_result'].includes(contentType);
+        const contentType = String(rendered?.content?.content_type || '').toLowerCase();
+        return asyncResult || !['thoughts', 'reasoning_recap', 'code', 'execution_output', 'tool_result'].includes(contentType);
+    }
+
+    function payloadMessageRole(message) {
+        return isAsyncPayloadResult(message)
+            ? 'assistant'
+            : message?.author?.role;
     }
 
     // Reasoning models can store progress updates as ordinary assistant/text
@@ -1589,8 +1641,8 @@
     function mainPayloadMessages(entries) {
         const eligible = entries.filter(isMainPayloadMessage);
         return eligible.filter((entry, index) => {
-            if (entry.message?.author?.role !== 'assistant') return true;
-            return eligible[index + 1]?.message?.author?.role !== 'assistant';
+            if (payloadMessageRole(entry.message) !== 'assistant') return true;
+            return payloadMessageRole(eligible[index + 1]?.message) !== 'assistant';
         });
     }
 
@@ -1608,7 +1660,7 @@
             if (!entry && positionalFallbackIsSafe) {
                 entry = mainEntries.find(candidate => {
                     if (used.has(candidate)) return false;
-                    const role = candidate.message.author?.role;
+                    const role = payloadMessageRole(candidate.message);
                     return role === message.senderType;
                 }) || null;
             }
@@ -1999,14 +2051,14 @@
     // markdown the model actually produced, which is exactly what a markdown
     // export wants; HTML exports escape it and keep the paragraph breaks.
     function payloadMessageToExport(entry, assistantName, format, doc, options = {}) {
-        const message = entry.message;
+        const message = payloadRenderableMessage(entry.message);
         const text = resolvePayloadCitations(payloadContentText(message.content), message, format);
         // No text is not the same as no message: an image-only turn carries its
         // content in attachments, which the caller appends.
         const allowEmpty = options.allowEmpty === true;
         if (!text && !allowEmpty) return null;
 
-        const isUser = message.author?.role === 'user';
+        const isUser = payloadMessageRole(message) === 'user';
         const content = !text ? '' : (format === 'markdown'
             ? text
             : text.split(/\n{2,}/).map(block => `<p>${sanitizeHtml(block).replace(/\n/g, '<br>')}</p>`).join(''));
@@ -2189,7 +2241,7 @@
             const recap = recaps.get(String(entry.message.id || entry.nodeId));
             if (options.includeReasoning !== false) prependReasoning(message, recap, format);
 
-            const citations = payloadCitations(entry.message);
+            const citations = payloadCitations(payloadRenderableMessage(entry.message));
             if (citations.length > 0) {
                 message.content = `${message.content}${renderReferences(citations, format)}`.trim();
             }
