@@ -2,28 +2,28 @@ const { test, expect } = require('@playwright/test');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
-const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=';
+const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMwmHnmPwAFJwKVhZG1WQAAAABJRU5ErkJggg==';
 const answer = `<h2>Compatibility fixture</h2><p>OK</p>
     <pre><code class="language-javascript">console.log("hello");</code></pre>
     <table><thead><tr><th>Item</th><th>Value</th></tr></thead><tbody><tr><td>Price</td><td>$10</td></tr></tbody></table>
     <span data-math="x^2 + y^2 = z^2"><span class="katex">formula</span></span>
     <p><a href="https://example.com">Example source</a></p>`;
 
-function fixture(provider, extra = '') {
+function fixture(provider, extra = '', turnsOverride) {
     const user = `<p>Synthetic prompt 👍</p><button aria-label="Preview image"><img alt="Fixture image" src="${png}"></button>`;
     const turns = provider === 'gemini'
         ? `<user-query><div class="query-text">${user}</div></user-query><model-response><message-content>${answer}</message-content></model-response><user-query><div class="query-text">OK</div></user-query>`
         : `<section data-testid="conversation-turn-1"><div data-message-author-role="user" data-message-id="u">${user}</div></section>
            <section data-testid="conversation-turn-2"><div data-message-author-role="assistant" data-message-id="a">${answer}</div></section>
            <section data-testid="conversation-turn-3"><div data-message-author-role="user" data-message-id="r">OK</div></section>`;
-    return `<!doctype html><html><head><meta charset="utf-8"><title>Compatibility fixture${provider === 'gemini' ? ' - Google Gemini' : ''}</title></head><body><main>${turns}</main>${extra}<script src="/__bundle.js"></script></body></html>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Compatibility fixture${provider === 'gemini' ? ' - Google Gemini' : ''}</title></head><body><main>${turnsOverride ?? turns}</main>${extra}<script src="/__bundle.js"></script></body></html>`;
 }
 
 // Every request is intercepted: CI has no provider account, live chat, or token.
-async function mount(page, { provider = 'chatgpt', script = 'src/extraction-engine.js', extra = '', strict = false, payload } = {}) {
+async function mount(page, { provider = 'chatgpt', script = 'src/extraction-engine.js', extra = '', strict = false, payload, turns } = {}) {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    const body = fixture(provider, extra);
+    const body = fixture(provider, extra, turns);
     const bundle = await fs.readFile(path.join(root, script), 'utf8');
     await page.route('**/*', async route => {
         const url = new URL(route.request().url());
@@ -156,11 +156,13 @@ for (const format of ['markdown', 'html', 'pdf']) {
             content: { content_type: 'text', parts: [] }, metadata: { chatgpt_sdk: { widget_state: { report_message: {
                 id: 'report', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['# Synthetic research\n\nVerified report body.'] }, metadata: {}
             } } } } };
-        await mount(page, { payload });
+        await mount(page, { payload, turns: '<div data-message-author-role="user" data-message-id="m0">Synthetic turn 0</div>' });
         const result = await page.evaluate(async format => window.ChatExporterEngine.extractConversationFull({
             provider: 'chatgpt', format, scroll: false, awaitStreaming: false
         }), format);
         expect(result.messages.some(message => message.content.includes('Verified report body.'))).toBe(true);
         expect(result.unresolvedReports).toBe(0);
+        expect(result.messages).toHaveLength(2);
+        expect(result.complete).toBe(true);
     });
 }
