@@ -9,7 +9,7 @@ const files = [
     'gemini-exporter-markdown.js', 'selector-doctor.js',
     'chatgpt-markdown-exporter.user.js', 'chatgpt-pdf-exporter.user.js',
     'README.md', 'LICENSE', 'SECURITY.md', 'CONTRIBUTING.md', 'CLAUDE.md',
-    'docs/EXPORTER_GUIDE.md', 'docs/RELEASE_AUDIT.md',
+    'docs/EXPORTER_GUIDE.md', 'docs/RELEASE_AUDIT.md', 'docs/COMPATIBILITY.md',
     'public/bookmarklets/index.html', `temporal/release-notes-v${version}.md`,
     ...fs.readdirSync(path.join(root, 'public/bookmarklets')).filter(name => name.endsWith('.txt')).map(name => `public/bookmarklets/${name}`)
 ];

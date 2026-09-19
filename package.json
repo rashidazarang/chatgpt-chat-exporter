@@ -6,7 +6,8 @@
   "scripts": {
     "build": "node scripts/build-exporters.js && node scripts/build-bookmarklets.js",
     "test": "node scripts/build-exporters.js --check && node scripts/build-bookmarklets.js --check && node --test",
-    "release:prepare": "npm run build && npm test && node scripts/package-release.js"
+    "release:prepare": "npm run build && npm test && node scripts/package-release.js",
+    "test:browser": "playwright test"
   },
   "repository": {
     "type": "git",
@@ -29,6 +30,7 @@
   },
   "homepage": "https://github.com/rashidazarang/chatgpt-chat-exporter#readme",
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "jsdom": "30.1.0",
     "terser": "5.51.2"
   },

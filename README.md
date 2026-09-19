@@ -77,6 +77,10 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
+## Browser compatibility
+
+Chromium, Firefox, and WebKit CI exercise every shipped console bundle, both userscripts, all four bookmarklets, real downloads, rich ChatGPT/Gemini fixtures, strict CSP/Trusted Types, app-backed research, and a 1,243-message payload. See [coverage and limits](docs/COMPATIBILITY.md). WebKit coverage does not verify Safari userscript managers or mobile installation.
+
 ## 🖼️ Demo
 
 | Markdown Output | PDF View |

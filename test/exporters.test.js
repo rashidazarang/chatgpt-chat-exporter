@@ -599,7 +599,7 @@ test('userscript builds menu icons without innerHTML so strict CSP pages keep wo
     const { window } = installUserscriptUi({ markup: NO_SHARE_UI_FIXTURE });
     const launcher = window.document.querySelector('#chat-exporter-launcher');
 
-    assert.ok(launcher.querySelector('svg'), 'the launcher renders a parsed SVG icon');
+    assert.ok(launcher.querySelector('svg'), 'the launcher renders an SVG icon');
     launcher.click();
     const icons = window.document.querySelectorAll('#chat-exporter-share-menu [role="menuitem"] svg');
     assert.equal(icons.length, 3);
@@ -743,6 +743,7 @@ async function runUserscript(html, options = {}) {
         Object.defineProperty(window.Element.prototype, 'outerHTML', { set: blocked, get: () => '' });
         window.Element.prototype.insertAdjacentHTML = blocked;
         window.document.write = blocked;
+        window.DOMParser.prototype.parseFromString = blocked;
     }
 
     window.eval(readScript(options.script || 'chatgpt-markdown-exporter.user.js'));
@@ -783,6 +784,7 @@ test('built userscript exports end to end on an account with no share control (i
 test('built userscript installs and exports on a page that enforces Trusted Types', async () => {
     const { window, downloads, launcher } = await runUserscript(ENTERPRISE_PAGE, { trustedTypes: true });
     assert.ok(launcher, 'strict CSP must not stop the export UI from mounting');
+    assert.ok(launcher.querySelector('svg path'), 'icons must survive a blocked DOMParser too');
 
     await exportFromLauncher(window, launcher, downloads);
 

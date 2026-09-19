@@ -22,6 +22,9 @@ Unreleased. This branch prepares the next release; the checklist in [RELEASE_AUD
 - Pin CI actions, test supported Node versions, verify generated artifacts and advisories, and prepare downloadable artifacts with SHA256SUMS while removing stale staging files. Add a security reporting policy and dependency-update configuration.
 - Keep engine diagnostics, package version, and userscript headers consistent. Correct stale installation/privacy documentation, two broken image links, and caching for mutable website assets.
 
+- Build UI icons with direct SVG DOM APIs so strict Trusted Types policies do not remove icons or require a permissive parser policy.
+- Add a 66-case Chromium/Firefox/WebKit compatibility matrix with actual downloads and synthetic provider fixtures. See [coverage](../docs/COMPATIBILITY.md).
+
 ## Compatibility notes
 
 HTML/PDF remain DOM-first. Recovered payload-only research text is escaped and readable, but does not recreate the report iframe’s visual layout. Temporary/shared conversations still depend on the rendered page. Images that cannot be embedded remain a URL or labelled placeholder. A Chromium-based local smoke test and synthetic regressions do not replace final signed-in ChatGPT/Gemini checks across Chrome, Firefox, and Safari.

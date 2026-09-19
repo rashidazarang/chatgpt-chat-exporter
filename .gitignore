@@ -41,3 +41,7 @@ test-npm-install/
 
 # Generated release packages
 /dist/
+
+# Browser compatibility test output
+/playwright-report/
+/test-results/

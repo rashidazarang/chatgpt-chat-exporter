@@ -99,7 +99,7 @@ virtualizer, no hidden-tab stall.
 ### Userscript UI design (`src/userscript-ui.js`)
 
 - **Never depend on a ChatGPT affordance for the only entry point.** Native menu integration is an enhancement; the floating launcher (`syncLauncher`) is the guarantee — enterprise policies can remove Share entirely (issue #31). The launcher mounts only when no share control is visible *and* the page has messages, and hides itself when one appears
-- **No HTML injection sinks.** ChatGPT deployments can enforce Trusted Types, which makes `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write` throw. Build nodes with DOM APIs; parse SVG icons with `DOMParser` + `importNode` (`renderIcon`). A test runs the built userscript with every sink throwing
+- **No HTML injection sinks.** ChatGPT deployments can enforce Trusted Types, which makes `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write` throw. Build nodes with DOM APIs; build fixed SVG geometry with `createElementNS` (`renderIcon`); `DOMParser.parseFromString` is also a Trusted Types sink. A test runs the built userscript with every sink throwing
 - **Only extend menus that already offer a whole-conversation action** (`findMenuTemplate` requires a Share item). Sidebar per-conversation menus reach the same code and would export the *open* conversation, not theirs
 - **Watch for observer feedback loops**: writing an unchanged attribute still queues a mutation record, so style updates are diffed first (`setLauncherVisible`)
 - Cloned native items are stripped of `id`/`data-testid`/`data-test-id` (including descendants) so ChatGPT's own queries never match our copies
@@ -108,9 +108,11 @@ virtualizer, no hidden-tab stall.
 ## Development
 
 ```bash
-npm ci          # jsdom and Terser (development only)
+npm ci          # development dependencies only
 npm run build   # regenerate exporters and self-contained bookmarklets
 npm test        # exporter/bookmarklet freshness + node --test
+npx playwright install --with-deps  # install browser test engines
+npm run test:browser                # Chromium, Firefox, WebKit
 ```
 
 Tests live in `test/exporters.test.js` with synthetic DOM fixtures (`test/fixtures/`) mirroring live-observed ChatGPT/Gemini shapes. Every bug fix gets a regression test. Note: jsdom lacks `innerText`; the engine intentionally avoids relying on it (it degrades to `textContent` on detached clones in real browsers too).
