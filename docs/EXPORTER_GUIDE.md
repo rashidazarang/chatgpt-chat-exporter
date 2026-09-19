@@ -13,7 +13,7 @@ All shipped exporters are generated from the shared engine in `src/extraction-en
   - Preserves code blocks with syntax highlighting
   - Converts rendered tables to Markdown tables
   - Exports MathJax/KaTeX equations as `$...$` and `$$...$$`
-  - Adds readable placeholders for images, charts, media, files, and artifacts
+  - Embeds available raster images, with links or readable placeholders when bytes are unavailable
   - Lightweight text format
   - Easy to edit and share
 
@@ -22,10 +22,10 @@ All shipped exporters are generated from the shared engine in `src/extraction-en
 - **Best for:** Archiving, printing, sharing as professional documents
 - **File naming:** `{ConversationTitle} (YYYY-MM-DD) - PrintToPDF.html`
 - **Features:**
-  - Works without external libraries (bypasses CSP restrictions)
+  - Works without external runtime libraries; site CSP still applies
   - Professional formatting with blue/gray message boxes
   - Preserves printable code blocks, tables, and equations
-  - Keeps media and file/artifact cards as readable placeholders
+  - Keeps available raster images and readable file/artifact references
   - Automatic page break handling
   - Clear on-screen instructions (hidden in PDF)
   - One-click conversion to PDF via browser print
@@ -69,7 +69,7 @@ Use `gemini-exporter-markdown.js` from a conversation at `gemini.google.com/app`
 - **HTML Exporter:** Basic HTML for web viewing. Can also be printed to PDF but without special formatting
 - **File Names:** All exporters now use the conversation title for better organization
 - **Math:** Markdown exports use common MathJax delimiters so compatible viewers can render equations
-- **Compatibility:** v0.7.0 is based on a local live Chrome/Crawlio audit of current ChatGPT and Gemini rendering. Raw authenticated captures are not included in the repository.
+- **Compatibility:** synthetic regression tests cover ChatGPT and Gemini shapes. Current live browser validation is tracked in [RELEASE_AUDIT.md](RELEASE_AUDIT.md); historical live observations are not a current compatibility guarantee.
 - **Development:** Run `npm run build` after editing `src/extraction-engine.js`; `npm test` verifies generated scripts are up to date and runs jsdom fixture coverage.
 
 ## Troubleshooting
@@ -87,3 +87,13 @@ Use `gemini-exporter-markdown.js` from a conversation at `gemini.google.com/app`
 ### Duplicate messages?
 - The exporters now include better duplicate detection
 - Uses content hashing to identify and skip duplicates
+
+## Bookmarklets and large conversations
+
+Open `public/bookmarklets/index.html` in a browser from a downloaded repository (or the hosted site’s `/bookmarklets/` page once deployed). Drag a format link to the bookmarks bar. The entire program is embedded, with no remote code loader; replace the bookmark to upgrade. Browser URL limits and site CSP may prevent execution.
+
+For ChatGPT Markdown, `conversationFetchTimeout` defaults to 60000 ms and `conversationMaxDuration` to 120000 ms. Optional enrichment uses a separate 5000 ms request timeout and 15000 ms budget. Existing explicit `metadataFetchTimeout` / `metadataMaxDuration` overrides still apply to the primary read unless the new conversation options are set. A supplied `metadataDeadline` remains an outer bound. HTML/PDF remain DOM-first, with bounded optional recovery from the payload.
+
+Completed Deep Research reports can be recovered from app metadata and task streams. An unavailable report makes the export incomplete and leaves a visible warning in the saved file. Recovered HTML/PDF text is escaped; it preserves content and sources, not the original iframe’s rendered layout.
+
+Embedded DOM images and downloaded attachments share `maxTotalEmbeddedImageBytes` (default 50 MiB) and `maxEmbeddedImageBytes` (default 20 MiB). `maxCanvasPixels` defaults to 16,777,216 and is checked before canvas allocation or serialization. Set a byte budget to zero to disable embedding; remote URLs or readable placeholders remain. These limits do not rewrite data URLs already contained in the provider’s native Markdown text.

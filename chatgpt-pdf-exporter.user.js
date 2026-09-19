@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - PDF
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      1.1.0
+// @version      1.2.0
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @homepageURL  https://github.com/rashidazarang/chatgpt-chat-exporter
@@ -32,7 +32,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '0.12.1';
+        const ENGINE_VERSION = '1.2.0';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -97,6 +97,10 @@
 
         const METADATA_FETCH_TIMEOUT = 5000;
         const METADATA_MAX_DURATION = 15000;
+        // The primary conversation can be megabytes; optional metadata should
+        // still fail quickly. Keep their budgets separate (issue #41).
+        const CONVERSATION_FETCH_TIMEOUT = 60000;
+        const CONVERSATION_MAX_DURATION = 120000;
         const MAX_EMBEDDED_IMAGE_BYTES = 20 * 1024 * 1024;
         const MAX_TOTAL_EMBEDDED_IMAGE_BYTES = 50 * 1024 * 1024;
 
@@ -510,6 +514,14 @@
         }
 
         function removeUiElements(clone) {
+            // Uploaded images can be clickable previews. Removing their button
+            // used to delete the only copy in temporary chats (issue #40).
+            queryAll(clone, 'button').forEach(button => {
+                const media = queryAll(button, 'img, canvas, video, audio');
+                if (media.length && !button.closest('pre, code, [data-chat-exporter-ui]')) {
+                    button.replaceWith(...media);
+                }
+            });
             const uiSelector = [
                 'button',
                 'svg',
@@ -698,11 +710,27 @@
             });
         }
 
-        function isSafeEmbeddedImageSource(source) {
-            const value = String(source || '');
-            if (!/^data:image\/(?:png|jpe?g|gif|webp|avif|bmp);base64,[a-z0-9+/=\s]+$/i.test(value)) return false;
-            const payload = value.slice(value.indexOf(',') + 1).replace(/\s/g, '');
-            return Math.ceil(payload.length * 3 / 4) <= MAX_EMBEDDED_IMAGE_BYTES;
+        function embeddedImageSize(source) {
+            const match = /^data:image\/(?:png|jpe?g|gif|webp|avif|bmp);base64,([a-z0-9+/=\s]+)$/i.exec(String(source || ''));
+            if (!match) return Infinity;
+            const payload = match[1].replace(/\s/g, '');
+            const unpadded = payload.replace(/={1,2}$/, '');
+            if (payload.length % 4 !== 0 || !/^[a-z0-9+/]+$/i.test(unpadded)) return Infinity;
+            return payload.length * 3 / 4 - (payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0);
+        }
+
+        function createImageBudget(options = {}) {
+            const limit = (value, fallback) => Number.isFinite(value) ? Math.max(0, value) : fallback;
+            return {
+                remaining: limit(options.maxTotalEmbeddedImageBytes, MAX_TOTAL_EMBEDDED_IMAGE_BYTES),
+                perImage: limit(options.maxEmbeddedImageBytes, MAX_EMBEDDED_IMAGE_BYTES),
+                maxPixels: limit(options.maxCanvasPixels, 16 * 1024 * 1024)
+            };
+        }
+
+        function isSafeEmbeddedImageSource(source, maxBytes = MAX_EMBEDDED_IMAGE_BYTES) {
+            const size = embeddedImageSize(source);
+            return size > 0 && Number.isFinite(size) && size <= maxBytes;
         }
 
         function isSafeRemoteImageSource(source) {
@@ -714,19 +742,20 @@
             }
         }
 
-        function canvasDataUrl(element) {
+        function canvasDataUrl(element, budget) {
             try {
                 const CanvasRenderingContext2D = element.ownerDocument?.defaultView?.CanvasRenderingContext2D;
                 if (typeof CanvasRenderingContext2D !== 'function') return '';
 
-                if (element.tagName?.toLowerCase() === 'canvas') {
-                    const value = element.toDataURL?.('image/png') || '';
-                    return isSafeEmbeddedImageSource(value) ? value : '';
-                }
-
                 const width = element.naturalWidth || element.width || 0;
                 const height = element.naturalHeight || element.height || 0;
-                if (!width || !height) return '';
+                if (!Number.isFinite(width * height) || width <= 0 || height <= 0 || width * height > budget.maxPixels) return '';
+                const maxBytes = Math.min(budget.perImage, budget.remaining);
+                if (maxBytes <= 0) return '';
+                if (element.tagName?.toLowerCase() === 'canvas') {
+                    const value = element.toDataURL?.('image/png') || '';
+                    return isSafeEmbeddedImageSource(value, maxBytes) ? value : '';
+                }
 
                 const canvas = element.ownerDocument?.createElement?.('canvas');
                 const context = canvas?.getContext?.('2d');
@@ -735,7 +764,7 @@
                 canvas.height = height;
                 context.drawImage(element, 0, 0, width, height);
                 const value = canvas.toDataURL('image/png');
-                return isSafeEmbeddedImageSource(value) ? value : '';
+                return isSafeEmbeddedImageSource(value, maxBytes) ? value : '';
             } catch (error) {
                 // Cross-origin images can taint a canvas. Their original HTTPS URL
                 // is still a useful fallback, while blob URLs are not portable.
@@ -743,36 +772,36 @@
             }
         }
 
-        function mediaSource(element) {
-            if (element.hasAttribute?.('data-chat-exporter-media-source')) {
-                return element.getAttribute('data-chat-exporter-media-source') || '';
-            }
-
+        function mediaSource(element, budget) {
             const direct = String(
                 element.currentSrc ||
                 element.getAttribute?.('src') ||
                 element.getAttribute?.('data-src') || ''
             ).trim();
-            if (isSafeEmbeddedImageSource(direct)) return direct;
-
-            const embedded = canvasDataUrl(element);
-            if (embedded) return embedded;
-
+            const maxBytes = Math.min(budget.perImage, budget.remaining);
+            let embedded = isSafeEmbeddedImageSource(direct, maxBytes) ? direct : '';
+            if (!embedded && maxBytes > 0) embedded = canvasDataUrl(element, budget);
+            if (embedded) {
+                budget.remaining -= embeddedImageSize(embedded);
+                return embedded;
+            }
             const resolved = String(element.src || direct).trim();
             return isSafeRemoteImageSource(resolved) ? resolved : '';
         }
 
-        function annotateMediaSources(original, clone) {
+        function annotateMediaSources(original, clone, budget) {
+            // Keep exporter annotations outside page-controlled attributes.
+            const sources = new WeakMap();
             const originalMedia = queryAll(original, 'img, canvas');
             const clonedMedia = queryAll(clone, 'img, canvas');
             originalMedia.forEach((element, index) => {
                 const cloneElement = clonedMedia[index];
-                if (!cloneElement) return;
-                cloneElement.setAttribute('data-chat-exporter-media-source', mediaSource(element));
+                if (cloneElement) sources.set(cloneElement, mediaSource(element, budget));
             });
+            return sources;
         }
 
-        function processMedia(clone, format, replacements) {
+        function processMedia(clone, format, replacements, mediaSources) {
             queryAll(clone, 'img, canvas, video, audio').forEach(element => {
                 const tag = element.tagName.toLowerCase();
                 const alt = normalizeWhitespace(element.getAttribute('alt') || element.getAttribute('aria-label') || element.getAttribute('title') || '');
@@ -783,7 +812,7 @@
                     tag === 'audio' ? '[Audio]' :
                     '[Media]';
 
-                const source = (tag === 'img' || tag === 'canvas') ? mediaSource(element) : '';
+                const source = (tag === 'img' || tag === 'canvas') ? (mediaSources.get(element) || '') : '';
                 const imageAlt = alt || (tag === 'canvas' ? 'Canvas or chart' : 'Image');
 
                 const replacement = format === 'markdown' ?
@@ -1174,7 +1203,7 @@
             const replacements = [];
 
             annotatePreWrapElements(element, clone);
-            annotateMediaSources(element, clone);
+            const mediaSources = annotateMediaSources(element, clone, options.imageBudget || createImageBudget(options));
             const citations = collectCitations(clone);
             // Cards implemented as buttons disappear with the rest of the UI if
             // they are not converted first (issue #32).
@@ -1185,7 +1214,7 @@
             }
             processCodeBlocks(clone, format, replacements);
             processMath(clone);
-            processMedia(clone, format, replacements);
+            processMedia(clone, format, replacements, mediaSources);
             processLinks(clone, format, replacements);
             processTables(clone, format, replacements);
 
@@ -1237,7 +1266,7 @@
             const text = normalizeWhitespace(scope?.textContent);
             const richCount = richContentCount(scope);
 
-            if (text.length < 5 && richCount === 0) return false;
+            if (!text && richCount === 0) return false;
             if (text.length > 200000) return false;
             if (matches(element, 'nav, aside, header, footer, form, menu')) return false;
             if (element.querySelector('textarea, input[type="text"], [contenteditable="true"]') && !element.hasAttribute('data-message-author-role')) return false;
@@ -1333,32 +1362,16 @@
             return { sender: index % 2 === 0 ? 'You' : provider.assistantName, reliable: false };
         }
 
-        // Dedupe key for a serialized message. This has to cover the whole message:
-        // a prefix would collapse two different turns that open the same way — a
-        // conversation full of redrafts of one letter does exactly that, and the
-        // loser silently vanishes from the export.
-        function contentHash(content) {
-            const text = normalizeWhitespace(String(content || '').replace(/<[^>]+>/g, ' '));
-            let hash = 0x811c9dc5;
-            for (let index = 0; index < text.length; index++) {
-                hash ^= text.charCodeAt(index);
-                hash = Math.imul(hash, 0x01000193) >>> 0;
-            }
-            return `${text.length}:${hash.toString(36)}`;
-        }
-
         function captureMessage(state, messageElement, provider, format) {
+            const key = messageKey(messageElement, provider, state.container);
+            if (state.seen.has(key)) return true;
             const contentRoot = selectContentRoot(messageElement, provider);
-            const content = serializeMessageContent(contentRoot, format, { stripMessageMetadata: true });
-            const minLength = richContentCount(contentRoot) > 0 ? 3 : 10;
-
-            // Not captured — the caller must be free to try this element again once
-            // the provider has filled it in.
-            if (!content || normalizeWhitespace(content).length < minLength) return false;
-
-            const hash = contentHash(content);
-            if (state.seen.has(hash)) return true;
-            state.seen.add(hash);
+            const content = serializeMessageContent(contentRoot, format, {
+                stripMessageMetadata: true, imageBudget: state.imageBudget
+            });
+            // Empty mounted turns stay eligible for a later capture.
+            if (!normalizeWhitespace(content)) return false;
+            state.seen.add(key);
 
             const index = state.messages.length;
             const sender = identifySender(messageElement, index, provider);
@@ -1531,25 +1544,29 @@
 
         function activePayloadMessages(payload) {
             const mapping = payload?.mapping;
-            if (!mapping || typeof mapping !== 'object') return [];
-
+            if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) return [];
             const entries = [];
             const visited = new Set();
-            let nodeId = typeof payload.current_node === 'string' ? payload.current_node : '';
-            while (nodeId && !visited.has(nodeId)) {
+            let nodeId = payload.current_node;
+            if (typeof nodeId !== 'string' || !nodeId) return [];
+            while (nodeId != null) {
+                if (typeof nodeId !== 'string' || !Object.prototype.hasOwnProperty.call(mapping, nodeId) || visited.has(nodeId)) return [];
                 const node = mapping[nodeId];
-                if (!node) break;
+                if (!node || typeof node !== 'object' || Array.isArray(node) || !Object.prototype.hasOwnProperty.call(node, 'parent')) return [];
+                if (node.parent !== null && (typeof node.parent !== 'string' || !node.parent)) return [];
+                if (node.message != null && (typeof node.message !== 'object' || Array.isArray(node.message))) return [];
                 visited.add(nodeId);
                 entries.push({ nodeId, node, message: node.message });
-                nodeId = typeof node.parent === 'string' ? node.parent : '';
+                nodeId = node.parent;
             }
+            return entries.reverse().filter(entry => entry.message);
+        }
 
-            if (entries.length > 0) return entries.reverse().filter(entry => entry.message);
-
-            return Object.entries(mapping)
-                .map(([id, node]) => ({ nodeId: id, node, message: node?.message }))
-                .filter(entry => entry.message)
-                .sort((left, right) => Number(left.message.create_time || 0) - Number(right.message.create_time || 0));
+        function hasUnfinishedPayloadMessages(entries) {
+            return entries.some(entry => {
+                const message = payloadRenderableMessage(entry.message);
+                return /^(?:in_progress|pending|waiting|finished_partial|finished_failed)$/.test(message?.status || '');
+            });
         }
 
         // Regenerating an answer, or editing a prompt, leaves the previous version
@@ -1567,7 +1584,8 @@
 
             activeEntries.forEach(entry => {
                 const parentId = entry.node?.parent;
-                const siblings = parentId ? (mapping[parentId]?.children || []) : [];
+                const children = parentId && Object.prototype.hasOwnProperty.call(mapping, parentId) ? mapping[parentId]?.children : null;
+                const siblings = Array.isArray(children) ? children : [];
                 siblings.forEach(siblingId => {
                     if (onActiveChain.has(siblingId)) return;
                     // Each discarded branch can itself be several turns deep.
@@ -1577,12 +1595,12 @@
                         const nodeId = stack.pop();
                         if (seen.has(nodeId) || onActiveChain.has(nodeId)) continue;
                         seen.add(nodeId);
-                        const node = mapping[nodeId];
+                        const node = Object.prototype.hasOwnProperty.call(mapping, nodeId) ? mapping[nodeId] : null;
                         if (!node) continue;
                         if (node.message) {
                             variants.push({ nodeId, node, message: node.message, supersededBy: entry });
                         }
-                        (node.children || []).forEach(child => stack.push(child));
+                        if (Array.isArray(node.children)) node.children.forEach(child => stack.push(child));
                     }
                 });
             });
@@ -1590,14 +1608,108 @@
             return variants.filter(entry => isMainPayloadMessage(entry));
         }
 
+        function payloadEmbeddedReport(message) {
+            const metadata = message?.metadata;
+            if (!metadata || typeof metadata !== 'object') return null;
+
+            const objectValue = value => {
+                if (value && typeof value === 'object') return value;
+                if (typeof value !== 'string' || !value.trim()) return null;
+                try {
+                    const parsed = JSON.parse(value);
+                    return parsed && typeof parsed === 'object' ? parsed : null;
+                } catch (error) {
+                    return null;
+                }
+            };
+
+            // App-backed tool results are persisted under chatgpt_sdk. In current
+            // Deep Research conversations widget_state is a JSON string, even though
+            // the Apps SDK presents its parsed value to the iframe as widgetState.
+            const sdk = objectValue(metadata.chatgpt_sdk);
+            const widgetState = objectValue(sdk?.widget_state ?? sdk?.widgetState);
+            const sdkToolMetadata = objectValue(
+                sdk?.tool_response_metadata ?? sdk?.toolResponseMetadata);
+
+            // The current Deep Research app receives this object as its
+            // toolResponseMetadata and renders report_message inside a
+            // cross-origin internal://deep-research iframe.
+            const states = [
+                widgetState,
+                objectValue(widgetState?.venus_widget_state),
+                sdkToolMetadata,
+                objectValue(sdkToolMetadata?.venus_widget_state),
+                metadata.venus_widget_state,
+                metadata.tool_response_metadata?.venus_widget_state,
+                metadata.toolResponseMetadata?.venus_widget_state
+            ];
+            for (const state of states) {
+                const report = state?.report_message;
+                if (report && typeof report === 'object') return report;
+            }
+            return null;
+        }
+
+        function payloadRenderableMessage(message) {
+            const report = payloadEmbeddedReport(message);
+            if (!report) return message;
+            const reportContent = report.content || (typeof report.text === 'string'
+                ? { content_type: 'text', parts: [report.text] }
+                : message.content);
+            return {
+                ...message,
+                ...report,
+                content: reportContent,
+                author: { ...report.author, role: 'assistant' },
+                create_time: report.create_time ?? message.create_time,
+                metadata: { ...message.metadata, ...report.metadata }
+            };
+        }
+
+        function isDirectDeepResearchResult(message) {
+            const author = String(message?.author?.name || '').toLowerCase();
+            const metadata = message?.metadata;
+            const markedResearch = /deep[_-]?research|research_kickoff/.test(author) ||
+                String(metadata?.async_task_type || '').toLowerCase() === 'research' ||
+                Boolean(metadata?.deep_research_version);
+            if (!markedResearch) return false;
+
+            const contentType = String(message?.content?.content_type || '').toLowerCase();
+            const text = payloadContentText(message?.content);
+            // Some connector runs persist the report directly in the tool message
+            // without widget_state or an async-result flag. A substantial Markdown
+            // document is distinguishable from the short JSON/session kickoff result.
+            return ['text', 'multimodal_text'].includes(contentType) &&
+                text.length > 1000 && /^\s*#{1,3}\s+\S/m.test(text);
+        }
+
+        function isAsyncPayloadResult(message) {
+            return message?.metadata?.is_async_task_result_message === true ||
+                Boolean(payloadEmbeddedReport(message)) ||
+                isDirectDeepResearchResult(message);
+        }
+
         function isMainPayloadMessage(entry) {
             const message = entry?.message;
-            const role = message?.author?.role;
+            const asyncResult = isAsyncPayloadResult(message);
+            const rendered = payloadRenderableMessage(message);
+            const role = asyncResult ? 'assistant' : rendered?.author?.role;
             if (role !== 'user' && role !== 'assistant') return false;
-            if (message.metadata?.is_visually_hidden_from_conversation) return false;
+            // Deep Research now renders its completed report through a sandboxed
+            // app iframe. The backing result can therefore be a visually-hidden
+            // tool message even though the iframe is a visible assistant turn. The
+            // private conversation record marks that message explicitly; keeping
+            // it is the only page-context route to the cross-origin report text.
+            if (message.metadata?.is_visually_hidden_from_conversation && !asyncResult) return false;
 
-            const contentType = String(message.content?.content_type || '').toLowerCase();
-            return !['thoughts', 'reasoning_recap', 'code', 'execution_output', 'tool_result'].includes(contentType);
+            const contentType = String(rendered?.content?.content_type || '').toLowerCase();
+            return asyncResult || !['thoughts', 'reasoning_recap', 'code', 'execution_output', 'tool_result'].includes(contentType);
+        }
+
+        function payloadMessageRole(message) {
+            return isAsyncPayloadResult(message)
+                ? 'assistant'
+                : message?.author?.role;
         }
 
         // Reasoning models can store progress updates as ordinary assistant/text
@@ -1610,8 +1722,11 @@
         function mainPayloadMessages(entries) {
             const eligible = entries.filter(isMainPayloadMessage);
             return eligible.filter((entry, index) => {
-                if (entry.message?.author?.role !== 'assistant') return true;
-                return eligible[index + 1]?.message?.author?.role !== 'assistant';
+                // A completed report is content, not a progress update, even when
+                // the assistant follows it with an ordinary summary.
+                if (isAsyncPayloadResult(entry.message)) return true;
+                if (payloadMessageRole(entry.message) !== 'assistant') return true;
+                return payloadMessageRole(eligible[index + 1]?.message) !== 'assistant';
             });
         }
 
@@ -1629,7 +1744,7 @@
                 if (!entry && positionalFallbackIsSafe) {
                     entry = mainEntries.find(candidate => {
                         if (used.has(candidate)) return false;
-                        const role = candidate.message.author?.role;
+                        const role = payloadMessageRole(candidate.message);
                         return role === message.senderType;
                     }) || null;
                 }
@@ -1654,7 +1769,7 @@
 
             entries.forEach(entry => {
                 const message = entry.message;
-                const role = message?.author?.role;
+                const role = payloadMessageRole(message);
                 const contentType = String(message?.content?.content_type || '').toLowerCase();
 
                 if (role === 'assistant' && contentType === 'reasoning_recap') {
@@ -1736,28 +1851,48 @@
             return Array.from(descriptors.values());
         }
 
-        async function fetchWithTimeout(doc, input, init = {}, timeout = METADATA_FETCH_TIMEOUT) {
+        async function fetchWithTimeout(doc, input, init = {}, timeout = METADATA_FETCH_TIMEOUT, consume = readJsonBody) {
             const win = getWindow(doc);
             const fetcher = win?.fetch?.bind(win);
-            if (typeof fetcher !== 'function') return null;
+            if (typeof fetcher !== 'function' || !Number.isFinite(timeout) || timeout <= 0) return null;
 
             const AbortControllerCtor = win?.AbortController || globalThis.AbortController;
             const controller = typeof AbortControllerCtor === 'function' ? new AbortControllerCtor() : null;
             const setTimer = win?.setTimeout?.bind(win) || setTimeout;
             const clearTimer = win?.clearTimeout?.bind(win) || clearTimeout;
-            const timer = controller ? setTimer(() => controller.abort(), timeout) : null;
+            let timer;
+            let expired = false;
+            const deadline = new Promise(resolve => {
+                timer = setTimer(() => {
+                    expired = true;
+                    controller?.abort();
+                    resolve(null);
+                }, timeout);
+            });
 
             try {
-                return await fetcher(input, {
-                    credentials: 'include',
-                    cache: 'no-store',
-                    ...init,
-                    ...(controller ? { signal: controller.signal } : {})
-                });
+                // Race the entire operation, including the body. Abort alone is
+                // insufficient for a stalled/non-compliant fetch implementation.
+                return await Promise.race([deadline, (async () => {
+                    const response = await fetcher(input, {
+                        credentials: 'include',
+                        cache: 'no-store',
+                        redirect: 'error',
+                        referrerPolicy: 'no-referrer',
+                        ...init,
+                        ...(controller ? { signal: controller.signal } : {})
+                    });
+                    if (expired) {
+                        response.body?.cancel?.().catch(() => {});
+                        return null;
+                    }
+                    const body = await consume(response);
+                    return { ok: response.ok, status: response.status, headers: response.headers, body };
+                })()]);
             } catch (error) {
                 return null;
             } finally {
-                if (timer !== null) clearTimer(timer);
+                clearTimer(timer);
             }
         }
 
@@ -1817,7 +1952,7 @@
             // a cookie-only attempt is still worth making in that case.
             if (!response?.ok) return auth.token;
 
-            const session = await readJsonBody(response);
+            const session = response.body;
             const token = typeof session?.accessToken === 'string' ? session.accessToken : '';
             auth.signedOut = !token;
             if (token) auth.token = token;
@@ -1838,7 +1973,7 @@
             }, timeout);
             if (!response?.ok) return auth.accountIds;
 
-            const payload = await readJsonBody(response);
+            const payload = response.body;
             const accounts = payload?.accounts && typeof payload.accounts === 'object' ? payload.accounts : {};
             const ids = new Set();
             Object.values(accounts).forEach(entry => {
@@ -1863,7 +1998,9 @@
         }
 
         async function attemptChatGptJson(doc, options, endpoint) {
-            const timeout = metadataRequestTimeout(doc, options);
+            const timeout = metadataRequestTimeout(doc, endpoint.startsWith('/backend-api/conversation/')
+                ? { ...options, metadataFetchTimeout: options.conversationFetchTimeout ?? options.metadataFetchTimeout ?? CONVERSATION_FETCH_TIMEOUT }
+                : options);
             if (timeout <= 0) return { reason: 'timeout' };
 
             const response = await fetchWithTimeout(doc, endpoint, {
@@ -1871,7 +2008,7 @@
             }, timeout);
             if (!response) return { reason: 'network' };
 
-            const body = await readJsonBody(response);
+            const body = response.body;
             if (response.ok) return { reason: 'ok', body };
             if (isChatGptAuthFailure(response, body)) return { reason: 'auth' };
             return { reason: `status:${response.status}` };
@@ -1913,6 +2050,185 @@
             return result;
         }
 
+        async function attemptChatGptText(doc, options, endpoint) {
+            const timeout = metadataRequestTimeout(doc, options);
+            if (timeout <= 0) return { reason: 'timeout' };
+
+            const response = await fetchWithTimeout(doc, endpoint, {
+                headers: {
+                    ...chatGptAuthHeaders(options.chatGptAuth),
+                    Accept: 'text/event-stream'
+                }
+            }, timeout, response => response.ok ? response.text() : readJsonBody(response));
+            if (!response) return { reason: 'network' };
+            if (response.ok) return { reason: 'ok', body: response.body };
+
+            const body = response.body;
+            if (isChatGptAuthFailure(response, body)) return { reason: 'auth' };
+            return { reason: `status:${response.status}` };
+        }
+
+        async function fetchChatGptText(doc, options, endpoint) {
+            const auth = options.chatGptAuth || (options.chatGptAuth = createChatGptAuth(options));
+            await readChatGptToken(doc, options);
+            if (auth.signedOut && !auth.token) return { reason: 'signed-out' };
+
+            let result = await attemptChatGptText(doc, options, endpoint);
+            if (result.reason !== 'auth') return result;
+
+            const stale = auth.token;
+            const refreshed = await readChatGptToken(doc, options, true);
+            if (refreshed && refreshed !== stale) {
+                result = await attemptChatGptText(doc, options, endpoint);
+                if (result.reason !== 'auth') return result;
+            }
+
+            for (const accountId of await readChatGptAccountIds(doc, options)) {
+                if (accountId === auth.accountId) continue;
+                auth.accountId = accountId;
+                result = await attemptChatGptText(doc, options, endpoint);
+                if (result.reason !== 'auth') return result;
+            }
+
+            auth.accountId = '';
+            return result;
+        }
+
+        function deepResearchTaskId(message) {
+            const metadata = message?.metadata;
+            const taskId = metadata?.async_task_id ?? metadata?.asyncTaskId;
+            if (typeof taskId !== 'string' || !taskId) return '';
+            const taskType = String(metadata?.async_task_type || '').toLowerCase();
+            return /^deepresch_/i.test(taskId) || taskType === 'research' || metadata?.deep_research_version
+                ? taskId
+                : '';
+        }
+
+        function deepResearchFinalMessage(stream) {
+            let finalMessage = null;
+            String(stream || '').split(/\r?\n/).forEach(line => {
+                const match = line.match(/^data:\s*(.+)$/);
+                if (!match || match[1] === '[DONE]') return;
+                try {
+                    const event = JSON.parse(match[1]);
+                    const candidate = event?.final_message ?? event?.finalMessage;
+                    if (candidate) finalMessage = candidate;
+                } catch (error) {
+                    // A malformed progress event does not invalidate a later final
+                    // message in the same stream.
+                }
+            });
+            return finalMessage;
+        }
+
+        function normalizeDeepResearchFinalMessage(value, taskMessage, taskId) {
+            let report = value?.message && typeof value.message === 'object' ? value.message : value;
+            if (typeof report === 'string') {
+                report = { content: { content_type: 'text', parts: [report] } };
+            }
+            if (!report || typeof report !== 'object') return null;
+
+            const content = report.content || (typeof report.text === 'string'
+                ? { content_type: 'text', parts: [report.text] }
+                : null);
+            if (!payloadContentText(content)) return null;
+
+            return {
+                ...report,
+                id: report.id || `${taskMessage?.id || taskId}:deep-research-result`,
+                author: { ...report.author, role: 'assistant' },
+                content,
+                create_time: report.create_time ?? taskMessage?.create_time,
+                metadata: {
+                    ...taskMessage?.metadata,
+                    ...report.metadata,
+                    async_task_id: taskId,
+                    is_async_task_result_message: true,
+                    is_visually_hidden_from_conversation: false
+                }
+            };
+        }
+
+        async function hydrateDeepResearchEntries(entries, doc, options) {
+            const conversationId = chatGptConversationId(doc);
+            if (!conversationId || !Array.isArray(entries) || entries.length === 0) return entries;
+
+            const additions = new Map();
+            const attemptedTasks = new Set();
+            let unresolvedReports = 0;
+            for (let index = 0; index < entries.length; index++) {
+                const entry = entries[index];
+                const taskId = deepResearchTaskId(entry.message);
+                if (!taskId || isAsyncPayloadResult(entry.message) || attemptedTasks.has(taskId)) continue;
+                attemptedTasks.add(taskId);
+
+                const alreadyPresent = entries.some(candidate =>
+                    candidate !== entry &&
+                    isAsyncPayloadResult(candidate.message) &&
+                    deepResearchTaskId(candidate.message) === taskId);
+                if (alreadyPresent) continue;
+
+                const endpoint = `/backend-api/tasks/${encodeURIComponent(taskId)}/stream?` +
+                    `parent_conversation_id=${encodeURIComponent(conversationId)}` +
+                    `&message_id=${encodeURIComponent(entry.message?.id || entry.nodeId)}`;
+                const result = await fetchChatGptText(doc, options, endpoint);
+                if (result.reason !== 'ok') {
+                    unresolvedReports++;
+                    console.warn(`[Chat Exporter] A Deep Research report could not be read (${result.reason}).`);
+                    continue;
+                }
+
+                const message = normalizeDeepResearchFinalMessage(
+                    deepResearchFinalMessage(result.body), entry.message, taskId);
+                if (!message) {
+                    unresolvedReports++;
+                    console.warn('[Chat Exporter] A Deep Research task returned no completed report.');
+                    continue;
+                }
+
+                let insertion = entries.findIndex((candidate, candidateIndex) =>
+                    candidateIndex > index && candidate.message?.author?.role === 'user');
+                if (insertion < 0) insertion = entries.length;
+                const synthetic = {
+                    nodeId: message.id,
+                    node: { message, parent: entry.nodeId, children: [] },
+                    message
+                };
+                const at = additions.get(insertion) || [];
+                at.push(synthetic);
+                additions.set(insertion, at);
+                console.log('[Chat Exporter] Recovered a Deep Research report from its completed task record.');
+            }
+
+            const hydrated = [];
+            for (let index = 0; index <= entries.length; index++) {
+                hydrated.push(...(additions.get(index) || []));
+                if (index < entries.length) hydrated.push(entries[index]);
+            }
+
+            const hasDeepResearchFrame = Boolean(
+                doc.querySelector?.('iframe[title="internal://deep-research"]'));
+            if (hasDeepResearchFrame && !hydrated.some(entry => isAsyncPayloadResult(entry.message))) {
+                const carriers = hydrated.map(entry => {
+                    const message = entry.message;
+                    const metadata = message?.metadata;
+                    const sdk = metadata?.chatgpt_sdk;
+                    return {
+                        role: message?.author?.role || '',
+                        author: message?.author?.name || '',
+                        contentType: message?.content?.content_type || '',
+                        metadataKeys: metadata && typeof metadata === 'object' ? Object.keys(metadata) : [],
+                        sdkKeys: sdk && typeof sdk === 'object' ? Object.keys(sdk) : []
+                    };
+                }).filter(candidate =>
+                    candidate.role === 'tool' || candidate.author || candidate.sdkKeys.length > 0);
+                unresolvedReports = Math.max(1, unresolvedReports);
+                console.warn('[Chat Exporter] Deep Research iframe found, but its report was not present in the stored conversation.', carriers);
+            }
+            hydrated.unresolvedReports = unresolvedReports;
+            return hydrated;
+        }
+
         function chatGptMetadataNote(reason) {
             if (reason === 'signed-out') {
                 return 'this tab has no signed-in ChatGPT session';
@@ -1935,11 +2251,9 @@
             const result = await fetchChatGptJson(doc, options, endpoint);
             if (result.reason === 'ok') return result.body;
 
-            // This pass only adds timestamps, attachment names and reasoning
-            // recaps; the conversation itself is already captured from the DOM. A
-            // bare 404 in the console reads like a broken exporter, so name the
-            // cause and say the export is fine.
-            console.info(`[Chat Exporter] Per-message metadata was skipped: ${chatGptMetadataNote(result.reason)}. The conversation itself exported normally.`);
+            // This request may be the primary Markdown source. Failure says
+            // nothing about whether a later DOM fallback is complete.
+            console.info(`[Chat Exporter] The stored conversation could not be read: ${chatGptMetadataNote(result.reason)}. Completeness must be checked against the page.`);
             return null;
         }
 
@@ -1970,6 +2284,48 @@
             }
         }
 
+        async function readImageBody(response, maxBytes) {
+            if (!response.ok) return null;
+            const contentType = String(response.headers?.get?.('content-type') || '');
+            if (/application\/json/i.test(contentType)) return readJsonBody(response);
+            const declaredSize = Number(response.headers?.get?.('content-length') || 0);
+            if (declaredSize > maxBytes) {
+                await response.body?.cancel?.();
+                return null;
+            }
+
+            // Count bytes as they arrive; checking only after arrayBuffer() allowed
+            // chunked or misleadingly sized responses to exhaust browser memory.
+            if (response.body?.getReader) {
+                const reader = response.body.getReader();
+                const chunks = [];
+                let size = 0;
+                try {
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        size += value.byteLength;
+                        if (size > maxBytes) {
+                            await reader.cancel();
+                            return null;
+                        }
+                        chunks.push(value);
+                    }
+                    const bytes = new Uint8Array(size);
+                    let offset = 0;
+                    for (const chunk of chunks) {
+                        bytes.set(chunk, offset);
+                        offset += chunk.byteLength;
+                    }
+                    return bytes;
+                } finally {
+                    reader.releaseLock();
+                }
+            }
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            return bytes.byteLength <= maxBytes ? bytes : null;
+        }
+
         async function fetchEmbeddedImage(doc, descriptor, options) {
             if (!descriptor.fileId) return null;
             let timeout = metadataRequestTimeout(doc, options);
@@ -1980,17 +2336,17 @@
             // token this hands back the signed-out shape rather than the file.
             let response = await fetchWithTimeout(doc, endpoint, {
                 headers: chatGptAuthHeaders(options.chatGptAuth)
-            }, timeout);
+            }, timeout, response => readImageBody(response, maxBytes));
             if (!response?.ok) return null;
 
             let contentType = String(response.headers?.get?.('content-type') || '');
             if (/application\/json/i.test(contentType)) {
-                const metadata = await readJsonBody(response);
+                const metadata = response.body;
                 // This endpoint reports failure as HTTP 200 with an error envelope,
                 // so response.ok says nothing about whether a file came back.
                 if (metadata?.status === 'error') return null;
                 const downloadUrl = metadata?.download_url || metadata?.downloadUrl || metadata?.url;
-                if (!downloadUrl) return null;
+                if (!downloadUrl || !isSafeRemoteImageSource(downloadUrl) || new URL(downloadUrl).protocol !== 'https:') return null;
 
                 // The link points at a signed CDN URL. Sending the bearer token
                 // there would hand the reader's ChatGPT credentials to a
@@ -2000,17 +2356,19 @@
                 if (timeout <= 0) return null;
                 response = await fetchWithTimeout(doc, downloadUrl, sameOrigin
                     ? { credentials: 'include', headers: chatGptAuthHeaders(options.chatGptAuth) }
-                    : { credentials: 'omit' }, timeout);
+                    : { credentials: 'omit', redirect: 'follow' }, timeout, response => readImageBody(response, maxBytes));
                 if (!response?.ok) return null;
                 contentType = String(response.headers?.get?.('content-type') || '');
             }
 
-            const mimeType = imageMimeType(contentType) || imageMimeType(descriptor.mimeType);
+            const mimeType = contentType && !/^application\/octet-stream(?:;|$)/i.test(contentType)
+                ? imageMimeType(contentType) : imageMimeType(descriptor.mimeType);
             if (!mimeType) return null;
             const declaredSize = Number(response.headers?.get?.('content-length') || 0);
             if (declaredSize > maxBytes) return null;
 
-            const bytes = new Uint8Array(await response.arrayBuffer());
+            const bytes = response.body;
+            if (!(bytes instanceof Uint8Array)) return null;
             if (bytes.byteLength === 0 || bytes.byteLength > maxBytes) return null;
             const dataUrl = bytesToDataUrl(bytes, mimeType, doc);
             return dataUrl ? { dataUrl, size: bytes.byteLength } : null;
@@ -2020,14 +2378,14 @@
         // markdown the model actually produced, which is exactly what a markdown
         // export wants; HTML exports escape it and keep the paragraph breaks.
         function payloadMessageToExport(entry, assistantName, format, doc, options = {}) {
-            const message = entry.message;
+            const message = payloadRenderableMessage(entry.message);
             const text = resolvePayloadCitations(payloadContentText(message.content), message, format);
             // No text is not the same as no message: an image-only turn carries its
             // content in attachments, which the caller appends.
             const allowEmpty = options.allowEmpty === true;
             if (!text && !allowEmpty) return null;
 
-            const isUser = message.author?.role === 'user';
+            const isUser = payloadMessageRole(message) === 'user';
             const content = !text ? '' : (format === 'markdown'
                 ? text
                 : text.split(/\n{2,}/).map(block => `<p>${sanitizeHtml(block).replace(/\n/g, '<br>')}</p>`).join(''));
@@ -2071,8 +2429,12 @@
 
             let recovered = 0;
             missing.forEach(entry => {
-                const message = payloadMessageToExport(entry, conversation.providerLabel, format, doc);
+                const native = payloadRenderableMessage(entry.message);
+                const message = payloadMessageToExport(entry, conversation.providerLabel, format, doc, {
+                    allowEmpty: payloadAttachmentDescriptors(native).length > 0
+                });
                 if (!message) return;
+                message.content += renderReferences(payloadCitations(native), format);
 
                 const target = indexOfEntry.get(entry);
                 let insertAt = conversation.messages.length;
@@ -2085,6 +2447,7 @@
                 }
                 conversation.messages.splice(insertAt, 0, message);
                 positionOf.set(message, target);
+                matches.set(message, entry);
                 recovered++;
             });
 
@@ -2169,20 +2532,19 @@
         // markdown parser to produce.
         async function renderConversationFromPayload(payload, doc, provider, options) {
             const format = 'markdown';
-            const entries = activePayloadMessages(payload);
+            const entries = await hydrateDeepResearchEntries(activePayloadMessages(payload), doc, options);
             const mainEntries = mainPayloadMessages(entries);
             if (mainEntries.length === 0) return null;
 
             const recaps = payloadReasoningRecaps(entries);
             const messages = [];
-            let embeddedBytes = 0;
-            const totalImageBudget = options.maxTotalEmbeddedImageBytes ?? MAX_TOTAL_EMBEDDED_IMAGE_BYTES;
+            const imageBudget = options.imageBudget;
 
             for (const entry of mainEntries) {
                 const message = payloadMessageToExport(entry, provider.assistantName, format, doc, { allowEmpty: true });
                 if (!message) continue;
 
-                for (const descriptor of payloadAttachmentDescriptors(entry.message)) {
+                for (const descriptor of payloadAttachmentDescriptors(payloadRenderableMessage(entry.message))) {
                     const name = descriptor.name || (descriptor.kind === 'image' ? 'Image attachment' : 'File attachment');
 
                     if (descriptor.kind === 'sandbox') {
@@ -2196,11 +2558,11 @@
                     }
 
                     let embedded = null;
-                    if (metadataRequestTimeout(doc, options) > 0 && embeddedBytes < totalImageBudget) {
-                        embedded = await fetchEmbeddedImage(doc, descriptor, options);
+                    if (metadataRequestTimeout(doc, options) > 0 && imageBudget.remaining > 0) {
+                        embedded = await fetchEmbeddedImage(doc, descriptor, { ...options, maxEmbeddedImageBytes: Math.min(imageBudget.perImage, imageBudget.remaining) });
                     }
-                    if (embedded && embeddedBytes + embedded.size <= totalImageBudget) {
-                        embeddedBytes += embedded.size;
+                    if (embedded) {
+                        imageBudget.remaining -= embedded.size;
                         appendMessageEnrichment(message, `![${escapeMarkdownLinkText(name)}](${embedded.dataUrl})`, null, name);
                     } else {
                         appendMessageEnrichment(message, `[Image: ${name}]`, null, name);
@@ -2210,7 +2572,7 @@
                 const recap = recaps.get(String(entry.message.id || entry.nodeId));
                 if (options.includeReasoning !== false) prependReasoning(message, recap, format);
 
-                const citations = payloadCitations(entry.message);
+                const citations = payloadCitations(payloadRenderableMessage(entry.message));
                 if (citations.length > 0) {
                     message.content = `${message.content}${renderReferences(citations, format)}`.trim();
                 }
@@ -2226,12 +2588,14 @@
             const conversation = buildConversation(doc, provider, options, messages);
             conversation.source = 'payload';
             conversation.expectedMessages = mainEntries.length;
-            conversation.unreachedMessages = 0;
+            conversation.unreachedMessages = Math.max(0, mainEntries.length - messages.length);
+            conversation.unresolvedReports = entries.unresolvedReports || 0;
             conversation.missedMessages = 0;
             conversation.recoveredMessages = 0;
-            // Complete by construction: the payload is the conversation, not a
-            // sample of whatever happened to be on screen.
-            conversation.complete = true;
+            // A payload is authoritative only for the messages we can render;
+            // missing reports or unsupported empty records still leave holes.
+            conversation.unfinishedMessages = hasUnfinishedPayloadMessages(entries);
+            conversation.complete = conversation.unreachedMessages === 0 && conversation.unresolvedReports === 0 && !conversation.unfinishedMessages;
             conversation.metadataStatus = 'enriched';
 
             if (options.includeVariants === true) {
@@ -2276,15 +2640,21 @@
                 return conversation;
             }
 
-            const entries = activePayloadMessages(payload);
+            const activeEntries = activePayloadMessages(payload);
+            if (activeEntries.length === 0) {
+                conversation.metadataStatus = 'invalid';
+                conversation.invalidPayload = true;
+                return conversation;
+            }
+            const entries = await hydrateDeepResearchEntries(activeEntries, doc, enrichmentOptions);
+            conversation.unfinishedMessages = hasUnfinishedPayloadMessages(entries);
+            conversation.unresolvedReports = entries.unresolvedReports || 0;
             const matches = payloadMessageMatches(conversation, entries);
             const recaps = payloadReasoningRecaps(entries);
-            let embeddedBytes = 0;
+            const imageBudget = options.imageBudget;
 
-            // The payload is ground truth for how many messages the conversation
-            // has. Comparing *ids the sweep actually encountered* — not counts —
-            // keeps deliberate content dedupe (two identical "ok" turns collapse by
-            // design) from reading as a missing message.
+            // Compare stable ids, not counts: duplicate DOM representations must
+            // not obscure whether the sweep actually reached each payload turn.
             const mainEntries = mainPayloadMessages(entries);
             conversation.expectedMessages = mainEntries.length;
             if (options.seenMessageIds instanceof Set) {
@@ -2331,7 +2701,7 @@
             }
 
             for (const [message, entry] of matches.entries()) {
-                const nativeMessage = entry.message;
+                const nativeMessage = payloadRenderableMessage(entry.message);
                 if (!message.timestamp) {
                     const iso = timestampIso(nativeMessage.create_time);
                     if (iso) {
@@ -2348,11 +2718,11 @@
 
                     if (descriptor.kind === 'image') {
                         let embedded = null;
-                        if (metadataRequestTimeout(doc, enrichmentOptions) > 0 && embeddedBytes < (options.maxTotalEmbeddedImageBytes ?? MAX_TOTAL_EMBEDDED_IMAGE_BYTES)) {
-                            embedded = await fetchEmbeddedImage(doc, descriptor, enrichmentOptions);
+                        if (metadataRequestTimeout(doc, enrichmentOptions) > 0 && imageBudget.remaining > 0) {
+                            embedded = await fetchEmbeddedImage(doc, descriptor, { ...enrichmentOptions, maxEmbeddedImageBytes: Math.min(imageBudget.perImage, imageBudget.remaining) });
                         }
-                        if (embedded && embeddedBytes + embedded.size <= (options.maxTotalEmbeddedImageBytes ?? MAX_TOTAL_EMBEDDED_IMAGE_BYTES)) {
-                            embeddedBytes += embedded.size;
+                        if (embedded) {
+                            imageBudget.remaining -= embedded.size;
                             const markdown = `![${escapeMarkdownLinkText(name)}](${embedded.dataUrl})`;
                             const html = `<figure class="embedded-image"><img class="exported-media" src="${sanitizeHtml(embedded.dataUrl)}" alt="${sanitizeHtml(name)}"><figcaption>${sanitizeHtml(name)}</figcaption></figure>`;
                             appendMessageEnrichment(message, format === 'markdown' ? markdown : null, html, name);
@@ -2390,7 +2760,7 @@
             const doc = resolveDocument(options.document);
             const provider = providerFor(options.provider, doc);
             const format = options.format || 'markdown';
-            const state = { seen: new Set(), messages: [], container: null };
+            const state = { seen: new Set(), messages: [], container: null, imageBudget: createImageBudget(options) };
 
             findMessages(doc, provider).forEach(messageElement => captureMessage(state, messageElement, provider, format));
 
@@ -2506,17 +2876,20 @@
             return stable >= 2;
         }
 
-        // Stable identity across scroll snapshots. Message ids are the reliable
-        // signal; text prefix plus length covers providers without ids. Streaming
-        // partials that slip through are still collapsed by contentHash dedupe.
-        function messageKey(element, provider) {
+        // Content is not identity: repeated prompts and replies are real turns.
+        // Stable provider/turn ids collapse duplicate representations. Without an
+        // id, use scroller position when measurable; otherwise retain distinct
+        // DOM nodes rather than guessing from a text prefix.
+        function messageKey(element, provider, container = null) {
             const id = providerMessageId(element, provider);
             if (id) return `id:${id}`;
-
             const scope = messageScope(element, provider);
             const testId = scope?.getAttribute?.('data-testid') || scope?.getAttribute?.('data-test-id') || '';
-            const text = normalizeWhitespace(scope?.textContent);
-            return `text:${testId}:${text.length}:${text.slice(0, 200)}`;
+            if (/^conversation-turn-\d+$/.test(testId)) return `turn:${testId}`;
+            if (container && scope?.getBoundingClientRect?.().height > 0) {
+                return `position:${conversationOffset(element, container, provider)}:${scope.tagName}:${identifySender(element, 0, provider).sender}`;
+            }
+            return scope || element;
         }
 
         // Markdown from ChatGPT reads the payload first; everything else, and every
@@ -2531,6 +2904,7 @@
         }
 
         async function extractConversationFull(options = {}) {
+            options = { ...options, imageBudget: createImageBudget(options) };
             const doc = resolveDocument(options.document);
             const provider = providerFor(options.provider, doc);
             const format = options.format || 'markdown';
@@ -2551,11 +2925,16 @@
                     const win = getWindow(doc);
                     const payloadOptions = {
                         ...options,
-                        metadataDeadline: now(win) + (options.metadataMaxDuration ?? METADATA_MAX_DURATION),
+                        metadataDeadline: Math.min(options.metadataDeadline ?? Infinity,
+                            now(win) + (options.conversationMaxDuration ?? options.metadataMaxDuration ?? CONVERSATION_MAX_DURATION)),
                         chatGptAuth: options.chatGptAuth || createChatGptAuth(options)
                     };
                     const payload = await fetchChatGptPayload(doc, payloadOptions);
                     if (payload) {
+                        // Optional reports/media get their own short budget after
+                        // the primary conversation has finished downloading.
+                        payloadOptions.metadataDeadline = Math.min(options.metadataDeadline ?? Infinity,
+                            now(win) + (options.metadataMaxDuration ?? METADATA_MAX_DURATION));
                         emit({ phase: 'rendering', messages: 0, lines: 0, percent: 40 });
                         const conversation = await renderConversationFromPayload(payload, doc, provider, payloadOptions);
                         if (conversation) {
@@ -2567,9 +2946,10 @@
                                 percent: 100,
                                 messages: conversation.messages.length,
                                 lines,
-                                complete: true,
+                                complete: conversation.complete,
                                 expectedMessages: conversation.expectedMessages || 0,
-                                unreachedMessages: 0,
+                                unreachedMessages: conversation.unreachedMessages || 0,
+                                unresolvedReports: conversation.unresolvedReports || 0,
                                 recoveredMessages: 0,
                                 lastSender: last ? last.sender : '',
                                 lastPreview: last ? normalizeWhitespace(last.content).slice(0, 90) : ''
@@ -2607,7 +2987,7 @@
                 }
             };
 
-            const state = { seen: new Set(), messages: [], container, lines: 0 };
+            const state = { seen: new Set(), messages: [], container, lines: 0, imageBudget: options.imageBudget };
             const seenKeys = new Set();
             // Every message id the sweep encountered, whether or not it was
             // captured or deduped — the evidence for "did we actually get there".
@@ -2621,7 +3001,7 @@
                 findMessageCandidates(doc, messageSelector).forEach(messageElement => {
                     const encounteredId = providerMessageId(messageElement, provider);
                     if (encounteredId) seenMessageIds.add(encounteredId);
-                    const key = messageKey(messageElement, provider);
+                    const key = messageKey(messageElement, provider, state.container);
                     if (seenKeys.has(key)) return;
                     // A virtualizer mounts the turn before it fills in the text, so
                     // a message seen empty must stay eligible for a later pass —
@@ -2839,7 +3219,7 @@
             // can tell us that, and it is the difference between a heuristic and
             // proof.
             const unreached = conversation.unreachedMessages || 0;
-            conversation.complete = pendingKeys.size === 0 && unreached === 0 && !outOfTime() && settled;
+            conversation.complete = pendingKeys.size === 0 && unreached === 0 && !conversation.unresolvedReports && !conversation.invalidPayload && !conversation.unfinishedMessages && !outOfTime() && settled;
             if (unreached > 0) {
                 console.warn(`[Chat Exporter] ${unreached} of ${conversation.expectedMessages} messages in this conversation were never reached by the scroll sweep. Raise maxDuration and keep the tab in the foreground.`);
             }
@@ -2852,6 +3232,7 @@
                 complete: conversation.complete,
                 expectedMessages: conversation.expectedMessages || 0,
                 unreachedMessages: conversation.unreachedMessages || 0,
+                unresolvedReports: conversation.unresolvedReports || 0,
                 recoveredMessages: conversation.recoveredMessages || 0
             });
             if (!conversation.complete) {
@@ -3051,6 +3432,9 @@
                 source,
                 '---\n'
             ];
+            if (conversation.complete === false) {
+                lines.push(`> ${incompleteNotice(conversation)}\n`);
+            }
 
             conversation.messages.forEach(message => {
                 const timestamp = message.timestamp ? ` · ${message.timestamp}` : '';
@@ -3058,6 +3442,14 @@
             });
 
             return `${lines.join('\n').trim()}\n`;
+        }
+
+        function incompleteNotice(conversation) {
+            return 'Chat Exporter: this export may be incomplete.' +
+                (conversation.unresolvedReports ? ` ${conversation.unresolvedReports} Deep Research report(s) could not be recovered.` : '') +
+                (conversation.invalidPayload ? ' The stored conversation branch could not be validated; only the page was captured.' : '') +
+                (conversation.unfinishedMessages ? ' A response was unfinished in the stored conversation.' : '') +
+                ' Compare it with the original conversation before relying on it.';
         }
 
         function renderHtmlDocument(conversation, options = {}) {
@@ -3094,6 +3486,8 @@
     <html>
     <head>
         <meta charset="utf-8">
+        <meta name="referrer" content="no-referrer">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
         <title>${title} - ${conversation.date}</title>
         <style>
             @media print {
@@ -3204,6 +3598,7 @@
     </head>
     <body>
         ${pdfInstructions}
+        ${conversation.complete === false ? `<p class="instructions">${sanitizeHtml(incompleteNotice(conversation))}</p>` : ''}
         <div class="header">
             <h1>${title}</h1>
             <div class="metadata">
@@ -3298,6 +3693,7 @@
                     (conversation.expectedMessages ? ` of ${conversation.expectedMessages} in the conversation` : '') +
                     (conversation.missedMessages ? `, ${conversation.missedMessages} turn(s) never finished rendering` : '') +
                     (conversation.unreachedMessages ? `, ${conversation.unreachedMessages} never reached by the scroll sweep` : '') +
+                    (conversation.unresolvedReports ? `, ${conversation.unresolvedReports} Deep Research report(s) unavailable` : '') +
                     (conversation.recoveredMessages ? `, ${conversation.recoveredMessages} recovered from ChatGPT's record` : '') +
                     '.\n\nKeep the ChatGPT tab in the foreground while exporting, then try again' +
                     (conversation.unreachedMessages ? ' with a larger maxDuration' : '') + '.';
@@ -3392,6 +3788,8 @@
 
         const PHASE_LABEL = {
             start: 'Preparing export…',
+            payload: 'Downloading conversation… large chats can take up to a minute',
+            rendering: 'Preparing messages and attachments…',
             streaming: 'Waiting for the answer to finish…',
             hidden: 'Paused — bring this tab to the front',
             resumed: 'Resuming…',
@@ -3558,6 +3956,7 @@
                     if (event.complete === false) {
                         parts.status.textContent = event.unreachedMessages
                             ? `Incomplete — ${formatCount(event.unreachedMessages)} message(s) never loaded`
+                            : event.unresolvedReports ? `Incomplete — ${formatCount(event.unresolvedReports)} research report(s) unavailable`
                             : 'Finished, but this export may be incomplete';
                         parts.bar.style.background = '#f59e0b';
                     } else {

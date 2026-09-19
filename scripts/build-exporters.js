@@ -7,6 +7,9 @@ const userscriptUiSource = fs.readFileSync(path.join(repoRoot, 'src', 'userscrip
 const progressOverlaySource = fs.readFileSync(path.join(repoRoot, 'src', 'progress-overlay.js'), 'utf8').trim();
 const { version } = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
 const checkOnly = process.argv.includes('--check');
+if (!engineSource.includes(`const ENGINE_VERSION = '${version}';`)) {
+    throw new Error('ENGINE_VERSION must match package.json before building a release.');
+}
 
 const GENERATED_NOTICE = `// Generated from src/extraction-engine.js by scripts/build-exporters.js.
 // Edit the source engine or this build script, then run npm run build.

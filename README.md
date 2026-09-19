@@ -85,7 +85,17 @@ No install, no server, no account: everything runs locally in your browser.
 
 ---
 
-## 🔧 What's New in v1.1.0
+## 🔧 Preparing v1.2.0
+
+This branch prepares the next release. See the [release audit](docs/RELEASE_AUDIT.md) for the issue inventory, validation, and remaining release checks.
+
+- **Long conversations:** the primary ChatGPT record gets up to 60 seconds per request and a 120-second retrieval budget, with separate short budgets for optional attachments. Response bodies are covered by the timeout (#41).
+- **Temporary-chat images:** clickable image previews survive UI cleanup; short replies such as “OK” are preserved (#40).
+- **Deep Research:** includes app-backed reports, legacy results, and recoverable task-stream reports, with bounded reads and persistent incomplete-export warnings. Based on @zvictor’s [PR #38](https://github.com/rashidazarang/chatgpt-chat-exporter/pull/38).
+- **Bookmarklets:** generated, self-contained shortcuts for ChatGPT Markdown/HTML/PDF and Gemini Markdown (#39). Open [public/bookmarklets/index.html](public/bookmarklets/index.html) locally in a browser after downloading the repository, then drag a link to your bookmarks bar. GitHub’s file viewer does not run the installation page. Site CSP or browser URL limits can block bookmarks; the userscript and console methods remain available.
+- **Release hardening:** supported Node versions, dependency updates, pinned CI actions, checksummed release packages, version consistency checks, and a security reporting policy.
+
+### v1.1.0
 
 - 📦 **GitHub is now the canonical install source, and GreasyFork syncs from it** (issue #34). The GreasyFork listing had gone stale at a version numbered 1.0.0, which made working GitHub installs look like downgrades. This release jumps past it, the userscripts carry `@downloadURL`/`@updateURL` headers so GitHub installs update themselves, and the GreasyFork listing now auto-syncs from this repo — existing installs from either source pick up updates automatically. ([release notes](temporal/release-notes-v1.1.0.md))
 - 🏷️ **ChatGPT exports use the conversation's tab title.** Answer bodies can contain ordinary `<h1>` headings, and treating the first mounted one as metadata produced unstable titles like "Final architecture". (#36, thanks @zvictor)
@@ -312,9 +322,10 @@ The engine finds messages through a cascade of selector strategies (data attribu
 ## 🧑‍💻 Development
 
 ```bash
-npm install     # dev dependency: jsdom (tests only)
-npm run build   # regenerate all exporters from src/extraction-engine.js
-npm test        # verify generated files are current + run the jsdom test suite
+npm ci          # Node 22.22.2+, 24.15.0+, or 26+; dev-only jsdom and Terser
+npm run build   # regenerate exporters and self-contained bookmarklets
+npm test        # verify generated files are current + run regression tests
+npm run release:prepare # also prepare dist/ with SHA256SUMS; does not publish
 ```
 
 Never edit the generated exporter files directly — change `src/extraction-engine.js`, `src/userscript-ui.js`, or the build script and run `npm run build`.
@@ -323,14 +334,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/EXPORTER_GUIDE.md](docs/EXPORTE
 
 ## 🔐 Privacy & Security
 
-- No conversation content is sent to this project or to a third-party service. ChatGPT exports may re-fetch the current conversation metadata and image bytes from **chatgpt.com itself**, using your existing signed-in session, so timestamps and attachments can be included.
+- No conversation content is sent to this project. ChatGPT exports read the current conversation and available research/file records using your signed-in session. Signed image downloads may contact the provider’s CDN without forwarding ChatGPT credentials. Remote image fallbacks can contact their original hosts when an export is opened. See [SECURITY.md](SECURITY.md).
 - Exports **omit your exact conversation URL** by default (the engine supports `includeSourceUrl: true` for explicit opt-in)
 - HTML/PDF output escapes all conversation content; unsafe link schemes (`javascript:`, `data:`) are never exported as links
 
 ## ❓ Troubleshooting
 
-- **"No messages found"** — the site's DOM may have changed. Update to the latest exporter version; if it persists, paste **[selector-doctor.js](selector-doctor.js)** into the same console — it reports which selectors still match on that page — and [open an issue](https://github.com/rashidazarang/chatgpt-chat-exporter/issues) with that output, your browser, and a description of the page.
-- **Long conversation exports only a fragment, or turns come out in the wrong order** — **keep the ChatGPT tab visible while the export runs**: Chrome throttles timers and suspends rendering in a background tab, so the auto-scroll sweep can't load the turns it scrolls to (v0.8.3+ warns you in the console when this happens). Otherwise, update to v0.8.2+. v0.8.0 added the auto-scroll sweep for lazily-loaded conversations; v0.8.2 fixed sweeps that ended early and exports that were ordered by capture rather than by conversation. Leave the tab in the foreground while the sweep runs; the export downloads when it finishes.
+- **"No messages found"** — the site's DOM may have changed. Update to the latest exporter version; if it persists, paste **[selector-doctor.js](selector-doctor.js)** into the same console — it reports which selectors still match on that page — and [open an issue](https://github.com/rashidazarang/chatgpt-chat-exporter/issues) with a redacted report, your browser, and a description of the page. Remove conversation titles, URLs, and other private details first.
+- **Long conversation exports only a fragment, or turns come out in the wrong order** — update to v1.2.0 once released. ChatGPT Markdown first downloads the stored conversation, allowing up to 60 seconds per request; watch the progress card. If it falls back to scrolling, keep the tab visible. Advanced callers can set `conversationFetchTimeout` and `conversationMaxDuration` on `ChatExporterEngine.exportConversationFull(...)`; optional enrichment uses `metadataFetchTimeout` / `metadataMaxDuration`. An incomplete file carries a warning inside the export.
 - **`GET https://chatgpt.com/backend-api/conversation/… 404 (Not Found)` in the console** — fixed in **v0.9.3**; update your copy of the exporter. ChatGPT reports a request that lacks the app's bearer token as a 404 rather than a 401, and versions before v0.9.3 only retried with the token after a 401, so the retry never ran. The export itself was never affected — only the optional per-turn metadata (timestamps, attachment names, reasoning recaps) was lost. If v0.9.3 still can't read it, the console now says why: signed out, refused, or a conversation with no stored copy (a temporary chat, a shared link, or a deleted conversation).
 - **An image is shown as a link or placeholder instead of embedded data** — the exporter embeds safe raster images up to 20 MB each (50 MB total). If ChatGPT's authenticated file endpoint or the browser canvas cannot provide the bytes, the export keeps the HTTPS source or an explicit image placeholder rather than dropping the turn.
 - **Export actions don't appear** — confirm the userscript is enabled for `chatgpt.com`, reload the page, and open a conversation's **•••** or header **Share** menu. On accounts with no Share control (v0.8.1+), look for the floating **Export** button in the bottom-right corner instead; you can also force it on from the console with `ChatExporter.showLauncher()`, or export directly with `ChatExporter.markdown()` / `ChatExporter.pdf()`.
@@ -340,7 +351,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/EXPORTER_GUIDE.md](docs/EXPORTE
 
 ## 🚀 Version History
 
-- **v0.12.1** (Current) - Gemini maths export as TeX; fixes a regression that would have deleted them entirely
+- **v1.2.0** (Unreleased) - Long-chat timeouts, temporary-chat image previews, Deep Research, bookmarklets, and release hardening
+- **v1.1.0** - Canonical userscript updates, stable titles, reasoning progress, and citation whitespace fixes
+- **v0.12.1** - Gemini maths export as TeX; fixes a regression that would have deleted them entirely
 - **v0.12.0** - ChatGPT Markdown reads the conversation record instead of scraping the page: no scrolling, complete by construction, real citation titles
 - **v0.11.0** - Math recovered from every renderer and never duplicated; opt-in export of regenerated/edited turn history
 - **v0.10.3** - Inline citations export as their label instead of escaped base64

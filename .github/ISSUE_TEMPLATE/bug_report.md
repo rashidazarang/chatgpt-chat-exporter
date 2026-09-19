@@ -20,8 +20,16 @@ Steps to reproduce the behavior:
 **Expected behavior**
 A clear and concise description of what you expected to happen.
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+**Exporter context**
+- Exporter version:
+- Provider and format (ChatGPT/Gemini, Markdown/HTML/PDF):
+- Installation (userscript manager, console, bookmarklet):
+- Conversation type (stored, temporary, shared, project):
+- Approximate message count; images or Deep Research involved:
+- Was the tab visible throughout export?
+
+**Safe reproduction**
+Prefer synthetic example messages. Redact titles and URLs from selector-doctor output. Never include cookies, tokens, signed download links, or private conversation captures. See SECURITY.md for private vulnerability reporting.
 
 **Desktop (please complete the following information):**
  - OS: [e.g. iOS]

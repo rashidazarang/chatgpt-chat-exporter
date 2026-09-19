@@ -1,33 +1,27 @@
 # Contributing to ChatGPT Chat Exporter
 
-Thank you for your interest in contributing to this project! Here's how you can help:
+Use Node.js 22.22.2+, 24.15.0+, or 26+. Node is only needed for development; the exported browser scripts have no runtime dependencies.
 
-## How to Contribute
+```sh
+npm ci
+npm run build
+npm test
+```
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b my-new-feature`
-3. Make your changes and commit: `git commit -am 'Add some feature'`
-4. Push to your branch: `git push origin my-new-feature`
-5. Submit a pull request
+Edit `src/` and `scripts/`, then regenerate the shipped exporters and bookmarklets. Do not edit generated files directly. Tests reject stale artifacts. Every bug fix should include a synthetic regression fixture; never commit private conversations or authenticated captures. See [CLAUDE.md](CLAUDE.md) for the extraction architecture and provider pitfalls.
 
-## Pull Request Process
+Open a pull request against `master` describing the problem, resulting behavior, and verification. Include relevant issue numbers. For selector changes, name the browser/provider shape you verified and distinguish live checks from synthetic tests. CI checks supported Node versions, generated artifacts, dependency advisories, and release packaging.
 
-1. Update the README.md if needed with details of changes
-2. Follow existing code style and conventions
-3. Make sure your code works before submitting
-4. Your PR will be reviewed and, if approved, merged
+## Bug reports and requests
 
-## Suggested Contributions
+Use the issue templates. Include the installed exporter version, browser/userscript manager, provider, export format, and whether the conversation is temporary, shared, or stored. State whether the tab remained visible and whether images or Deep Research were involved. Share a minimal synthetic reproduction; do not paste tokens, private chats, or an unredacted selector-doctor report.
 
-- Additional export formats (HTML, TXT, EPUB)
-- UI improvements
-- Bug fixes
-- Documentation improvements
+Report vulnerabilities according to [SECURITY.md](SECURITY.md). Questions and product ideas are welcome in [Discussions](https://github.com/rashidazarang/chatgpt-chat-exporter/discussions). Be respectful and constructive.
 
-## Code of Conduct
+## Preparing a release
 
-Be respectful and constructive in your communication with other contributors.
-
-## Questions?
-
-Open an issue for any questions you might have. 
+1. Set matching versions in `package.json` and `src/extraction-engine.js`; update the lockfile with `npm install --package-lock-only`.
+2. Update README and add `temporal/release-notes-vX.Y.Z.md`.
+3. Run `npm run release:prepare`. It builds, checks, tests, and prepares `dist/chatgpt-chat-exporter-vX.Y.Z/` with SHA256SUMS. It does not publish.
+4. Complete the live browser checks in [the release audit](docs/RELEASE_AUDIT.md), review the diff and CI artifacts, and merge the release PR.
+5. Tag the reviewed commit, publish its release notes and packaged assets, and verify the installed userscript version and distribution channels.

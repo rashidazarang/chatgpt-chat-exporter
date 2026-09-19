@@ -1,1 +1,8 @@
 *.gif filter=lfs diff=lfs merge=lfs -text
+
+# Generated distribution files: review src/ and scripts/ first.
+/exporter-*.js linguist-generated=true
+/gemini-exporter-markdown.js linguist-generated=true
+/selector-doctor.js linguist-generated=true
+/*.user.js linguist-generated=true
+/public/bookmarklets/* linguist-generated=true

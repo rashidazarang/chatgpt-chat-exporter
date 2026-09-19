@@ -38,3 +38,6 @@ airtable-ai-agent/
 mcp-ide-playbooks/
 mcp-intelligence/
 test-npm-install/
+
+# Generated release packages
+/dist/

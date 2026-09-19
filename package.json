@@ -1,11 +1,12 @@
 {
   "name": "chatgpt-chat-exporter",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Export ChatGPT and Google Gemini conversations to Markdown, HTML, or PDF-ready files from the browser console or as userscripts.",
   "main": "src/extraction-engine.js",
   "scripts": {
-    "build": "node scripts/build-exporters.js",
-    "test": "node scripts/build-exporters.js --check && node --test"
+    "build": "node scripts/build-exporters.js && node scripts/build-bookmarklets.js",
+    "test": "node scripts/build-exporters.js --check && node scripts/build-bookmarklets.js --check && node --test",
+    "release:prepare": "npm run build && npm test && node scripts/package-release.js"
   },
   "repository": {
     "type": "git",
@@ -28,6 +29,10 @@
   },
   "homepage": "https://github.com/rashidazarang/chatgpt-chat-exporter#readme",
   "devDependencies": {
-    "jsdom": "^29.1.1"
+    "jsdom": "30.1.0",
+    "terser": "5.51.2"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   }
 }
