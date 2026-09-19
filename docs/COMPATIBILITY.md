@@ -34,3 +34,5 @@ CI retains HTML reports and failure traces for 14 days. Retries are disabled so 
 - The userscript source executes under a strict policy in CI. Installing/updating through Tampermonkey, Violentmonkey, or Greasemonkey remains a separate manager check. PDF export produces an HTML file intended for the browser's Print / Save as PDF action; it is not a native PDF download.
 - Bookmarklet tests execute the complete JavaScript URL from a link. Bookmark storage limits and provider CSP may still prevent installation/execution; use a userscript or the console in that case. No remote-code loader or policy bypass is introduced.
 - Actual signed-in temporary-chat image/blob previews, ongoing/completed Deep Research tasks, enterprise workspaces, Gemini virtualization, and the original long-chat report remain live-provider release checks. Do not infer those results from fixture success.
+
+The September 19 live-browser attempt was interrupted by an unavailable Chrome automation connection; native Safari inspection also timed out. No signed-in provider or native Safari compatibility result is claimed from those attempts.

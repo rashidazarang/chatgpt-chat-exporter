@@ -4,7 +4,7 @@
 
 Audited upstream `master` at `e78614233af710729f01eab1b46fd3e296b676de` (v1.1.0 package), source/build/UI/progress code, tests, documentation, website configuration, all 22 issues and 14 pull requests returned by the paginated GitHub API, their issue comments, the open PR’s review comments, all 5 Discussions, release metadata, Actions history, repository rules, and open security alerts. The downloaded workspace matched upstream exactly before edits. Work is on `codex/release-hardening`.
 
-Baseline: **104 passing tests**, no known npm vulnerabilities. The package was 1.1.0 but engine diagnostics still reported 0.12.1 and README history called 0.12.1 current. PR #38 contained five additional tests and a valid review finding about unbounded SSE body reads. The implementation from commits `d816a48` and `9b1bc08` is incorporated and credited to @zvictor. At the maintainer’s request the release branch is consolidated with Rashid Azarang <rashid.azarang.eg@gmail.com> as its sole Git author and committer. The original PR was not merged, closed, or modified.
+Baseline: **104 passing tests**, no known npm vulnerabilities. The package was 1.1.0 but engine diagnostics still reported 0.12.1 and README history called 0.12.1 current. PR #38 contained five additional tests and a valid review finding about unbounded SSE body reads. The implementation from commits `d816a48` and `9b1bc08` is incorporated and credited to @zvictor. At the maintainer’s request all release-branch commits use Rashid Azarang <rashid.azarang.eg@gmail.com> as their sole Git author and committer. The original PR was not merged, closed, or modified.
 
 This is a source-backed release audit, not a guarantee that no undiscovered bugs remain. Live provider interfaces and private endpoints can change independently of this repository.
 
@@ -85,10 +85,11 @@ There were 28 release records. Latest published release: v1.1.0, 2026-08-22. It 
 
 ## Validation
 
-- Baseline: 104 tests passed. Release candidate: **153 tests passed locally on Node 22.22.3**, including regression, bookmarklet, and release-package verification. The first PR CI run passed on Node 22.22.2, 24, and 26; its later aggregate CodeQL check identified an HTML-regex assertion in a test. The second pass replaces it with a parsed-DOM assertion against mixed-case script/event-handler injection. Current-head CI outcomes are recorded in the PR. `npm run release:prepare` produced 20 files plus SHA256SUMS; all 20 checksums were independently verified. Final npm audit: zero known vulnerabilities.
+- Baseline: 104 tests passed. Release candidate: **153 tests passed locally on Node 22.22.3**, including regression, bookmarklet, and release-package verification. The first PR CI run passed on Node 22.22.2, 24, and 26; its later aggregate CodeQL check identified an HTML-regex assertion in a test. The second pass replaces it with a parsed-DOM assertion against mixed-case script/event-handler injection. Current-head CI outcomes are recorded in the PR. `npm run release:prepare` produces 21 files plus SHA256SUMS, including the compatibility guide; the package regression verifies every checksum and rejects stale staging files. Final npm audit: zero known vulnerabilities.
 - Regression cases: slow/stalled request headers and bodies, primary timeout configuration, button-wrapped images, short replies, image-stream cancellation, credential/referrer boundaries, unsafe download schemes, missing and recovered research reports, and report-followed-by-summary preservation, repeated-turn identity, malformed active-branch graphs, streaming status, shared DOM/download budgets, canvas pixel limits, forged media attributes, and MIME mismatches.
 - Each of the four minified bookmarklets executes the embedded program in jsdom, produces the expected download, retains conversation text, and returns a non-string completion value.
 - Real Chromium-based in-app browser: synthetic five-turn conversation exported as HTML; both repeated OK turns, emoji, and the image appeared in the rendered export, while a 100-million-pixel canvas became a labelled placeholder. This was not a signed-in ChatGPT/Gemini compatibility check.
+- Browser CI: 66 checks across Chromium, Firefox, and WebKit cover shipped console bundles, full bookmarklet URLs, both userscripts under strict CSP, real downloads, rendered media, rich ChatGPT/Gemini extraction, 1,243 ordered payload turns, and app-backed research. Current-head results are recorded in the PR. See [COMPATIBILITY.md](COMPATIBILITY.md) for scope and limitations.
 - Local website target scan: two missing image URLs removed; all remaining local links/assets resolve. Generated artifacts are verified byte-for-byte by npm test.
 
 ## Remaining release gates
@@ -97,7 +98,7 @@ There were 28 release records. Latest published release: v1.1.0, 2026-08-22. It 
 - [ ] Reproduce #41 on a stored conversation with approximately 1,243 messages and verify beginning, middle, end, turn order, timestamps, and counts.
 - [ ] Reproduce #40 on an actual temporary conversation with uploaded and generated images, including blob-backed previews, in Chrome, Firefox, and Safari. Unavailable bytes must remain a clear placeholder.
 - [ ] Verify current app-backed Deep Research in Markdown, HTML and PDF, including an ongoing/unavailable task and a report in the middle of a conversation.
-- [ ] Install both userscript entry points and bookmarklets in target browsers; check enterprise/no-Share fallback, CSP behavior, and actual bookmark URL storage limits.
+- [ ] Install both userscript entry points and bookmarklets in target browsers; verify userscript-manager installation/update, current enterprise menus, and actual bookmark URL storage limits. CI exercises no-Share fallback, CSP/Trusted Types, and full bookmarklet URL execution.
 - [ ] Verify a current Gemini conversation with math, code and a long scroller. Historical live selectors are not sufficient evidence.
 - [ ] Publish the reviewed commit’s release artifacts/checksums, then verify GitHub and GreasyFork versions. Production publication remains pending final compatibility validation.
 
