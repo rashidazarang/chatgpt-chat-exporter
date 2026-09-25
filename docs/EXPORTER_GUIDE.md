@@ -96,4 +96,6 @@ For ChatGPT Markdown, `conversationFetchTimeout` defaults to 60000 ms and `conve
 
 Completed Deep Research reports can be recovered from app metadata and task streams. An unavailable report makes the export incomplete and leaves a visible warning in the saved file. Recovered HTML/PDF text is escaped; it preserves content and sources, not the original iframe’s rendered layout.
 
+Downloaded images get time in proportion to their number: 15 seconds plus 3 per image, up to 3 minutes, with 15 seconds per download. Set `attachmentMaxDuration` / `attachmentFetchTimeout` to change that; an explicit `metadataMaxDuration` / `metadataFetchTimeout` also bounds it. Generated images and code-execution charts are read from the stored conversation in Markdown exports, and from the page in HTML/PDF.
+
 Embedded DOM images and downloaded attachments share `maxTotalEmbeddedImageBytes` (default 50 MiB) and `maxEmbeddedImageBytes` (default 20 MiB). `maxCanvasPixels` defaults to 16,777,216 and is checked before canvas allocation or serialization. Set a byte budget to zero to disable embedding; remote URLs or readable placeholders remain. These limits do not rewrite data URLs already contained in the provider’s native Markdown text.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - PDF
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      1.2.0
+// @version      1.2.1
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @homepageURL  https://github.com/rashidazarang/chatgpt-chat-exporter
@@ -32,7 +32,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '1.2.0';
+        const ENGINE_VERSION = '1.2.1';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -102,6 +102,13 @@
         // still fail quickly. Keep their budgets separate (issue #41).
         const CONVERSATION_FETCH_TIMEOUT = 60000;
         const CONVERSATION_MAX_DURATION = 120000;
+        // Images cost two requests each and are what a reader misses first. One
+        // fixed 15s budget embedded the first few of a conversation's images and
+        // left the rest as placeholders (41 of 48 in a real export), so the image
+        // budget grows with how many there are, within a cap.
+        const ATTACHMENT_FETCH_TIMEOUT = 15000;
+        const ATTACHMENT_TIME_PER_IMAGE = 3000;
+        const ATTACHMENT_MAX_DURATION = 180000;
         const MAX_EMBEDDED_IMAGE_BYTES = 20 * 1024 * 1024;
         const MAX_TOTAL_EMBEDDED_IMAGE_BYTES = 50 * 1024 * 1024;
 
@@ -205,6 +212,18 @@
 
         function getWindow(doc) {
             return doc.defaultView || (typeof window !== 'undefined' ? window : null);
+        }
+
+        // A callback, never a DOM node: the engine is used headless in tests and
+        // must not grow a dependency on a document it can draw into. A listener
+        // that throws is the listener's problem, never the export's.
+        function emitSafely(options, event) {
+            if (typeof options?.onProgress !== 'function') return;
+            try {
+                options.onProgress(event);
+            } catch (error) {
+                // A broken progress UI must not cost the reader their export.
+            }
         }
 
         function now(win) {
@@ -1841,11 +1860,30 @@
                 isDirectDeepResearchResult(message);
         }
 
-        function isMainPayloadMessage(entry) {
+        // A tool reply the reader sees is one that carries an image: a generated
+        // picture, or a chart from code execution. ChatGPT stores both as `tool`
+        // records, which is why image-only answers vanished from exports that read
+        // the stored conversation. Everything else a tool returns is plumbing.
+        function isToolMediaMessage(message) {
+            return message?.author?.role === 'tool' &&
+                payloadAttachmentDescriptors(message).some(descriptor => descriptor.kind === 'image');
+        }
+
+        // `media` selects what an export rendered from the stored conversation
+        // shows: tool images become assistant content, and an assistant record
+        // with nothing in it (the empty reply stored after an image) is not an
+        // answer. Page sweeps capture images from the page and match its turns by
+        // id, so they keep the narrower selection.
+        function isMainPayloadMessage(entry, media = false) {
             const message = entry?.message;
             const asyncResult = isAsyncPayloadResult(message);
+            // Addressed to a tool — code, a search, an image prompt — and never
+            // shown to the reader, even when its text is a redaction notice
+            // ("This code was redacted.").
+            if (!asyncResult && message?.recipient && message.recipient !== 'all') return false;
+            const toolMedia = media && isToolMediaMessage(message);
             const rendered = payloadRenderableMessage(message);
-            const role = asyncResult ? 'assistant' : rendered?.author?.role;
+            const role = asyncResult || toolMedia ? 'assistant' : rendered?.author?.role;
             if (role !== 'user' && role !== 'assistant') return false;
             // Deep Research now renders its completed report through a sandboxed
             // app iframe. The backing result can therefore be a visually-hidden
@@ -1853,13 +1891,16 @@
             // private conversation record marks that message explicitly; keeping
             // it is the only page-context route to the cross-origin report text.
             if (message.metadata?.is_visually_hidden_from_conversation && !asyncResult) return false;
+            if (asyncResult || toolMedia) return true;
 
             const contentType = String(rendered?.content?.content_type || '').toLowerCase();
-            return asyncResult || !['thoughts', 'reasoning_recap', 'code', 'execution_output', 'tool_result'].includes(contentType);
+            if (['thoughts', 'reasoning_recap', 'code', 'execution_output', 'tool_result'].includes(contentType)) return false;
+            return !media || role === 'user' ||
+                Boolean(payloadContentText(rendered?.content)) || payloadAttachmentDescriptors(rendered).length > 0;
         }
 
-        function payloadMessageRole(message) {
-            return isAsyncPayloadResult(message)
+        function payloadMessageRole(message, media = false) {
+            return isAsyncPayloadResult(message) || (media && isToolMediaMessage(message))
                 ? 'assistant'
                 : message?.author?.role;
         }
@@ -1871,14 +1912,14 @@
         // is structural: one user turn may have many assistant records, but only
         // the last eligible assistant record before the next user turn is the
         // visible response.
-        function mainPayloadMessages(entries) {
-            const eligible = entries.filter(isMainPayloadMessage);
+        function mainPayloadMessages(entries, media = false) {
+            const eligible = entries.filter(entry => isMainPayloadMessage(entry, media));
             return eligible.filter((entry, index) => {
-                // A completed report is content, not a progress update, even when
-                // the assistant follows it with an ordinary summary.
-                if (isAsyncPayloadResult(entry.message)) return true;
-                if (payloadMessageRole(entry.message) !== 'assistant') return true;
-                return payloadMessageRole(eligible[index + 1]?.message) !== 'assistant';
+                // A completed report or an image is content, not a progress
+                // update, even when the assistant follows it with more text.
+                if (isAsyncPayloadResult(entry.message) || (media && isToolMediaMessage(entry.message))) return true;
+                if (payloadMessageRole(entry.message, media) !== 'assistant') return true;
+                return payloadMessageRole(eligible[index + 1]?.message, media) !== 'assistant';
             });
         }
 
@@ -1909,9 +1950,9 @@
             return matches;
         }
 
-        function payloadReasoningRecaps(entries) {
+        function payloadReasoningRecaps(entries, media = false) {
             const recaps = new Map();
-            const mainEntries = new Set(mainPayloadMessages(entries));
+            const mainEntries = new Set(mainPayloadMessages(entries, media));
             let pending = [];
 
             const appendPending = value => {
@@ -1921,7 +1962,7 @@
 
             entries.forEach(entry => {
                 const message = entry.message;
-                const role = payloadMessageRole(message);
+                const role = payloadMessageRole(message, media);
                 const contentType = String(message?.content?.content_type || '').toLowerCase();
 
                 if (role === 'assistant' && contentType === 'reasoning_recap') {
@@ -1938,7 +1979,7 @@
                 // disclosure as ordinary assistant/text records immediately before
                 // the visible answer. They are not separate conversation turns,
                 // but dropping them loses content the reader can inspect in the UI.
-                if (role === 'assistant' && isMainPayloadMessage(entry) && !mainEntries.has(entry)) {
+                if (role === 'assistant' && isMainPayloadMessage(entry, media) && !mainEntries.has(entry)) {
                     appendPending(payloadContentText(message.content));
                     return;
                 }
@@ -1979,18 +2020,33 @@
                 });
             });
 
+            // Pointers name a file as file-service://file-… or, for newer uploads
+            // and every generated image, sediment://file_…. Read the id after the
+            // scheme: searching the whole pointer took "file-service" for an id
+            // (a bogus second "[Image: file-service]") and found nothing in the
+            // underscore form, so generated images had no id to download by.
+            const pointerFileId = pointer => String(pointer || '')
+                .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').match(/^file[-_][a-z0-9_-]+/i)?.[0] || '';
+            const generatedName = message?.author?.role === 'tool' ? 'Generated image' : '';
+
             (Array.isArray(message?.content?.parts) ? message.content.parts : []).forEach(part => {
                 if (!part || typeof part !== 'object') return;
-                const pointer = String(part.asset_pointer || part.file_id || '');
-                const fileId = String(part.file_id || pointer.match(/file-[a-z0-9_-]+/i)?.[0] || '');
+                const fileId = String(part.file_id || pointerFileId(part.asset_pointer));
                 const mimeType = String(part.mime_type || part.content_type || part.metadata?.mime_type || '');
                 const isImage = /^image\//i.test(mimeType) || /image/i.test(String(part.content_type || ''));
                 add({
                     kind: isImage ? 'image' : 'file',
                     fileId,
-                    name: String(part.name || part.filename || part.metadata?.name || fileId || ''),
+                    name: String(part.name || part.filename || part.metadata?.name || (isImage && generatedName) || fileId || ''),
                     mimeType: /^image\//i.test(mimeType) ? mimeType : (isImage ? 'image/png' : mimeType)
                 });
+            });
+
+            // A chart from code execution travels in the tool record's metadata.
+            const outputs = message?.metadata?.aggregate_result?.messages;
+            (Array.isArray(outputs) ? outputs : []).forEach(output => {
+                const fileId = output?.message_type === 'image' ? pointerFileId(output.image_url) : '';
+                if (fileId) add({ kind: 'image', fileId, name: 'Code output', mimeType: 'image/png' });
             });
 
             const sandboxPattern = /sandbox:(\/mnt\/data\/[^\s)\]"'<>]+)/g;
@@ -2058,6 +2114,23 @@
             const configured = options.metadataFetchTimeout ?? METADATA_FETCH_TIMEOUT;
             if (!options.metadataDeadline) return configured;
             return Math.max(0, Math.min(configured, options.metadataDeadline - now(getWindow(doc))));
+        }
+
+        // An image download moves bytes, not a small JSON answer, so it gets a
+        // longer per-request timeout than metadata unless one was set explicitly.
+        function attachmentRequestTimeout(doc, options) {
+            return metadataRequestTimeout(doc, {
+                ...options,
+                metadataFetchTimeout: options.attachmentFetchTimeout ?? options.metadataFetchTimeout ?? ATTACHMENT_FETCH_TIMEOUT
+            });
+        }
+
+        // Explicit budgets win; otherwise attachments get the metadata budget plus
+        // a share per image, capped.
+        function attachmentDeadline(doc, options, images, outerDeadline = Infinity) {
+            const budget = options.attachmentMaxDuration ?? options.metadataMaxDuration ??
+                Math.min(ATTACHMENT_MAX_DURATION, METADATA_MAX_DURATION + images * ATTACHMENT_TIME_PER_IMAGE);
+            return Math.min(outerDeadline, now(getWindow(doc)) + budget);
         }
 
         async function readJsonBody(response) {
@@ -2470,7 +2543,7 @@
 
         async function fetchEmbeddedImage(doc, descriptor, options) {
             if (!descriptor.fileId) return null;
-            let timeout = metadataRequestTimeout(doc, options);
+            let timeout = attachmentRequestTimeout(doc, options);
             if (timeout <= 0) return null;
             const maxBytes = options.maxEmbeddedImageBytes ?? MAX_EMBEDDED_IMAGE_BYTES;
             const endpoint = `/backend-api/files/download/${encodeURIComponent(descriptor.fileId)}?inline=true`;
@@ -2494,7 +2567,7 @@
                 // there would hand the reader's ChatGPT credentials to a
                 // third-party host, so only a same-origin hop stays authenticated.
                 const sameOrigin = isSameOrigin(doc, downloadUrl);
-                timeout = metadataRequestTimeout(doc, options);
+                timeout = attachmentRequestTimeout(doc, options);
                 if (timeout <= 0) return null;
                 response = await fetchWithTimeout(doc, downloadUrl, sameOrigin
                     ? { credentials: 'include', headers: chatGptAuthHeaders(options.chatGptAuth) }
@@ -2679,18 +2752,28 @@
         async function renderConversationFromPayload(payload, doc, provider, options) {
             const format = 'markdown';
             const entries = await hydrateDeepResearchEntries(activePayloadMessages(payload), doc, options);
-            const mainEntries = mainPayloadMessages(entries);
+            // Rendering from the record is the only way to see what ChatGPT
+            // stores as tool replies — generated images and charts — so here
+            // they are content.
+            const mainEntries = mainPayloadMessages(entries, true);
             if (mainEntries.length === 0) return null;
 
-            const recaps = payloadReasoningRecaps(entries);
+            const recaps = payloadReasoningRecaps(entries, true);
             const messages = [];
             const imageBudget = options.imageBudget;
+            const rendered = mainEntries.map(entry => ({
+                entry,
+                message: payloadMessageToExport(entry, provider.assistantName, format, doc, { allowEmpty: true }),
+                descriptors: payloadAttachmentDescriptors(payloadRenderableMessage(entry.message))
+            })).filter(item => item.message);
+            const images = rendered.reduce((count, item) =>
+                count + item.descriptors.filter(descriptor => descriptor.kind === 'image').length, 0);
+            const exportedEntries = new Map();
+            const imageOptions = { ...options, metadataDeadline: attachmentDeadline(doc, options, images, options.outerDeadline) };
+            let imagesRead = 0;
 
-            for (const entry of mainEntries) {
-                const message = payloadMessageToExport(entry, provider.assistantName, format, doc, { allowEmpty: true });
-                if (!message) continue;
-
-                for (const descriptor of payloadAttachmentDescriptors(payloadRenderableMessage(entry.message))) {
+            for (const { entry, message, descriptors } of rendered) {
+                for (const descriptor of descriptors) {
                     const name = descriptor.name || (descriptor.kind === 'image' ? 'Image attachment' : 'File attachment');
 
                     if (descriptor.kind === 'sandbox') {
@@ -2704,14 +2787,25 @@
                     }
 
                     let embedded = null;
-                    if (metadataRequestTimeout(doc, options) > 0 && imageBudget.remaining > 0) {
-                        embedded = await fetchEmbeddedImage(doc, descriptor, { ...options, maxEmbeddedImageBytes: Math.min(imageBudget.perImage, imageBudget.remaining) });
+                    if (attachmentRequestTimeout(doc, imageOptions) > 0 && imageBudget.remaining > 0) {
+                        embedded = await fetchEmbeddedImage(doc, descriptor, { ...imageOptions, maxEmbeddedImageBytes: Math.min(imageBudget.perImage, imageBudget.remaining) });
                     }
+                    imagesRead++;
+                    emitSafely(options, {
+                        phase: 'attachments',
+                        messages: rendered.length,
+                        lines: 0,
+                        percent: 40 + Math.round(55 * imagesRead / images),
+                        lastPreview: `Image ${imagesRead} of ${images}`
+                    });
+                    // Names repeat ("Generated image") and text can mention them;
+                    // the file id is what makes an image this one.
+                    const needle = descriptor.fileId || name;
                     if (embedded) {
                         imageBudget.remaining -= embedded.size;
-                        appendMessageEnrichment(message, `![${escapeMarkdownLinkText(name)}](${embedded.dataUrl})`, null, name);
+                        appendMessageEnrichment(message, `![${escapeMarkdownLinkText(name)}](${embedded.dataUrl})`, null, needle);
                     } else {
-                        appendMessageEnrichment(message, `[Image: ${name}]`, null, name);
+                        appendMessageEnrichment(message, `[Image: ${name}]`, null, needle);
                     }
                 }
 
@@ -2727,6 +2821,7 @@
                 if (!normalizeWhitespace(message.content)) continue;
                 message.index = messages.length;
                 messages.push(message);
+                exportedEntries.set(message, entry);
             }
 
             if (messages.length === 0) return null;
@@ -2745,11 +2840,9 @@
             conversation.metadataStatus = 'enriched';
 
             if (options.includeVariants === true) {
-                const matches = new Map();
-                mainEntries.forEach((entry, index) => {
-                    if (messages[index]) matches.set(messages[index], entry);
-                });
-                conversation.variantMessages = appendPayloadVariants(conversation, payload, entries, matches, format, doc);
+                // Paired by identity: an entry that rendered nothing would shift
+                // every index-based pairing after it.
+                conversation.variantMessages = appendPayloadVariants(conversation, payload, entries, exportedEntries, format, doc);
             } else {
                 const available = payloadVariantMessages(payload, entries).length;
                 conversation.variantMessages = 0;
@@ -2848,6 +2941,11 @@
                 }
             }
 
+            const images = Array.from(matches.values()).reduce((count, entry) =>
+                count + payloadAttachmentDescriptors(payloadRenderableMessage(entry.message))
+                    .filter(descriptor => descriptor.kind === 'image').length, 0);
+            const imageOptions = { ...enrichmentOptions, metadataDeadline: attachmentDeadline(doc, options, images, outerDeadline) };
+
             for (const [message, entry] of matches.entries()) {
                 const nativeMessage = payloadRenderableMessage(entry.message);
                 if (!message.timestamp) {
@@ -2866,8 +2964,8 @@
 
                     if (descriptor.kind === 'image') {
                         let embedded = null;
-                        if (metadataRequestTimeout(doc, enrichmentOptions) > 0 && imageBudget.remaining > 0) {
-                            embedded = await fetchEmbeddedImage(doc, descriptor, { ...enrichmentOptions, maxEmbeddedImageBytes: Math.min(imageBudget.perImage, imageBudget.remaining) });
+                        if (attachmentRequestTimeout(doc, imageOptions) > 0 && imageBudget.remaining > 0) {
+                            embedded = await fetchEmbeddedImage(doc, descriptor, { ...imageOptions, maxEmbeddedImageBytes: Math.min(imageBudget.perImage, imageBudget.remaining) });
                         }
                         if (embedded) {
                             imageBudget.remaining -= embedded.size;
@@ -3058,14 +3156,7 @@
             const format = options.format || 'markdown';
 
             if (canUsePayloadSource(doc, provider, format, options)) {
-                const emit = event => {
-                    if (typeof options.onProgress !== 'function') return;
-                    try {
-                        options.onProgress(event);
-                    } catch (error) {
-                        // A progress listener must never cost the reader an export.
-                    }
-                };
+                const emit = event => emitSafely(options, event);
                 try {
                     emit({ phase: 'start', provider: provider.id, messages: 0, lines: 0 });
                     emit({ phase: 'payload', messages: 0, lines: 0, percent: 10 });
@@ -3075,6 +3166,7 @@
                         ...options,
                         metadataDeadline: Math.min(options.metadataDeadline ?? Infinity,
                             now(win) + (options.conversationMaxDuration ?? options.metadataMaxDuration ?? CONVERSATION_MAX_DURATION)),
+                        outerDeadline: options.metadataDeadline ?? Infinity,
                         chatGptAuth: options.chatGptAuth || createChatGptAuth(options)
                     };
                     const payload = await fetchChatGptPayload(doc, payloadOptions);
@@ -3123,17 +3215,7 @@
 
             const container = options.scroll === false ? null : findScrollContainer(doc, provider);
 
-            // A callback, never a DOM node: the engine is used headless in tests and
-            // must not grow a dependency on a document it can draw into. A listener
-            // that throws is the listener's problem, never the export's.
-            const emitProgress = event => {
-                if (typeof options.onProgress !== 'function') return;
-                try {
-                    options.onProgress(event);
-                } catch (error) {
-                    // A broken progress UI must not cost the reader their export.
-                }
-            };
+            const emitProgress = event => emitSafely(options, event);
 
             const state = { seen: new Set(), messages: [], container, lines: 0, imageBudget: options.imageBudget };
             const seenKeys = new Set();
@@ -3941,6 +4023,7 @@
             start: 'Preparing export…',
             payload: 'Downloading conversation… large chats can take up to a minute',
             rendering: 'Preparing messages and attachments…',
+            attachments: 'Embedding images…',
             streaming: 'Waiting for the answer to finish…',
             hidden: 'Paused — bring this tab to the front',
             resumed: 'Resuming…',

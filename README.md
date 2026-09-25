@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-1.2.1-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -99,7 +99,19 @@ Chromium, Firefox, and WebKit CI exercise every shipped console bundle, both use
 
 ---
 
-## 🔧 What's New in v1.2.0
+## 🔧 What's New in v1.2.1
+
+- 🖼️ **Generated images are exported.** ChatGPT stores an image it generates — and a chart from code execution — as a tool reply, and Markdown exports skipped every tool reply: in one real 142-message export, 18 requests had no answer and 6 answers were a caption with nothing under it.
+- 📸 **Every uploaded image is embedded, not just the first few.** Images shared one 15-second budget, so 41 of 48 in that export became `[Image: …]` placeholders. The budget now grows with the number of images, and the progress card counts them as they are embedded.
+- 🧹 **Tool plumbing no longer appears as "Reasoning / progress"** — including redaction notices such as "This code was redacted."
+- 🔗 Newer `sediment://` image pointers download, `file-service://` pointers no longer add a bogus `[Image: file-service]`, and images that share a name are all kept.
+
+([release notes](temporal/release-notes-v1.2.1.md))
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v1.2.0
 
 - 🧭 **ChatGPT's new page layout is supported.** ChatGPT has begun serving a second transcript layout (verified live on 2026-09-25): each turn is an `li[data-message-role]`, your prompt sits inside a button, and web sources are buttons that carry their links as data. The exporter found no messages at all there. Every turn, prompt and source now exports, and the userscript's **Export** button appears on it.
 - 💬 **Short prompts are no longer skipped** (#43). "Hi", "OK" or 👍 fell below a minimum-length filter — and, on the new layout, disappeared with the button it sits in. Every non-empty turn is exported.
@@ -112,9 +124,6 @@ Chromium, Firefox, and WebKit CI exercise every shipped console bundle, both use
 - 🛡️ **Hardening:** timeouts cover response bodies, authenticated requests refuse redirects, CDN image reads carry no credentials or referrer, streamed images are size-capped, exported HTML carries a restrictive CSP, and an incomplete export says so inside the file. CI runs Node 22/24/26 and a Chromium/Firefox/WebKit browser matrix with pinned actions and checksummed release artifacts.
 
 ([release notes](temporal/release-notes-v1.2.0.md) · [release audit](docs/RELEASE_AUDIT.md) · [browser coverage](docs/COMPATIBILITY.md))
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v1.1.0
 
@@ -369,7 +378,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/EXPORTER_GUIDE.md](docs/EXPORTE
 
 ## 🚀 Version History
 
-- **v1.2.0** (Current) - ChatGPT's new page layout, short prompts and temporary-chat images, complete long conversations, Deep Research, bookmarklets, Gemini formatting, and release hardening
+- **v1.2.1** (Current) - Generated images and every uploaded image in Markdown exports; tool plumbing no longer shown as reasoning
+- **v1.2.0** - ChatGPT's new page layout, short prompts and temporary-chat images, complete long conversations, Deep Research, bookmarklets, Gemini formatting, and release hardening
 - **v1.1.0** - Canonical userscript updates, stable titles, reasoning progress, and citation whitespace fixes
 - **v0.12.1** - Gemini maths export as TeX; fixes a regression that would have deleted them entirely
 - **v0.12.0** - ChatGPT Markdown reads the conversation record instead of scraping the page: no scrolling, complete by construction, real citation titles

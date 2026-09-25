@@ -35,6 +35,7 @@
         start: 'Preparing export…',
         payload: 'Downloading conversation… large chats can take up to a minute',
         rendering: 'Preparing messages and attachments…',
+        attachments: 'Embedding images…',
         streaming: 'Waiting for the answer to finish…',
         hidden: 'Paused — bring this tab to the front',
         resumed: 'Resuming…',

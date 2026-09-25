@@ -19,6 +19,17 @@ A live check of the release candidate found that ChatGPT had begun serving a sec
 | P3 | PR #38 review items: repeated report JSON parsing, an iframe probe on one title string, duplicated auth escalation, and no test for a missing task stream. | Parsed and rendered reports are memoized per message; the probe also matches `src`; JSON and stream reads share one escalation routine; a 404 stream is tested. |
 | P3 | Bookmarklets are ~107,000 characters; Firefox rejects bookmark URLs over 65,536 (`DB_URL_LENGTH_MAX`). | Documented on the install page, README and compatibility guide. |
 
+## Export audit — 2026-09-25
+
+A real Markdown export (142 messages: 80 from the user, 62 from ChatGPT; 3 MB), produced before this release from ChatGPT's stored conversation, was audited for artifacts. Citation markers, private-use characters, JSON leaks, HTML entities, code fences, links, duplicate turns and timestamp order were all clean. Four defects were found; each is reproduced by a synthetic regression test in `test/stored-record.test.js` and fixed in v1.2.1.
+
+| Priority | Witnessed | Cause and disposition |
+|---|---|---|
+| P1 | 18 user requests with no ChatGPT reply, and 6 replies that were only a "Reasoning / progress" caption over an empty answer — all design requests answered with generated images. The file claimed to be complete. | Generated images (and code-execution charts) are `tool` records, which payload-first rendering skipped; the empty assistant reply stored after an image was treated as the answer. Image-bearing tool records are now the answer, hidden copies stay skipped, and empty replies are not answers. |
+| P1 | 7 of 48 uploaded images embedded, in order, and the remaining 41 left as `[Image: …]` placeholders. | Every image shared one 15-second budget, fetched sequentially. The budget now grows per image (15 s + 3 s each, capped at 180 s), downloads get 15 s each, and progress counts images. |
+| P2 | "The output of this plugin was redacted." and "This code was redacted." shown as reasoning. | Messages addressed to a tool (`recipient` other than `all`) were folded into progress. They are excluded. |
+| P2 | (Latent, found while fixing) `file-service://file-…` pointers produced a bogus `[Image: file-service]`, `sediment://` pointers produced no id, and images sharing a name kept only the first. `includeVariants` paired variants by position, so a turn that rendered nothing shifted them. | Ids are read after the pointer scheme; images are keyed by file id; variants are paired by identity. |
+
 ## Scope and baseline (2026-09-19)
 
 ## Scope and baseline
@@ -127,7 +138,7 @@ These need a signed-in ChatGPT account or other browsers, which the 2026-09-25 s
 - [ ] Signed in, confirm which transcript layout ChatGPT serves, and on the 2026 layout that each `li`'s `id` equals the stored message id — timestamps, recovery and completeness checks match on it (tests assume it; a mismatch degrades to positional matching).
 - [ ] Reproduce #41 on a stored conversation with approximately 1,243 messages and verify beginning, middle, end, turn order, timestamps, and counts, in Markdown and in HTML/PDF.
 - [ ] Reproduce #40 on an actual temporary conversation with uploaded and generated images, including blob-backed previews, in Chrome, Firefox, and Safari. Unavailable bytes must remain a clear placeholder.
-- [ ] Check that generated images in a stored conversation reach Markdown exports: that path reads the stored conversation, where an image generation result may be a `tool` record, which the payload reader skips.
+- [ ] Re-export the audited conversation while signed in: confirm its generated images, the embedded count of its 48 uploads, and that the two redaction notices are tool-addressed (the fix assumes the `recipient` field ChatGPT uses for tool calls). Check which message id a page turn with a generated image carries before extending image-bearing tool records to HTML/PDF.
 - [ ] Verify current app-backed Deep Research in Markdown, HTML and PDF, including an ongoing/unavailable task and a report in the middle of a conversation.
 - [ ] Install both userscript entry points and bookmarklets in target browsers; verify userscript-manager installation/update and current enterprise menus. CI exercises no-Share fallback, CSP/Trusted Types, and full bookmarklet URL execution; Firefox cannot store the bookmarklets (65,536-character limit).
 - [ ] Verify a long Gemini conversation's scroller. Math, code, tables and lists were verified live on 2026-09-25 in a temporary chat.
