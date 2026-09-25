@@ -77,8 +77,11 @@ No install, no server, no account: everything runs locally in your browser.
 
 ### Method 3: Bookmarklet
 
-1. Open the [bookmarklet page](https://chatgpt-chat-exporter.vercel.app/bookmarklets) and drag the export you want — ChatGPT → Markdown, HTML or PDF, or Gemini → Markdown — to your bookmarks bar.
-2. Open a conversation and click the bookmark.
+1. Open the bookmarklet for the export you want and copy all of its text: ChatGPT → [Markdown](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/public/bookmarklets/chatgpt-markdown.txt), [HTML](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/public/bookmarklets/chatgpt-html.txt) or [PDF](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/public/bookmarklets/chatgpt-pdf.txt), or Gemini → [Markdown](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/public/bookmarklets/gemini-markdown.txt).
+2. Create a bookmark (bookmark any page, then edit it), paste that text as its URL, and name it, for example, "Export chat".
+3. Open a conversation and click the bookmark.
+
+With a downloaded copy of the repository you can instead open `public/bookmarklets/index.html` in your browser and drag the links to your bookmarks bar.
 
 Each bookmark contains the whole exporter (over 100,000 characters) and never loads code from anywhere else, so it does not update itself: replace it to upgrade. Chromium-based browsers (Chrome, Edge, Brave, Arc) store it. **Firefox cannot** — it rejects bookmark URLs longer than 65,536 characters — so use the userscript or the console there.
 

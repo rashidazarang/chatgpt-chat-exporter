@@ -58,8 +58,9 @@ showed its **Export** button. Now:
 ## Bookmarklets (#39)
 
 Self-contained bookmarklets for ChatGPT Markdown, HTML and PDF-ready export and
-Gemini Markdown, generated from the console bundles with pinned Terser and
-installable from the [bookmarklet page](https://chatgpt-chat-exporter.vercel.app/bookmarklets).
+Gemini Markdown, generated from the console bundles with pinned Terser. Copy
+a [bookmarklet file](https://github.com/rashidazarang/chatgpt-chat-exporter/tree/master/public/bookmarklets)
+into a new bookmark's URL, or drag the links from `public/bookmarklets/index.html`.
 No remote executable is loaded, so a bookmark does not update itself. Each is
 over 100,000 characters: Chromium-based browsers store it, but Firefox rejects
 bookmark URLs longer than 65,536 characters — use the userscript or console

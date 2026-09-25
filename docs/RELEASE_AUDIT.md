@@ -130,7 +130,8 @@ These need a signed-in ChatGPT account or other browsers, which the 2026-09-25 s
 - [ ] Verify current app-backed Deep Research in Markdown, HTML and PDF, including an ongoing/unavailable task and a report in the middle of a conversation.
 - [ ] Install both userscript entry points and bookmarklets in target browsers; verify userscript-manager installation/update and current enterprise menus. CI exercises no-Share fallback, CSP/Trusted Types, and full bookmarklet URL execution; Firefox cannot store the bookmarklets (65,536-character limit).
 - [ ] Verify a long Gemini conversation's scroller. Math, code, tables and lists were verified live on 2026-09-25 in a temporary chat.
-- [ ] After publishing, verify the GitHub and GreasyFork versions and the hosted bookmarklet page.
+- [ ] After publishing, verify the GitHub and GreasyFork versions.
+- [ ] Redeploy the website: Vercel's last production deployment is from 2025-09-23 (pushes to `master` only build previews), so the hosted pages predate this release and `/bookmarklets` does not exist there yet. The docs point to the bookmarklet files on GitHub until then.
 
 ## Follow-up roadmap and known limits
 
