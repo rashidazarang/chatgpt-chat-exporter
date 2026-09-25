@@ -14,6 +14,7 @@ A live check of the release candidate found that ChatGPT had begun serving a sec
 | P2 | Recovery was gated on ids the sweep *encountered*, so a turn that was on screen but never readable was neither exported nor recovered; with no DOM ids, positional matches could be recovered twice. | Recovery keys on payload entries not represented in the export; recovered ids clear the matching "never finished rendering" count. |
 | P2 | Gemini code fences took the `<code data-test-id="code-content">` element as their header, so the fence language became the first line of code (`printhello`). | Header candidates exclude the code itself; Gemini's `.code-block-decoration` is recognized. |
 | P2 | ChatGPT's display math in the new layout (`span.katex > math[display=block]`) exported inline. | Display markers are checked above and below the TeX-carrying node. |
+| P2 | Generated-file links trimmed trailing punctuation with `/[.,;:!?*`]+$/`, which retried from every position of a punctuation run: quadratic time on a long run of `!` (CodeQL js/polynomial-redos, alert #51, raised by the first `master` scan of this code, which dates from v0.9.2). | Trimmed by scanning back from the end; a 60,000-character run takes milliseconds instead of seconds (regression test). |
 | P3 | Code extraction collapsed consecutive blank lines (two between Python definitions became one); a code fence after a list gained an extra blank line; temporary-chat tabs ("ChatGPT: …" tagline, "Google Gemini") became export titles. | Code keeps every blank line; one blank line before a fence; those tab titles fall back to the provider default. |
 | P3 | PR #38 review items: repeated report JSON parsing, an iframe probe on one title string, duplicated auth escalation, and no test for a missing task stream. | Parsed and rendered reports are memoized per message; the probe also matches `src`; JSON and stream reads share one escalation routine; a 404 stream is tested. |
 | P3 | Bookmarklets are ~107,000 characters; Firefox rejects bookmark URLs over 65,536 (`DB_URL_LENGTH_MAX`). | Documented on the install page, README and compatibility guide. |
@@ -115,7 +116,7 @@ There were 28 release records. Latest published release: v1.1.0, 2026-08-22. It 
 
 ## Validation — 2026-09-25
 
-- **168 unit tests** pass (153 from the candidate plus 15 for the follow-up findings); 13 of the new tests fail against the candidate's engine, the other two pin behaviour it already had.
+- **169 unit tests** pass (153 from the candidate plus 16 for the follow-up findings); 14 of the new tests fail against the candidate's engine, the other two pin behaviour it already had.
 - **78 browser checks** pass locally in Chromium, Firefox and WebKit (26 each), including the 2026 transcript in every format and the userscript launcher exporting it under strict CSP.
 - Live: see [COMPATIBILITY.md](COMPATIBILITY.md#live-checks-2026-09-25-desktop-chrome).
 

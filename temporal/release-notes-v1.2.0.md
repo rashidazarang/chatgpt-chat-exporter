@@ -77,6 +77,9 @@ there.
   response, marks the export incomplete instead of mixing branches.
 - Exported HTML carries a restrictive Content-Security-Policy and a
   no-referrer policy.
+- Generated-file links trim trailing punctuation in linear time; the regex
+  it replaces was quadratic on a long punctuation run (CodeQL
+  js/polynomial-redos).
 - UI icons are built with SVG DOM APIs, so strict Trusted Types policies need
   no parser.
 - Development requires Node 22.22.2+, 24.15.0+ or 26+ (browser users need no

@@ -331,3 +331,17 @@ test('explicit non-raster image MIME types cannot be disguised by attachment met
     const result = await extract(dom);
     assert.equal(result.messages[0].content, '[Image: upload.png]');
 });
+
+test('generated-file links trim trailing punctuation in linear time', { timeout: 5000 }, async t => {
+    const dom = page(); t.after(() => dom.window.close());
+    const record = payload();
+    record.mapping.a.message.content.parts = [
+        `Saved sandbox:/mnt/data/report.csv!?. and sandbox:/mnt/data/${'!'.repeat(60000)}x`
+    ];
+    dom.window.fetch = backend(record);
+    const started = Date.now();
+    const result = await extract(dom, { sourceFromPayload: false });
+    assert.ok(Date.now() - started < 1000, 'a punctuation run must not stall the export');
+    assert.equal(result.messages[1].attachments[0].sandboxPath, '/mnt/data/report.csv');
+    assert.equal(result.messages[1].attachments[1].sandboxPath, `/mnt/data/${'!'.repeat(60000)}x`);
+});

@@ -1980,7 +1980,13 @@
 
             const sandboxPattern = /sandbox:(\/mnt\/data\/[^\s)\]"'<>]+)/g;
             for (const match of payloadContentText(message?.content).matchAll(sandboxPattern)) {
-                const sandboxPath = match[1].replace(/[.,;:!?*`]+$/, '');
+                // Sentence punctuation after a link is not part of the path. Trim
+                // it by scanning back: /[.,;:!?*`]+$/ retried from every position
+                // of a long punctuation run and took quadratic time (CodeQL
+                // js/polynomial-redos).
+                let end = match[1].length;
+                while (end > 0 && '.,;:!?*`'.includes(match[1][end - 1])) end--;
+                const sandboxPath = match[1].slice(0, end);
                 const name = sandboxPath.split('/').filter(Boolean).pop() || 'Generated file';
                 add({ kind: 'sandbox', sandboxPath, name });
             }
