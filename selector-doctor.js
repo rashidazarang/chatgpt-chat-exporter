@@ -1282,19 +1282,21 @@
 
         // An inline source reads as a link to its first target, like the anchor
         // pills it replaced. The trailing "Sources" control only repeats what the
-        // References list already holds.
-        function processSourceReferences(clone) {
+        // References list already holds. Serialized straight to escaped output,
+        // as processLinks does — page data never becomes a live attribute.
+        function processSourceReferences(clone, format, replacements) {
             queryAll(clone, '[data-assistant-sources-payload]').forEach(element => {
                 const [first] = sourceReferenceItems(element);
                 if (!first || element.getAttribute('data-content-reference-type') === 'sources_footnote') {
                     element.remove();
                     return;
                 }
-                const link = element.ownerDocument.createElement('a');
-                link.setAttribute('href', first.href);
-                link.textContent = normalizeWhitespace(element.querySelector('[data-assistant-reference-title]')?.textContent) ||
+                const label = normalizeWhitespace(element.querySelector('[data-assistant-reference-title]')?.textContent) ||
                     first.label || hostnameOf(first.href) || first.href;
-                element.replaceWith(link);
+                const replacement = format === 'markdown'
+                    ? `[${escapeMarkdownLinkText(label)}](${escapeMarkdownUrl(first.href)})`
+                    : addReplacement(replacements, `<a href="${sanitizeHtml(first.href)}">${sanitizeHtml(label)}</a>`);
+                element.replaceWith(createTextNode(element, replacement));
             });
         }
 
@@ -1319,7 +1321,7 @@
             annotatePreWrapElements(element, clone);
             const mediaSources = annotateMediaSources(element, clone, options.imageBudget || createImageBudget(options));
             const citations = collectCitations(clone);
-            processSourceReferences(clone);
+            processSourceReferences(clone, format, replacements);
             // Cards implemented as buttons disappear with the rest of the UI if
             // they are not converted first (issue #32).
             processCards(clone, format, replacements);
