@@ -23,114 +23,34 @@
     // Milliseconds between share-control scans while the page mutates.
     const DEFAULT_SYNC_INTERVAL = 400;
 
+    // Fixed geometry for renderIcon: [tag, attributes] per shape.
     const ICONS = {
-    "share": [
-        [
-            "circle",
-            {
-                "cx": "18",
-                "cy": "5",
-                "r": "3"
-            }
+        share: [
+            ['circle', { cx: '18', cy: '5', r: '3' }],
+            ['circle', { cx: '6', cy: '12', r: '3' }],
+            ['circle', { cx: '18', cy: '19', r: '3' }],
+            ['path', { d: 'm8.6 13.5 6.8 4M15.4 6.5l-6.8 4' }]
         ],
-        [
-            "circle",
-            {
-                "cx": "6",
-                "cy": "12",
-                "r": "3"
-            }
+        link: [
+            ['path', { d: 'M10 13a5 5 0 0 0 7.1.1l2-2A5 5 0 0 0 12 4l-1.1 1.1' }],
+            ['path', { d: 'M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1' }]
         ],
-        [
-            "circle",
-            {
-                "cx": "18",
-                "cy": "19",
-                "r": "3"
-            }
+        markdown: [
+            ['path', { d: 'M4 6h16v12H4z' }],
+            ['path', { d: 'M7 15V9l3 3 3-3v6' }],
+            ['path', { d: 'm16 12 2 2 2-2' }]
         ],
-        [
-            "path",
-            {
-                "d": "m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"
-            }
+        pdf: [
+            ['path', { d: 'M6 2h9l5 5v15H6z' }],
+            ['path', { d: 'M14 2v6h6' }],
+            ['path', { d: 'M9 16h6M9 12h3' }]
+        ],
+        download: [
+            ['path', { d: 'M12 3v12' }],
+            ['path', { d: 'm7 11 5 5 5-5' }],
+            ['path', { d: 'M4 20h16' }]
         ]
-    ],
-    "link": [
-        [
-            "path",
-            {
-                "d": "M10 13a5 5 0 0 0 7.1.1l2-2A5 5 0 0 0 12 4l-1.1 1.1"
-            }
-        ],
-        [
-            "path",
-            {
-                "d": "M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"
-            }
-        ]
-    ],
-    "markdown": [
-        [
-            "path",
-            {
-                "d": "M4 6h16v12H4z"
-            }
-        ],
-        [
-            "path",
-            {
-                "d": "M7 15V9l3 3 3-3v6"
-            }
-        ],
-        [
-            "path",
-            {
-                "d": "m16 12 2 2 2-2"
-            }
-        ]
-    ],
-    "pdf": [
-        [
-            "path",
-            {
-                "d": "M6 2h9l5 5v15H6z"
-            }
-        ],
-        [
-            "path",
-            {
-                "d": "M14 2v6h6"
-            }
-        ],
-        [
-            "path",
-            {
-                "d": "M9 16h6M9 12h3"
-            }
-        ]
-    ],
-    "download": [
-        [
-            "path",
-            {
-                "d": "M12 3v12"
-            }
-        ],
-        [
-            "path",
-            {
-                "d": "m7 11 5 5 5-5"
-            }
-        ],
-        [
-            "path",
-            {
-                "d": "M4 20h16"
-            }
-        ]
-    ]
-};
+    };
 
     function normalizeText(element) {
         return String(element?.textContent || '').replace(/\s+/g, ' ').trim();
@@ -387,9 +307,11 @@
 
     // Message turns carry their own share controls — live ChatGPT renders
     // `share-prompt-link-turn-action-button` inside
-    // `section[data-testid="conversation-turn-N"]`. Those share the current
-    // message, not the conversation, and must keep their native behaviour.
-    const TURN_CONTAINER = '[data-message-author-role], [data-testid^="conversation-turn"], [data-testid^="conversation_turn"], article';
+    // `section[data-testid="conversation-turn-N"]`, and the 2026 transcript
+    // puts a "Share" action in every `li[data-message-role]`. Those share the
+    // current message, not the conversation, and must keep their native
+    // behaviour.
+    const TURN_CONTAINER = '[data-message-author-role], [data-message-role], [data-testid^="conversation-turn"], [data-testid^="conversation_turn"], article';
 
     // The data-testid hook works on every ChatGPT locale; the English text
     // match is a fallback for DOM revisions that drop the testid.

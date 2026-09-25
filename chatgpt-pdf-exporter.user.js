@@ -77,7 +77,8 @@
             'article[data-testid*="conversation-turn"]',
             'div[data-testid^="conversation-turn-"]',
             'div[data-testid="conversation-turn"]',
-            '.group\\/conversation-turn'
+            '.group\\/conversation-turn',
+            'li[data-message-role]'
         ].join(', ');
 
         // Gemini's own wrapper, .conversation-container, holds a *pair* — one
@@ -126,11 +127,17 @@
                 assistantName: 'ChatGPT',
                 sourceLabel: 'chatgpt.com',
                 defaultTitle: 'Conversation with ChatGPT',
-                genericTitlePattern: /^(chatgpt|new chat|untitled|chat)$/i,
+                // "ChatGPT: <tagline>" is the site's own title, which a logged-out
+                // or temporary chat keeps; it never names a conversation.
+                genericTitlePattern: /^(?:chatgpt|new chat|untitled|chat|chatgpt\s*:.*)$/i,
                 turnSelector: CHATGPT_TURN_SELECTOR,
                 documentTitleSuffix: /\s*[-–—|]\s*ChatGPT\s*$/i,
                 messageSelectors: [
-                    'div[data-message-author-role]',
+                    // Two transcript generations are served at once: role-tagged
+                    // divs, and (verified live 2026-09-25) an <ol> of
+                    // <li data-message-role> items. One entry, so neither reads
+                    // as selector drift in the doctor.
+                    'div[data-message-author-role], li[data-message-role]',
                     'article[data-testid*="conversation-turn"]',
                     'div[data-testid="conversation-turn"]',
                     '.group\\/conversation-turn',
@@ -156,7 +163,8 @@
                 assistantName: 'Gemini',
                 sourceLabel: 'gemini.google.com',
                 defaultTitle: 'Conversation with Gemini',
-                genericTitlePattern: /^(gemini|new chat|untitled|chat|bard)$/i,
+                // A temporary chat's tab is just "Google Gemini".
+                genericTitlePattern: /^(?:gemini|google gemini|new chat|untitled|chat|bard)$/i,
                 turnSelector: GEMINI_TURN_SELECTOR,
                 // Live Gemini titles its tab "<name> - Google Gemini"; every
                 // titleSelector below misses, so that suffix reached the export
@@ -235,7 +243,11 @@
             const scope = messageScope(element, provider);
             const carrier = [element, scope, scope?.querySelector?.('[data-message-id], [data-message-uuid]')]
                 .find(candidate => candidate?.getAttribute?.('data-message-id') || candidate?.getAttribute?.('data-message-uuid'));
-            return carrier?.getAttribute('data-message-id') || carrier?.getAttribute('data-message-uuid') || '';
+            if (carrier) return carrier.getAttribute('data-message-id') || carrier.getAttribute('data-message-uuid') || '';
+            // The 2026 transcript keys each <li data-message-role> by the message's
+            // own id instead of a data attribute.
+            const turn = [element, scope].find(candidate => candidate?.hasAttribute?.('data-message-role') && candidate.id);
+            return turn ? turn.id : '';
         }
 
         function timestampIso(value) {
@@ -355,15 +367,42 @@
             return before + Array.from(node.childNodes).map(collectTextWithBreaks).join('') + after;
         }
 
+        // Code keeps every newline its text holds, blank lines included — two
+        // between Python definitions are style, and collapsing runs of them was
+        // an edit. Line elements (a <div> per line) end a line exactly once.
+        function collectCodeText(node) {
+            let text = '';
+            const endLine = () => {
+                if (text && !text.endsWith('\n')) text += '\n';
+            };
+            const walk = current => {
+                if (current.nodeType === 3) {
+                    text += current.nodeValue || '';
+                    return;
+                }
+                if (current.nodeType !== 1) return;
+                const tag = current.tagName.toLowerCase();
+                if (tag === 'br') {
+                    text += '\n';
+                    return;
+                }
+                if (['script', 'style', 'button', 'svg'].includes(tag)) return;
+                const line = ['div', 'p', 'li', 'tr', 'section', 'article'].includes(tag);
+                if (line) endLine();
+                current.childNodes.forEach(walk);
+                if (line) endLine();
+            };
+            walk(node);
+            return text;
+        }
+
         function getCodeText(element) {
             if (!element) return '';
 
             // innerText is unreliable here: serialization works on detached clones,
             // where browsers fall back to textContent and drop the line breaks that
             // come from element boundaries or <br> tags (issue #25).
-            const clone = element.cloneNode(true);
-            queryAll(clone, 'br').forEach(br => br.replaceWith(clone.ownerDocument.createTextNode('\n')));
-            return collectTextWithBreaks(clone).replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trimEnd();
+            return collectCodeText(element).replace(/\u00a0/g, ' ').trimEnd();
         }
 
         function normalizeCodeText(value) {
@@ -407,6 +446,24 @@
                     // style detection in isPreWrapElement still applies.
                 }
             });
+        }
+
+        // Tags that carry their own Markdown meaning, and the rendered structure
+        // that proves an element holds formatted content rather than typed text.
+        const MARKDOWN_STRUCTURE_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'table', 'strong', 'b', 'em', 'i']);
+        const MARKDOWN_STRUCTURE_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, ul, ol, li, blockquote, pre, code, table, strong, b, em, i, hr';
+
+        // Pre-wrap marks text whose line breaks are the author's own. It is not
+        // proof of that by itself: Gemini sets white-space: pre-wrap on its whole
+        // rendered answer, and reading that verbatim flattened every heading,
+        // list and bold run into plain text. Only the top of a pre-wrap region
+        // can be typed text, and only if nothing rendered sits inside it — the
+        // spans beside a <b> in Gemini's paragraphs inherit pre-wrap too.
+        function isVerbatimTextElement(element) {
+            return !MARKDOWN_STRUCTURE_TAGS.has(element.tagName.toLowerCase()) &&
+                isPreWrapElement(element) &&
+                !isPreWrapElement(element.parentElement) &&
+                !element.querySelector(MARKDOWN_STRUCTURE_SELECTOR);
         }
 
         function preWrapText(element) {
@@ -477,10 +534,14 @@
         }
 
         function cleanMarkdown(markdown) {
-            return splitMarkdownFencedBlocks(markdown)
-                .map(segment => segment.type === 'code' ? segment.value : cleanMarkdownText(segment.value))
-                .join('')
-                .trim();
+            const segments = splitMarkdownFencedBlocks(markdown);
+            return segments.map((segment, index) => {
+                if (segment.type === 'code') return segment.value;
+                const text = cleanMarkdownText(segment.value);
+                // A fence's match starts with the newline before it, so text that
+                // already ended its paragraph would leave two blank lines.
+                return segments[index + 1]?.type === 'code' ? text.replace(/\n+$/, '\n') : text;
+            }).join('').trim();
         }
 
         function escapeMarkdownLinkText(value) {
@@ -513,14 +574,23 @@
             return elements.filter(element => !elements.some(other => other !== element && other.contains(element)));
         }
 
+        // Content that can sit inside a <button>: a control never holds paragraphs
+        // or lists, so a button that does is a wrapper around the message itself.
+        const BUTTON_CONTENT_SELECTOR = 'p, pre, blockquote, ul, ol, table, h1, h2, h3, h4, h5, h6, [data-user-message-copy]';
+
         function removeUiElements(clone) {
-            // Uploaded images can be clickable previews. Removing their button
-            // used to delete the only copy in temporary chats (issue #40).
+            // Message content can live inside a button. The 2026 ChatGPT transcript
+            // wraps every prompt in <button data-user-message-bubble>, and uploaded
+            // images are clickable previews; removing either button deleted the
+            // only copy, so short prompts and images vanished (issues #40, #43).
             queryAll(clone, 'button').forEach(button => {
-                const media = queryAll(button, 'img, canvas, video, audio');
-                if (media.length && !button.closest('pre, code, [data-chat-exporter-ui]')) {
-                    button.replaceWith(...media);
+                if (button.closest('pre, code, [data-chat-exporter-ui]')) return;
+                if (matches(button, '[data-user-message-bubble]') || button.querySelector(BUTTON_CONTENT_SELECTOR)) {
+                    button.replaceWith(...button.childNodes);
+                    return;
                 }
+                const media = queryAll(button, 'img, canvas, video, audio');
+                if (media.length) button.replaceWith(...media);
             });
             const uiSelector = [
                 'button',
@@ -541,6 +611,13 @@
                 '[class*="sr-only"]',
                 '[class*="visually-hidden"]',
                 '[class*="visuallyhidden"]',
+                // The 2026 transcript uses atomic class names, so its "You said:"
+                // label, action rows, copy controls and popovers are only
+                // recognizable by their data attributes.
+                '[data-message-attribution]',
+                '[data-message-actions]',
+                '[data-message-content-controls]',
+                '[popover]',
                 '[class*="regenerate"]',
                 '[class*="copy-button"]',
                 '[data-testid*="copy"]',
@@ -575,7 +652,11 @@
                 }
             }
 
-            const header = block.querySelector('[class*="sticky"], [class*="code-header"], [data-testid*="code"], [data-test-id*="code"], .code-language, .code-lang, [slot="header"]');
+            // A header is chrome beside the code, never the code itself: Gemini
+            // marks its <code> data-test-id="code-content", and taking that as the
+            // header turned `print("hello")` into the fence's language.
+            const header = queryAll(block, '[class*="sticky"], [class*="code-header"], [class*="code-block-decoration"], [data-testid*="code"], [data-test-id*="code"], .code-language, .code-lang, [slot="header"]')
+                .find(candidate => !matches(candidate, 'pre, code') && !candidate.closest('code') && !candidate.querySelector('pre, code'));
             const headerText = normalizeWhitespace(getText(header)).replace(/\b(copy|code|download)\b/gi, '').trim();
             if (headerText && headerText.length < 32 && !headerText.includes('\n')) {
                 return headerText.toLowerCase();
@@ -671,12 +752,17 @@
             return '';
         }
 
+        // ChatGPT's 2026 transcript wraps native MathML in a span.katex inside
+        // [data-assistant-math-rendered="display"], so the marker can sit on
+        // either side of the node that carries the TeX.
+        const DISPLAY_MATH_MARKER = '.katex-display, mjx-container[display="true"], [display="block"], [data-assistant-math-rendered="display"]';
+
         function isDisplayMath(node) {
-            if (matches(node, '.katex-display, mjx-container[display="true"], [display="block"], [class*="math-block"]')) return true;
-            if (node.closest?.('.katex-display, mjx-container[display="true"]')) return true;
+            if (matches(node, `${DISPLAY_MATH_MARKER}, [class*="math-block"]`)) return true;
+            if (node.closest?.(DISPLAY_MATH_MARKER)) return true;
             // A source-carrying wrapper sits *outside* the rendered block, so the
             // display marker is a descendant rather than an ancestor.
-            if (node.querySelector?.('.katex-display, mjx-container[display="true"]')) return true;
+            if (node.querySelector?.(DISPLAY_MATH_MARKER)) return true;
             return String(node.getAttribute?.('display') || '').toLowerCase() === 'block';
         }
 
@@ -1029,7 +1115,7 @@
             // every line break and indent is author input; extract them verbatim
             // instead of collapsing whitespace (issue #25). Protected behind a
             // marker so markdown cleanup cannot re-flow the preserved text.
-            if (tag !== 'code' && tag !== 'pre' && isPreWrapElement(node)) {
+            if (isVerbatimTextElement(node)) {
                 const text = preWrapText(node);
                 if (!text.trim()) return '';
                 const preserved = context.replacements ? addReplacement(context.replacements, text) : text;
@@ -1167,21 +1253,64 @@
             }
         }
 
+        // The 2026 ChatGPT transcript renders sources as buttons, not links: the
+        // targets travel as JSON in data-assistant-sources-payload, one array per
+        // pill (verified live 2026-09-25).
+        function sourceReferenceItems(element) {
+            let value = null;
+            try {
+                value = JSON.parse(element.getAttribute('data-assistant-sources-payload') || 'null');
+            } catch (error) {
+                return [];
+            }
+            return (Array.isArray(value) ? value : [value])
+                .map(item => ({
+                    href: String(item?.url || '').trim(),
+                    label: normalizeWhitespace(item?.title || item?.attribution || '')
+                }))
+                .filter(item => /^https?:\/\//i.test(item.href) && !isUnsafeHref(item.href));
+        }
+
         // Collected before UI stripping and link flattening so citation pills that
         // render as buttons or inside removable chrome are still seen (issue #27).
         function collectCitations(clone) {
             const citations = [];
             const seenHrefs = new Set();
-
-            queryAll(clone, 'a[href]').forEach(link => {
-                const href = String(link.href || link.getAttribute('href') || '').trim();
-                if (isUnsafeHref(href) || !isCitationLink(link, href)) return;
+            const add = (href, label) => {
                 if (seenHrefs.has(href)) return;
                 seenHrefs.add(href);
-                citations.push({ href, label: citationLabel(link, href) });
+                citations.push({ href, label });
+            };
+
+            queryAll(clone, 'a[href], [data-assistant-sources-payload]').forEach(element => {
+                if (element.hasAttribute('data-assistant-sources-payload')) {
+                    sourceReferenceItems(element).forEach(item => add(item.href, item.label || hostnameOf(item.href) || item.href));
+                    return;
+                }
+                const href = String(element.href || element.getAttribute('href') || '').trim();
+                if (isUnsafeHref(href) || !isCitationLink(element, href)) return;
+                add(href, citationLabel(element, href));
             });
 
             return citations;
+        }
+
+        // An inline source reads as a link to its first target, like the anchor
+        // pills it replaced. The trailing "Sources" control only repeats what the
+        // References list already holds.
+        function processSourceReferences(clone) {
+            queryAll(clone, '[data-assistant-sources-payload]').forEach(element => {
+                const [first] = sourceReferenceItems(element);
+                if (!first || element.getAttribute('data-content-reference-type') === 'sources_footnote') {
+                    element.remove();
+                    return;
+                }
+                const link = element.ownerDocument.createElement('a');
+                link.setAttribute('href', first.href);
+                link.textContent = normalizeWhitespace(element.querySelector('[data-assistant-reference-title]')?.textContent) ||
+                    first.label || hostnameOf(first.href) || first.href;
+                element.replaceWith(link);
+            });
         }
 
         function renderReferences(citations, format) {
@@ -1205,6 +1334,7 @@
             annotatePreWrapElements(element, clone);
             const mediaSources = annotateMediaSources(element, clone, options.imageBudget || createImageBudget(options));
             const citations = collectCitations(clone);
+            processSourceReferences(clone);
             // Cards implemented as buttons disappear with the rest of the UI if
             // they are not converted first (issue #32).
             processCards(clone, format, replacements);
@@ -1219,7 +1349,7 @@
             processTables(clone, format, replacements);
 
             if (format === 'markdown') {
-                if (isPreWrapElement(clone)) {
+                if (isVerbatimTextElement(clone)) {
                     return preWrapText(clone).trim();
                 }
 
@@ -1269,7 +1399,8 @@
             if (!text && richCount === 0) return false;
             if (text.length > 200000) return false;
             if (matches(element, 'nav, aside, header, footer, form, menu')) return false;
-            if (element.querySelector('textarea, input[type="text"], [contenteditable="true"]') && !element.hasAttribute('data-message-author-role')) return false;
+            if (element.querySelector('textarea, input[type="text"], [contenteditable="true"]') &&
+                !matches(element, '[data-message-author-role], [data-message-role]')) return false;
             if (getClassName(element).match(/\b(typing|loading|spinner)\b/i)) return false;
 
             return true;
@@ -1329,9 +1460,10 @@
             if (tag === 'user-query') return { sender: 'You', reliable: true };
             if (tag === 'model-response') return { sender: provider.assistantName, reliable: true };
 
-            const roleCarrier = matches(element, '[data-message-author-role], [data-author], [data-sender]') ?
-                element : element.querySelector?.('[data-message-author-role], [data-author], [data-sender]');
-            const role = roleCarrier?.getAttribute('data-message-author-role') || roleCarrier?.getAttribute('data-author') || roleCarrier?.getAttribute('data-sender');
+            const roleSelector = '[data-message-author-role], [data-message-role], [data-author], [data-sender]';
+            const roleCarrier = matches(element, roleSelector) ? element : element.querySelector?.(roleSelector);
+            const role = roleCarrier?.getAttribute('data-message-author-role') || roleCarrier?.getAttribute('data-message-role') ||
+                roleCarrier?.getAttribute('data-author') || roleCarrier?.getAttribute('data-sender');
             if (role) {
                 const normalizedRole = role.toLowerCase();
                 if (normalizedRole === 'user') return { sender: 'You', reliable: true };
@@ -1608,7 +1740,17 @@
             return variants.filter(entry => isMainPayloadMessage(entry));
         }
 
+        // Every payload pass asks each message for its report several times, and a
+        // report can be a large JSON string; parse it once per message object.
+        const embeddedReports = new WeakMap();
+
         function payloadEmbeddedReport(message) {
+            if (!message || typeof message !== 'object') return null;
+            if (!embeddedReports.has(message)) embeddedReports.set(message, readEmbeddedReport(message));
+            return embeddedReports.get(message);
+        }
+
+        function readEmbeddedReport(message) {
             const metadata = message?.metadata;
             if (!metadata || typeof metadata !== 'object') return null;
 
@@ -1650,13 +1792,16 @@
             return null;
         }
 
+        const renderableMessages = new WeakMap();
+
         function payloadRenderableMessage(message) {
             const report = payloadEmbeddedReport(message);
             if (!report) return message;
+            if (renderableMessages.has(message)) return renderableMessages.get(message);
             const reportContent = report.content || (typeof report.text === 'string'
                 ? { content_type: 'text', parts: [report.text] }
                 : message.content);
-            return {
+            const rendered = {
                 ...message,
                 ...report,
                 content: reportContent,
@@ -1664,6 +1809,11 @@
                 create_time: report.create_time ?? message.create_time,
                 metadata: { ...message.metadata, ...report.metadata }
             };
+            // The rendered message still carries the SDK metadata it came from;
+            // asking it for its report must not parse that metadata again.
+            embeddedReports.set(rendered, report);
+            renderableMessages.set(message, rendered);
+            return rendered;
         }
 
         function isDirectDeepResearchResult(message) {
@@ -2016,8 +2166,8 @@
 
         // Escalates only as far as it has to: the token already in hand, then a
         // fresh one in case the session rolled over mid-export, then each workspace
-        // the reader belongs to.
-        async function fetchChatGptJson(doc, options, endpoint) {
+        // the reader belongs to. `attempt` makes one request and classifies it.
+        async function fetchChatGptWith(doc, options, endpoint, attempt) {
             // Callers reaching this without a pass-scoped auth state get one rather
             // than a TypeError; the state is what makes a single token serve every
             // request in the export.
@@ -2027,20 +2177,20 @@
             // confusing error out of the reader's console.
             if (auth.signedOut && !auth.token) return { reason: 'signed-out' };
 
-            let result = await attemptChatGptJson(doc, options, endpoint);
+            let result = await attempt(doc, options, endpoint);
             if (result.reason !== 'auth') return result;
 
             const stale = auth.token;
             const refreshed = await readChatGptToken(doc, options, true);
             if (refreshed && refreshed !== stale) {
-                result = await attemptChatGptJson(doc, options, endpoint);
+                result = await attempt(doc, options, endpoint);
                 if (result.reason !== 'auth') return result;
             }
 
             for (const accountId of await readChatGptAccountIds(doc, options)) {
                 if (accountId === auth.accountId) continue;
                 auth.accountId = accountId;
-                result = await attemptChatGptJson(doc, options, endpoint);
+                result = await attempt(doc, options, endpoint);
                 if (result.reason !== 'auth') return result;
             }
 
@@ -2048,6 +2198,10 @@
             // later request in this pass.
             auth.accountId = '';
             return result;
+        }
+
+        function fetchChatGptJson(doc, options, endpoint) {
+            return fetchChatGptWith(doc, options, endpoint, attemptChatGptJson);
         }
 
         async function attemptChatGptText(doc, options, endpoint) {
@@ -2068,30 +2222,8 @@
             return { reason: `status:${response.status}` };
         }
 
-        async function fetchChatGptText(doc, options, endpoint) {
-            const auth = options.chatGptAuth || (options.chatGptAuth = createChatGptAuth(options));
-            await readChatGptToken(doc, options);
-            if (auth.signedOut && !auth.token) return { reason: 'signed-out' };
-
-            let result = await attemptChatGptText(doc, options, endpoint);
-            if (result.reason !== 'auth') return result;
-
-            const stale = auth.token;
-            const refreshed = await readChatGptToken(doc, options, true);
-            if (refreshed && refreshed !== stale) {
-                result = await attemptChatGptText(doc, options, endpoint);
-                if (result.reason !== 'auth') return result;
-            }
-
-            for (const accountId of await readChatGptAccountIds(doc, options)) {
-                if (accountId === auth.accountId) continue;
-                auth.accountId = accountId;
-                result = await attemptChatGptText(doc, options, endpoint);
-                if (result.reason !== 'auth') return result;
-            }
-
-            auth.accountId = '';
-            return result;
+        function fetchChatGptText(doc, options, endpoint) {
+            return fetchChatGptWith(doc, options, endpoint, attemptChatGptText);
         }
 
         function deepResearchTaskId(message) {
@@ -2206,8 +2338,10 @@
                 if (index < entries.length) hydrated.push(entries[index]);
             }
 
-            const hasDeepResearchFrame = Boolean(
-                doc.querySelector?.('iframe[title="internal://deep-research"]'));
+            // The frame is titled internal://deep-research today; its source names
+            // the app too, so either one is enough to know a report is on screen.
+            const hasDeepResearchFrame = queryAll(doc,
+                'iframe[title*="deep-research"], iframe[src*="deep-research"]').length > 0;
             if (hasDeepResearchFrame && !hydrated.some(entry => isAsyncPayloadResult(entry.message))) {
                 const carriers = hydrated.map(entry => {
                     const message = entry.message;
@@ -2416,7 +2550,7 @@
         // precedes it in the conversation. Recovery is skipped entirely when no
         // captured message could be matched to the payload, because then there is
         // no anchor to place anything against.
-        function alignWithPayload(conversation, mainEntries, matches, format, seenMessageIds, doc) {
+        function alignWithPayload(conversation, mainEntries, matches, format, doc) {
             const indexOfEntry = new Map(mainEntries.map((entry, index) => [entry, index]));
             const positionOf = new Map();
             matches.forEach((entry, message) => {
@@ -2424,8 +2558,11 @@
             });
             if (positionOf.size === 0) return { recovered: 0, reordered: 0 };
 
-            const missing = mainEntries.filter(entry =>
-                !seenMessageIds.has(String(entry.message.id || entry.nodeId)));
+            // Missing means "not in the export", not "never on screen": a turn the
+            // sweep saw but could never read is just as absent. Duplicate DOM
+            // representations of one id match one entry, so they recover nothing.
+            const present = new Set(matches.values());
+            const missing = mainEntries.filter(entry => !present.has(entry));
 
             let recovered = 0;
             missing.forEach(entry => {
@@ -2435,6 +2572,7 @@
                 });
                 if (!message) return;
                 message.content += renderReferences(payloadCitations(native), format);
+                message.providerMessageId = String(entry.message.id || entry.nodeId);
 
                 const target = indexOfEntry.get(entry);
                 let insertAt = conversation.messages.length;
@@ -2619,14 +2757,17 @@
         async function enrichChatGptConversation(conversation, doc, format, options) {
             if (conversation.provider !== 'chatgpt') return conversation;
 
-            const started = now(getWindow(doc));
-            const ownDeadline = started + (options.metadataMaxDuration ?? METADATA_MAX_DURATION);
-            const metadataDeadline = options.metadataDeadline ? Math.min(options.metadataDeadline, ownDeadline) : ownDeadline;
+            const win = getWindow(doc);
+            const outerDeadline = options.metadataDeadline ?? Infinity;
             // One auth state for the whole pass: the conversation read discovers
             // the working token and account, and every file download reuses them.
+            // The stored conversation gets the primary read's budget — it is what
+            // proves the sweep complete and fills its holes, and a long one is
+            // megabytes (issue #41). Only what follows it is optional and short.
             const enrichmentOptions = {
                 ...options,
-                metadataDeadline,
+                metadataDeadline: Math.min(outerDeadline, now(win) +
+                    (options.conversationMaxDuration ?? options.metadataMaxDuration ?? CONVERSATION_MAX_DURATION)),
                 chatGptAuth: options.chatGptAuth || createChatGptAuth(options)
             };
             // The payload-first path may already have fetched (or failed to fetch)
@@ -2635,6 +2776,8 @@
             const payload = 'chatGptPayload' in options
                 ? options.chatGptPayload
                 : await fetchChatGptPayload(doc, enrichmentOptions);
+            enrichmentOptions.metadataDeadline = Math.min(outerDeadline,
+                now(win) + (options.metadataMaxDuration ?? METADATA_MAX_DURATION));
             if (!payload) {
                 conversation.metadataStatus = 'unavailable';
                 return conversation;
@@ -2653,13 +2796,14 @@
             const recaps = payloadReasoningRecaps(entries);
             const imageBudget = options.imageBudget;
 
-            // Compare stable ids, not counts: duplicate DOM representations must
-            // not obscure whether the sweep actually reached each payload turn.
+            // Compare identities, not counts: duplicate DOM representations must
+            // not obscure whether each payload turn actually reached the export.
             const mainEntries = mainPayloadMessages(entries);
             conversation.expectedMessages = mainEntries.length;
-            if (options.seenMessageIds instanceof Set) {
-                conversation.unreachedMessages = mainEntries.filter(entry =>
-                    !options.seenMessageIds.has(String(entry.message.id || entry.nodeId))).length;
+            const fromSweep = options.fromSweep === true;
+            if (fromSweep) {
+                const present = new Set(matches.values());
+                conversation.unreachedMessages = mainEntries.filter(entry => !present.has(entry)).length;
             }
 
             // A virtualizer can end a sweep anywhere, and a message the sweep never
@@ -2684,12 +2828,8 @@
                 }
             }
 
-            // Only messages the sweep never laid eyes on. A message that *was*
-            // encountered and then collapsed by content dedupe was collapsed on
-            // purpose; re-adding it here would undo that decision.
-            if (options.recoverMissing !== false && options.seenMessageIds instanceof Set) {
-                const aligned = alignWithPayload(
-                    conversation, mainEntries, matches, format, options.seenMessageIds, doc);
+            if (options.recoverMissing !== false && fromSweep) {
+                const aligned = alignWithPayload(conversation, mainEntries, matches, format, doc);
                 conversation.recoveredMessages = aligned.recovered;
                 if (aligned.recovered > 0) {
                     conversation.unreachedMessages = Math.max(0, (conversation.unreachedMessages || 0) - aligned.recovered);
@@ -2989,9 +3129,6 @@
 
             const state = { seen: new Set(), messages: [], container, lines: 0, imageBudget: options.imageBudget };
             const seenKeys = new Set();
-            // Every message id the sweep encountered, whether or not it was
-            // captured or deduped — the evidence for "did we actually get there".
-            const seenMessageIds = new Set();
             // Turns that were on screen but had nothing to serialize yet. They are
             // the reason for the return pass below.
             const pendingKeys = new Set();
@@ -2999,8 +3136,6 @@
             const capture = () => {
                 messageSelector = messageSelector || resolveMessageSelector(doc, provider);
                 findMessageCandidates(doc, messageSelector).forEach(messageElement => {
-                    const encounteredId = providerMessageId(messageElement, provider);
-                    if (encounteredId) seenMessageIds.add(encounteredId);
                     const key = messageKey(messageElement, provider, state.container);
                     if (seenKeys.has(key)) return;
                     // A virtualizer mounts the turn before it fills in the text, so
@@ -3194,32 +3329,40 @@
                 capture();
             }
 
+            // The sweep's deadline bounds the sweep. Reading the stored conversation
+            // afterwards has budgets of its own: it is what can still complete an
+            // export whose sweep ran out of time (issue #41).
+            const sweptInTime = !outOfTime();
             const conversation = buildConversation(doc, provider, options, sortByConversationOrder(state.messages, provider));
             emitProgress({ ...describe('metadata'), percent: 100 });
-            if (!outOfTime()) {
-                try {
-                    await enrichChatGptConversation(conversation, doc, format, { ...options, metadataDeadline: deadline, seenMessageIds });
-                } catch (error) {
-                    // Metadata is an enhancement over the DOM capture. A changed
-                    // private endpoint must never prevent the conversation export.
-                    console.warn('[Chat Exporter] Per-message metadata could not be added:', error);
-                }
+            try {
+                await enrichChatGptConversation(conversation, doc, format, { ...options, fromSweep: true });
+            } catch (error) {
+                // Metadata is an enhancement over the DOM capture. A changed
+                // private endpoint must never prevent the conversation export.
+                console.warn('[Chat Exporter] Per-message metadata could not be added:', error);
             }
+
+            // Turns that were on screen but never became readable, less those the
+            // stored conversation has since filled in. Saying so beats handing
+            // over a short file that looks complete.
+            const exportedIds = new Set(conversation.messages.map(message => message.providerMessageId).filter(Boolean));
+            const missed = Array.from(pendingKeys).filter(key =>
+                !(typeof key === 'string' && key.startsWith('id:') && exportedIds.has(key.slice(3)))).length;
             conversation.messages.forEach(message => {
                 delete message.providerMessageId;
                 if (!message.source) message.source = 'dom';
             });
             conversation.source = 'dom';
-
-            // Turns that were on screen but never became readable. Saying so beats
-            // handing over a short file that looks complete.
-            conversation.missedMessages = pendingKeys.size;
+            conversation.missedMessages = missed;
             // An export can look clean and still be short: every turn the sweep saw
             // was captured, but the sweep never reached the top. Only the payload
             // can tell us that, and it is the difference between a heuristic and
-            // proof.
+            // proof — proof that also stands in for a sweep that ran out of time.
             const unreached = conversation.unreachedMessages || 0;
-            conversation.complete = pendingKeys.size === 0 && unreached === 0 && !conversation.unresolvedReports && !conversation.invalidPayload && !conversation.unfinishedMessages && !outOfTime() && settled;
+            const verified = conversation.metadataStatus === 'enriched' && unreached === 0;
+            conversation.complete = missed === 0 && unreached === 0 && !conversation.unresolvedReports &&
+                !conversation.invalidPayload && !conversation.unfinishedMessages && settled && (sweptInTime || verified);
             if (unreached > 0) {
                 console.warn(`[Chat Exporter] ${unreached} of ${conversation.expectedMessages} messages in this conversation were never reached by the scroll sweep. Raise maxDuration and keep the tab in the foreground.`);
             }
@@ -3236,7 +3379,7 @@
                 recoveredMessages: conversation.recoveredMessages || 0
             });
             if (!conversation.complete) {
-                console.warn(`[Chat Exporter] Export may be incomplete: ${conversation.messages.length} messages captured, ${pendingKeys.size} turn(s) never finished rendering${outOfTime() ? ', and the sweep ran out of time' : ''}. Keep the tab in the foreground and try again.`);
+                console.warn(`[Chat Exporter] Export may be incomplete: ${conversation.messages.length} messages captured, ${missed} turn(s) never finished rendering${sweptInTime ? '' : ', and the sweep ran out of time'}. Keep the tab in the foreground and try again.`);
             }
             return conversation;
         }
@@ -3794,7 +3937,7 @@
             hidden: 'Paused — bring this tab to the front',
             resumed: 'Resuming…',
             sweep: 'Reading conversation…',
-            metadata: 'Adding timestamps and attachments…',
+            metadata: 'Adding timestamps, attachments and any missed messages…',
             done: 'Export complete'
         };
 
@@ -4018,114 +4161,34 @@
         // Milliseconds between share-control scans while the page mutates.
         const DEFAULT_SYNC_INTERVAL = 400;
 
+        // Fixed geometry for renderIcon: [tag, attributes] per shape.
         const ICONS = {
-        "share": [
-            [
-                "circle",
-                {
-                    "cx": "18",
-                    "cy": "5",
-                    "r": "3"
-                }
+            share: [
+                ['circle', { cx: '18', cy: '5', r: '3' }],
+                ['circle', { cx: '6', cy: '12', r: '3' }],
+                ['circle', { cx: '18', cy: '19', r: '3' }],
+                ['path', { d: 'm8.6 13.5 6.8 4M15.4 6.5l-6.8 4' }]
             ],
-            [
-                "circle",
-                {
-                    "cx": "6",
-                    "cy": "12",
-                    "r": "3"
-                }
+            link: [
+                ['path', { d: 'M10 13a5 5 0 0 0 7.1.1l2-2A5 5 0 0 0 12 4l-1.1 1.1' }],
+                ['path', { d: 'M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1' }]
             ],
-            [
-                "circle",
-                {
-                    "cx": "18",
-                    "cy": "19",
-                    "r": "3"
-                }
+            markdown: [
+                ['path', { d: 'M4 6h16v12H4z' }],
+                ['path', { d: 'M7 15V9l3 3 3-3v6' }],
+                ['path', { d: 'm16 12 2 2 2-2' }]
             ],
-            [
-                "path",
-                {
-                    "d": "m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"
-                }
+            pdf: [
+                ['path', { d: 'M6 2h9l5 5v15H6z' }],
+                ['path', { d: 'M14 2v6h6' }],
+                ['path', { d: 'M9 16h6M9 12h3' }]
+            ],
+            download: [
+                ['path', { d: 'M12 3v12' }],
+                ['path', { d: 'm7 11 5 5 5-5' }],
+                ['path', { d: 'M4 20h16' }]
             ]
-        ],
-        "link": [
-            [
-                "path",
-                {
-                    "d": "M10 13a5 5 0 0 0 7.1.1l2-2A5 5 0 0 0 12 4l-1.1 1.1"
-                }
-            ],
-            [
-                "path",
-                {
-                    "d": "M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"
-                }
-            ]
-        ],
-        "markdown": [
-            [
-                "path",
-                {
-                    "d": "M4 6h16v12H4z"
-                }
-            ],
-            [
-                "path",
-                {
-                    "d": "M7 15V9l3 3 3-3v6"
-                }
-            ],
-            [
-                "path",
-                {
-                    "d": "m16 12 2 2 2-2"
-                }
-            ]
-        ],
-        "pdf": [
-            [
-                "path",
-                {
-                    "d": "M6 2h9l5 5v15H6z"
-                }
-            ],
-            [
-                "path",
-                {
-                    "d": "M14 2v6h6"
-                }
-            ],
-            [
-                "path",
-                {
-                    "d": "M9 16h6M9 12h3"
-                }
-            ]
-        ],
-        "download": [
-            [
-                "path",
-                {
-                    "d": "M12 3v12"
-                }
-            ],
-            [
-                "path",
-                {
-                    "d": "m7 11 5 5 5-5"
-                }
-            ],
-            [
-                "path",
-                {
-                    "d": "M4 20h16"
-                }
-            ]
-        ]
-    };
+        };
 
         function normalizeText(element) {
             return String(element?.textContent || '').replace(/\s+/g, ' ').trim();
@@ -4382,9 +4445,11 @@
 
         // Message turns carry their own share controls — live ChatGPT renders
         // `share-prompt-link-turn-action-button` inside
-        // `section[data-testid="conversation-turn-N"]`. Those share the current
-        // message, not the conversation, and must keep their native behaviour.
-        const TURN_CONTAINER = '[data-message-author-role], [data-testid^="conversation-turn"], [data-testid^="conversation_turn"], article';
+        // `section[data-testid="conversation-turn-N"]`, and the 2026 transcript
+        // puts a "Share" action in every `li[data-message-role]`. Those share the
+        // current message, not the conversation, and must keep their native
+        // behaviour.
+        const TURN_CONTAINER = '[data-message-author-role], [data-message-role], [data-testid^="conversation-turn"], [data-testid^="conversation_turn"], article';
 
         // The data-testid hook works on every ChatGPT locale; the English text
         // match is a fallback for DOM revisions that drop the testid.

@@ -39,7 +39,7 @@
         hidden: 'Paused — bring this tab to the front',
         resumed: 'Resuming…',
         sweep: 'Reading conversation…',
-        metadata: 'Adding timestamps and attachments…',
+        metadata: 'Adding timestamps, attachments and any missed messages…',
         done: 'Export complete'
     };
 

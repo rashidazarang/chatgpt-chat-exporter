@@ -20,10 +20,12 @@ function fixture(provider, extra = '', turnsOverride) {
 }
 
 // Every request is intercepted: CI has no provider account, live chat, or token.
-async function mount(page, { provider = 'chatgpt', script = 'src/extraction-engine.js', extra = '', strict = false, payload, turns } = {}) {
+async function mount(page, { provider = 'chatgpt', script = 'src/extraction-engine.js', extra = '', strict = false, payload, turns, html } = {}) {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    const body = fixture(provider, extra, turns);
+    const body = html
+        ? html.replace('</body>', `${extra}<script src="/__bundle.js"></script></body>`)
+        : fixture(provider, extra, turns);
     const bundle = await fs.readFile(path.join(root, script), 'utf8');
     await page.route('**/*', async route => {
         const url = new URL(route.request().url());
@@ -166,3 +168,42 @@ for (const format of ['markdown', 'html', 'pdf']) {
         expect(result.complete).toBe(true);
     });
 }
+
+// ChatGPT's second transcript layout, as served live on 2026-09-25: turns are
+// li[data-message-role], prompts sit inside buttons, sources are buttons
+// carrying JSON. Nothing in it matched before v1.2.0.
+const transcript2026 = () => fs.readFile(path.join(root, 'test/fixtures/chatgpt-transcript-2026.html'), 'utf8');
+
+for (const format of ['markdown', 'html', 'pdf']) {
+    test(`chatgpt 2026 transcript ${format}: every turn, prompt and source is exported`, async ({ page }) => {
+        const errors = await mount(page, { html: await transcript2026() });
+        const result = await page.evaluate(async format => {
+            const output = await window.ChatExporterEngine.exportConversationFull({
+                provider: 'chatgpt', format, awaitStreaming: false, download: false, notify: false
+            });
+            return { count: output.conversation.messages.length, complete: output.conversation.complete, content: output.content };
+        }, format);
+        expect(result.count).toBe(6);
+        expect(result.complete).toBe(true);
+        for (const expected of ['Hi! How can I help?', 'keep this indent', 'print(', 'Official Node.js releases', 'References']) expect(result.content).toContain(expected);
+        expect(result.content).not.toContain('said:');
+        if (format === 'markdown') {
+            expect(result.content).toContain('### **You**\n\nHi\n');
+            expect(result.content).toContain('```python');
+            expect(result.content).toContain('$$a+b$$');
+        }
+        expect(errors).toEqual([]);
+    });
+}
+
+test('chatgpt 2026 transcript: the userscript launcher exports it under strict CSP', async ({ page }) => {
+    const errors = await mount(page, { html: await transcript2026(), script: 'chatgpt-markdown-exporter.user.js', strict: true });
+    await expect(page.locator('#chat-exporter-launcher')).toBeVisible();
+    await page.locator('#chat-exporter-launcher').click();
+    const downloading = page.waitForEvent('download');
+    await page.getByRole('menuitem', { name: 'Export to Markdown', exact: true }).click();
+    const text = await downloadedText(await downloading);
+    expect(text).toContain('### **You**\n\nHi\n');
+    expect(text).toContain('[Official Node.js releases](https://nodejs.org/en/about/previous-releases)');
+    expect(errors).toEqual([]);
+});
