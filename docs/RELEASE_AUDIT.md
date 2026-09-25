@@ -1,4 +1,24 @@
-# Release audit — 2026-09-19
+# Release audit — 2026-09-19, follow-up 2026-09-25
+
+## Follow-up — 2026-09-25
+
+A live check of the release candidate found that ChatGPT had begun serving a second transcript layout, on which the candidate exported nothing, and that Gemini answers were being flattened. Issue #43 (filed after the candidate) was traced on both layouts. All fixes below have regression tests; the live evidence is in [COMPATIBILITY.md](COMPATIBILITY.md#live-checks-2026-09-25-desktop-chrome).
+
+| Priority | Finding | Disposition / evidence |
+|---|---|---|
+| P0 | ChatGPT's second transcript layout (`ol[data-conversation-transcript] > li[data-message-role]`, atomic class names) matched no message selector: **0 messages** exported, and the userscript never showed its launcher. | Selector, role (`data-message-role`) and id (the `li`'s own `id`) support; `[data-message-attribution]`, action rows, copy controls and popovers stripped by data attribute; per-turn Share left native. Fixture from the live page; unit and browser tests in every format. |
+| P0 | The new layout puts every prompt inside `<button data-user-message-bubble>`, and UI cleanup removed every button — the root cause of #43 there, alongside the length thresholds the candidate had already removed. | Buttons that wrap message content (paragraphs, lists, tables, the prompt bubble) are unwrapped; media-only buttons keep their media; other buttons are removed as before. |
+| P1 | New-layout web sources are `<button data-assistant-sources-payload>` with JSON targets, not links: the References list (#27) silently vanished. | Payload targets feed References in document order, inline sources become links, the trailing "Sources" control is dropped, and non-HTTP(S) targets are rejected. |
+| P1 | Gemini styles its entire answer `white-space: pre-wrap`; the verbatim-prompt rule read the whole answer as typed text, flattening headings, lists and bold. | Only the top of a pre-wrap region with no rendered structure is verbatim; inherited pre-wrap in formatted content serializes normally. Verified live. |
+| P1 | HTML/PDF could not complete a long conversation (#41): after the sweep, the stored conversation was read within the sweep's leftover time and a 15-second metadata budget, and skipped entirely once the sweep ran out of time. | The post-sweep read gets the primary conversation budget (60 s per request, 120 s overall) and runs even after a timed-out sweep; a payload that accounts for every turn proves the export complete. |
+| P2 | Recovery was gated on ids the sweep *encountered*, so a turn that was on screen but never readable was neither exported nor recovered; with no DOM ids, positional matches could be recovered twice. | Recovery keys on payload entries not represented in the export; recovered ids clear the matching "never finished rendering" count. |
+| P2 | Gemini code fences took the `<code data-test-id="code-content">` element as their header, so the fence language became the first line of code (`printhello`). | Header candidates exclude the code itself; Gemini's `.code-block-decoration` is recognized. |
+| P2 | ChatGPT's display math in the new layout (`span.katex > math[display=block]`) exported inline. | Display markers are checked above and below the TeX-carrying node. |
+| P3 | Code extraction collapsed consecutive blank lines (two between Python definitions became one); a code fence after a list gained an extra blank line; temporary-chat tabs ("ChatGPT: …" tagline, "Google Gemini") became export titles. | Code keeps every blank line; one blank line before a fence; those tab titles fall back to the provider default. |
+| P3 | PR #38 review items: repeated report JSON parsing, an iframe probe on one title string, duplicated auth escalation, and no test for a missing task stream. | Parsed and rendered reports are memoized per message; the probe also matches `src`; JSON and stream reads share one escalation routine; a 404 stream is tested. |
+| P3 | Bookmarklets are ~107,000 characters; Firefox rejects bookmark URLs over 65,536 (`DB_URL_LENGTH_MAX`). | Documented on the install page, README and compatibility guide. |
+
+## Scope and baseline (2026-09-19)
 
 ## Scope and baseline
 
@@ -51,8 +71,9 @@ This is a source-backed release audit, not a guarantee that no undiscovered bugs
 | [#33 — Images are missing ](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/33) | closed | Existing payload/DOM image coverage retained; #40 hardens preview-button cleanup. |
 | [#34 — Greasy Fork userscript is outdated/broken compared with GitHub version ](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/34) | closed | Already addressed in v1.1.0. Verify both GreasyFork channels after release; no external listing was modified during this audit. |
 | [#39 — Feature Request: Make browser console version into bookmarklet ](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/39) | open | Implemented: four generated self-contained bookmarklets and installer. CSP/URL-size limitations are documented; cross-browser bookmark installation remains a release check. |
-| [#40 — Images are not included in temporary chat ](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/40) | open | Implemented for the reproduced clickable-preview DOM shape. Image-only/short-turn tests pass; original temporary-chat reproduction remains a live check. |
-| [#41 — Long conversations can exceed the 5s conversation-fetch timeout and unnecessarily fall back to incomplete DOM export ](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/41) | open | Implemented: separate primary-read timeout/budget; full-body deadlines. Reproduce the original 1,243-message case before release. |
+| [#40 — Images are not included in temporary chat ](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/40) | open | Implemented for the reproduced clickable-preview DOM shape, and content-wrapping buttons are now unwrapped rather than removed. Image-only/short-turn tests pass; a signed-in temporary chat with uploaded images remains a live check (uploads need an account). |
+| [#41 — Long conversations can exceed the 5s conversation-fetch timeout and unnecessarily fall back to incomplete DOM export ](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/41) | open | Implemented: separate primary-read timeout/budget; full-body deadlines. 2026-09-25: HTML/PDF also read the stored conversation with that budget after a sweep, including a timed-out one. A signed-in reproduction of the 1,243-message case is still pending. |
+| [#43 — Temporary Chat: Short messages are skipped](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/43) | open (filed 2026-09-22) | Fixed on both layouts: the length thresholds (already removed in the candidate) and, on the new layout, the prompt's own button being stripped. Verified live with a one-word prompt on a chat with no stored copy. |
 
 ## Pull request inventory
 
@@ -71,7 +92,7 @@ This is a source-backed release audit, not a guarantee that no undiscovered bugs
 | [#35 — Fix whitespace loss from non-citation references](https://github.com/rashidazarang/chatgpt-chat-exporter/pull/35) | closed | Closed rather than merged; maintainer comments and master source confirm the change was landed for v1.1.0. |
 | [#36 — Use the ChatGPT tab title for exports](https://github.com/rashidazarang/chatgpt-chat-exporter/pull/36) | closed | Closed rather than merged; maintainer comments and master source confirm the change was landed for v1.1.0. |
 | [#37 — Fold reasoning progress into its final answer](https://github.com/rashidazarang/chatgpt-chat-exporter/pull/37) | closed | Closed rather than merged; maintainer comments and master source confirm the change was landed for v1.1.0. |
-| [#38 — Export app-backed Deep Research reports](https://github.com/rashidazarang/chatgpt-chat-exporter/pull/38) | open | Contribution incorporated and credited to @zvictor, then hardened. Original PR remains open; do not merge the same changes twice. |
+| [#38 — Export app-backed Deep Research reports](https://github.com/rashidazarang/chatgpt-chat-exporter/pull/38) | open | Contribution incorporated and credited to @zvictor, then hardened; its review items are addressed (see the follow-up table). Do not merge the same changes twice. |
 
 ## Discussions and releases
 
@@ -92,15 +113,24 @@ There were 28 release records. Latest published release: v1.1.0, 2026-08-22. It 
 - Browser CI: 66 checks across Chromium, Firefox, and WebKit cover shipped console bundles, full bookmarklet URLs, both userscripts under strict CSP, real downloads, rendered media, rich ChatGPT/Gemini extraction, 1,243 ordered payload turns, and app-backed research. Current-head results are recorded in the PR. See [COMPATIBILITY.md](COMPATIBILITY.md) for scope and limitations.
 - Local website target scan: two missing image URLs removed; all remaining local links/assets resolve. Generated artifacts are verified byte-for-byte by npm test.
 
-## Remaining release gates
+## Validation — 2026-09-25
 
-- [ ] Review and merge the release PR after all CI jobs pass. Decide required status checks in the active master ruleset; no remote policy was changed during this work.
-- [ ] Reproduce #41 on a stored conversation with approximately 1,243 messages and verify beginning, middle, end, turn order, timestamps, and counts.
+- **168 unit tests** pass (153 from the candidate plus 15 for the follow-up findings); 13 of the new tests fail against the candidate's engine, the other two pin behaviour it already had.
+- **78 browser checks** pass locally in Chromium, Firefox and WebKit (26 each), including the 2026 transcript in every format and the userscript launcher exporting it under strict CSP.
+- Live: see [COMPATIBILITY.md](COMPATIBILITY.md#live-checks-2026-09-25-desktop-chrome).
+
+## Remaining live checks
+
+These need a signed-in ChatGPT account or other browsers, which the 2026-09-25 session did not have.
+
+- [ ] Signed in, confirm which transcript layout ChatGPT serves, and on the 2026 layout that each `li`'s `id` equals the stored message id — timestamps, recovery and completeness checks match on it (tests assume it; a mismatch degrades to positional matching).
+- [ ] Reproduce #41 on a stored conversation with approximately 1,243 messages and verify beginning, middle, end, turn order, timestamps, and counts, in Markdown and in HTML/PDF.
 - [ ] Reproduce #40 on an actual temporary conversation with uploaded and generated images, including blob-backed previews, in Chrome, Firefox, and Safari. Unavailable bytes must remain a clear placeholder.
+- [ ] Check that generated images in a stored conversation reach Markdown exports: that path reads the stored conversation, where an image generation result may be a `tool` record, which the payload reader skips.
 - [ ] Verify current app-backed Deep Research in Markdown, HTML and PDF, including an ongoing/unavailable task and a report in the middle of a conversation.
-- [ ] Install both userscript entry points and bookmarklets in target browsers; verify userscript-manager installation/update, current enterprise menus, and actual bookmark URL storage limits. CI exercises no-Share fallback, CSP/Trusted Types, and full bookmarklet URL execution.
-- [ ] Verify a current Gemini conversation with math, code and a long scroller. Historical live selectors are not sufficient evidence.
-- [ ] Publish the reviewed commit’s release artifacts/checksums, then verify GitHub and GreasyFork versions. Production publication remains pending final compatibility validation.
+- [ ] Install both userscript entry points and bookmarklets in target browsers; verify userscript-manager installation/update and current enterprise menus. CI exercises no-Share fallback, CSP/Trusted Types, and full bookmarklet URL execution; Firefox cannot store the bookmarklets (65,536-character limit).
+- [ ] Verify a long Gemini conversation's scroller. Math, code, tables and lists were verified live on 2026-09-25 in a temporary chat.
+- [ ] After publishing, verify the GitHub and GreasyFork versions and the hosted bookmarklet page.
 
 ## Follow-up roadmap and known limits
 

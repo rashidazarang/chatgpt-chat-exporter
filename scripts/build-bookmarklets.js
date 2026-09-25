@@ -12,6 +12,7 @@ const entries = [
 ];
 const escape = text => text.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const links = [];
+const sizes = [];
 function output(relative, content) {
     const file = path.join(root, relative);
     if (check) {
@@ -31,6 +32,7 @@ for (const [id, label, script] of entries) {
     // void guarantees a non-string completion so the bookmark never replaces
     // the conversation page. Embed the full program: no remote loader/eval.
     const uri = `javascript:${encodeURIComponent(`void(()=>{${code}})()`)}`;
+    sizes.push(uri.length);
     output(`public/bookmarklets/${id}.txt`, `${uri}\n`);
     links.push(`<li><a href="${escape(uri)}">${label}</a> <a href="${id}.txt">Copy URL from text file</a></li>`);
 }
@@ -43,7 +45,7 @@ output('public/bookmarklets/index.html', `<!doctype html>
 <p>Drag an export link below to your bookmarks bar. Open a conversation on the matching provider and click the saved bookmark.</p>
 <ul>${links.join('\n')}</ul>
 <p>For manual installation, open the text file and paste its complete contents into a new bookmark’s URL field.</p>
-<p>Each bookmark contains the exporter. It fetches no remote executable code and does not update automatically. Replace your bookmark to upgrade.</p>
-<p>Some browsers or site content security policies block JavaScript bookmarks or truncate long URLs. If clicking does nothing, use the userscript or browser console method. This page is for installation; clicking an export link here will not export a chat.</p>
+<p>Each bookmark contains the whole exporter, about ${Math.round(Math.max(...sizes) / 1000)},000 characters. It fetches no remote executable code and does not update automatically. Replace your bookmark to upgrade.</p>
+<p>Chromium-based browsers (Chrome, Edge, Brave, Arc) store bookmarks this long. Firefox does not: it rejects bookmark URLs longer than 65,536 characters. If your browser refuses the bookmark or clicking it does nothing, use the userscript or browser console method. This page is for installation; clicking an export link here will not export a chat.</p>
 <p><a href="https://github.com/rashidazarang/chatgpt-chat-exporter#-how-to-use">Userscript and console instructions</a></p>
 </main></body></html>\n`);

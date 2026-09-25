@@ -45,6 +45,10 @@ virtualizer, no hidden-tab stall.
 ### Engine design
 
 - **Provider adapters** (`PROVIDERS`): per-platform selector cascades for messages, content roots, and titles, tried in priority order (data attributes → ARIA/custom elements → semantic HTML → class heuristics)
+- **ChatGPT serves two transcript generations at once** (verified live 2026-09-25): role-tagged `div[data-message-author-role]` turns, and an `ol[data-conversation-transcript]` of `li[data-message-role]` items whose class names are atomic (meaningless). Both are one cascade entry, so neither reads as drift in the doctor. On the second, the message id is the `li`'s own `id` (`providerMessageId`), and chrome is only recognizable by data attributes — `[data-message-attribution]` ("You said:"), `[data-message-actions]`, `[data-message-content-controls]`, `[popover]`. Never strip it by atomic class
+- **A button can hold the message** (`removeUiElements`): the second generation wraps every prompt in `<button data-user-message-bubble>`, and uploaded images are clickable previews. Stripping every button deleted "Hi" outright (issue #43) and images (issue #40). Buttons that wrap content (paragraphs, lists, tables, the bubble) are unwrapped; media-only buttons keep their media; everything else is removed
+- **Sources can be buttons, not links** (`sourceReferenceItems`, `processSourceReferences`): the second generation carries each source's targets as JSON in `data-assistant-sources-payload`. They feed the References list in document order and become inline links; the trailing `sources_footnote` control is dropped. Only HTTP(S) targets survive
+- **Pre-wrap is evidence of typed text only at the top of a region with no rendered structure** (`isVerbatimTextElement`): Gemini styles its whole answer `white-space: pre-wrap`, and reading that verbatim flattened every heading, list and bold run (verified live 2026-09-25). Descendants inherit pre-wrap, so a span beside a `<b>` must serialize normally too
 - **A turn is a provider concept, not a ChatGPT one** (`turnSelector`, `messageScope`): the wrapper that owns a message *and whatever renders beside it* differs per platform, so each provider declares its own and `messageScope` takes the provider. It must wrap **exactly one message**. Gemini's own `div.conversation-container` wraps a *pair* — one `user-query` plus one `model-response` — and adopting it would hand both to `selectContentRoot`, which ranks candidates by text length: the pair wins, every answer gets prefixed with its own question, and both messages collapse to one `messageKey` so the second is dropped as already seen. Gemini's turn *is* its message element
 - **The title cascade is a liability on Gemini, not an asset** (verified live 2026-08-17): `document.title` is the real source on both providers, and Gemini stamps `" - Google Gemini"` on it — hence `documentTitleSuffix`. Gemini also mounts its **model picker** under a class matching `[class*="conversation-title"]`, *lazily*: a first probe saw nothing and v0.9.4 shipped believing the cascade was inert, then the selector won and exported a conversation titled **"Flash-Lite"**. That selector is now gone from Gemini and `preferDocumentTitle` puts the tab ahead of any guess. Two rules follow: **never loosen a title selector** (`[class*="title"]` also matches Gemini's sidebar — "Notebooks"), and **never conclude a selector is inert from one point-in-time probe** — page chrome mounts late. `filenameFor` takes the already-cleaned `conversation.title`, never `doc.title`
 - **`diagnose()` / `selector-doctor.js`**: a paste-into-the-console health check generated from this engine, so it reports on the selectors that actually ship. It flags the dangerous case — a cascade still working, but only on a late fallback entry, which is what silent drift looks like one release before it breaks
@@ -60,10 +64,13 @@ virtualizer, no hidden-tab stall.
 - **Never remove a visual duplicate that is the only copy**: de-duplication is only safe when an accessible representation survives it. v0.11.0 removed `.katex-html` whenever no TeX was found, which on Gemini would have deleted every formula in the export instead of de-duplicating anything
 - **Every math renderer hides its TeX somewhere else, and every one emits a visual duplicate** (`processMath`, `texFromNode`): look for `annotation`/`annotation-xml` with a tex encoding, then `data-latex`/`data-tex`/`data-formula`, then a MathJax v2 `script[type^="math/tex"]`. When no source exists, **delete the visual copy** (`.katex-html`, `aria-hidden` inside `mjx-container`) — serializing both is how a formula becomes `f(x)f(x)`. `removeUiElements` must not strip `script[type^="math/tex"]`: it runs first, and stripping it left the MathJax v2 branch as dead code for as long as it existed
 - **Regenerating or editing a turn leaves the old one in the mapping as a sibling branch** (`payloadVariantMessages`): `activePayloadMessages` walks only the branch on screen, so those versions are invisible to the export. `includeVariants: true` appends them, labelled, next to the turn that replaced them. **Off by default** — silently adding alternates would change the shape of every existing user's file. When variants exist the export says how many and how to get them
+- **Code keeps every newline its text holds** (`collectCodeText`): collapsing runs of blank lines turned the two between Python definitions into one. Line elements (a `div` per line) end a line exactly once. A code header is never the code itself — Gemini marks its `<code>` `data-test-id="code-content"`, and taking that as the header made `print("hello")` the fence language; its real header is `.code-block-decoration`
+- **Display math can be marked on either side of the TeX** (`isDisplayMath`): ChatGPT's second generation nests native MathML in `span.katex`, so the TeX-carrying root is the span while `display="block"` sits on the `math` below it and `[data-assistant-math-rendered="display"]` above
 - **Media is serialized before links, so link text already contains our own markdown** (`markdownLink`): escaping it produced `[!\[Image\](data:image/png;base64,…)Label](url)` — not a link, a wall of base64 shown as text. ChatGPT's inline citations are exactly this shape (favicon + label in one `<a>`). Take the label and drop the media; keep the image, unescaped and properly nested, only when it is all the link has. HTML is unaffected — its media are opaque placeholders, so `<a><img></a>` already nests correctly
 - **Screen-reader-only text is chrome, not content** (`removeUiElements`): ChatGPT labels every turn with `<h4 class="sr-only select-none">ChatGPT said:</h4>` — 1x1px, positioned off-screen, invisible to a reader — and it reached *every* exported message as a redundant `#### ChatGPT said:` heading. Strip by **class** (`sr-only`, `visually-hidden`, `cdk-visually-hidden`), never by text: a message whose own heading ends in "said:" is legitimate content
 - **Finish the sweep at the bottom, however it ended**: the loop can `break` on stalls at any scroll position, and the final `capture()` used to run wherever that was. A real conversation stalled at 85% and shipped without its last two messages — the ones a reader notices first. The sweep now scrolls to the bottom before its last capture
-- **The payload decides order and fills holes** (`alignWithPayload`): the sweep orders by `rect.top + scrollTop` measured *at capture time*, so a virtualizer that changes heights between captures can make two neighbours compare wrongly — a real export put an answer ahead of its own question. Where the payload chain covers every captured message it decides the order, and messages the sweep never reached are rendered from the payload rather than reported as a hole. Two rules: recovery is gated on ids the sweep **never encountered** (duplicate DOM representations of the same id must not cause duplicate recovery), and reordering only applies when the payload accounts for **every** message, never half-rewriting an order it cannot explain
+- **The payload decides order and fills holes** (`alignWithPayload`): the sweep orders by `rect.top + scrollTop` measured *at capture time*, so a virtualizer that changes heights between captures can make two neighbours compare wrongly — a real export put an answer ahead of its own question. Where the payload chain covers every captured message it decides the order, and messages missing from the export are rendered from the payload rather than reported as a hole. Two rules: recovery is gated on payload entries **not represented in the export** — a turn the sweep saw but could never read is as absent as one it never reached, and duplicate DOM representations match one entry so they recover nothing — and reordering only applies when the payload accounts for **every** message, never half-rewriting an order it cannot explain
+- **The stored conversation is read after a sweep with the primary budget** (`enrichChatGptConversation`): it is what proves an HTML/PDF export complete and fills its holes, and a long conversation is megabytes (issue #41). It runs even when the sweep ran out of `maxDuration`, and a payload that accounts for every turn makes the export complete regardless; only the attachments/reports that follow keep the short metadata budget
 - **Ground truth beats a heuristic for completeness** (`expectedMessages` / `unreachedMessages`): a sweep that stops early captures every turn it *saw* cleanly, so `missedMessages` reads zero and the export claims to be complete. The ChatGPT payload knows the real message count. Compare the **ids the sweep encountered** against the payload's, never the counts — duplicate DOM representations and unsupported empty turns make count-only comparisons unreliable
 - **Warnings and notes are different lists** (`diagnose`): anything that fires on a healthy page belongs in `notes`. Two warnings had to be demoted after they fired on correct behaviour — a title cascade missing on a provider that prefers the tab, and a virtualized conversation having more messages than are currently mounted. A warning list that cries wolf stops being read, which defeats the point of having one
 - **An incomplete sweep must announce itself** (`conversation.complete` / `missedMessages`): a short file that looks whole is the worst outcome. The sweep also runs against a wall-clock deadline (`maxDuration`) and restores scroll position in a `finally`
@@ -101,6 +108,7 @@ virtualizer, no hidden-tab stall.
 - **Never depend on a ChatGPT affordance for the only entry point.** Native menu integration is an enhancement; the floating launcher (`syncLauncher`) is the guarantee — enterprise policies can remove Share entirely (issue #31). The launcher mounts only when no share control is visible *and* the page has messages, and hides itself when one appears
 - **No HTML injection sinks.** ChatGPT deployments can enforce Trusted Types, which makes `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write` throw. Build nodes with DOM APIs; build fixed SVG geometry with `createElementNS` (`renderIcon`); `DOMParser.parseFromString` is also a Trusted Types sink. A test runs the built userscript with every sink throwing
 - **Only extend menus that already offer a whole-conversation action** (`findMenuTemplate` requires a Share item). Sidebar per-conversation menus reach the same code and would export the *open* conversation, not theirs
+- **Per-turn Share controls stay native** (`TURN_CONTAINER`): both transcript generations put a Share action on every message (`share-prompt-link-turn-action-button`, and an icon button in each `li[data-message-role]`); it shares that message, not the conversation
 - **Watch for observer feedback loops**: writing an unchanged attribute still queues a mutation record, so style updates are diffed first (`setLauncherVisible`)
 - Cloned native items are stripped of `id`/`data-testid`/`data-test-id` (including descendants) so ChatGPT's own queries never match our copies
 - `window.ChatExporter` (`markdown()`, `pdf()`, `showLauncher()`) is the documented console fallback for bug reports
@@ -115,7 +123,7 @@ npx playwright install --with-deps  # install browser test engines
 npm run test:browser                # Chromium, Firefox, WebKit
 ```
 
-Tests live in `test/exporters.test.js` with synthetic DOM fixtures (`test/fixtures/`) mirroring live-observed ChatGPT/Gemini shapes. Every bug fix gets a regression test. Note: jsdom lacks `innerText`; the engine intentionally avoids relying on it (it degrades to `textContent` on detached clones in real browsers too).
+Tests live in `test/` — `exporters.test.js` (engine, UI and runners), `hardening.test.js` (network, media and payload limits), `provider-dom.test.js` (live-observed page shapes) — with synthetic DOM fixtures (`test/fixtures/`) mirroring live-observed ChatGPT/Gemini shapes, plus the browser matrix in `browser-tests/`. Every bug fix gets a regression test. Note: jsdom lacks `innerText`; the engine intentionally avoids relying on it (it degrades to `textContent` on detached clones in real browsers too).
 
 ### Manual testing
 
@@ -152,6 +160,37 @@ before trusting any of it — but do not assume a fixture reflects these:
   load the exporter; for ad-hoc testing, CDP-evaluated *synchronous* `eval`
   works but anything after an `await` is subject to page CSP
 
+### Live ChatGPT DOM notes, second generation (observed 2026-09-25, logged out, desktop Chrome)
+
+Seen on a logged-out chat (no stored copy, like a temporary chat); which
+signed-in accounts get it is unverified. `test/fixtures/chatgpt-transcript-2026.html`
+mirrors it:
+
+- `ol[aria-label="Conversation"][data-conversation-transcript]` >
+  `li[data-message-role="user"|"assistant"][id="<message uuid>"]`; assistant
+  items also carry `data-message-complete` once finished
+- Every `li` opens with `h4[data-message-attribution]` ("You said:"),
+  visually hidden by atomic CSS, not by an `sr-only` class
+- Prompts: `button[data-user-message-bubble] > p[data-user-message-copy]`, the
+  `p` computing `white-space: pre-wrap`; the answer body
+  (`div[data-assistant-markdown]`) is `white-space: normal`
+- Code: `pre > code.language-<lang>[data-assistant-syntax-highlighted]` with a
+  span per line and `\n` text nodes between them, plus
+  `span[data-message-content-controls]` holding the copy button
+- Math: `span[data-assistant-math-rendered="inline"|"display"] > span.katex >
+  math` with an `application/x-tex` annotation; display math has
+  `display="block"` on the `math`
+- Sources: `button[data-assistant-sources-payload]` with a JSON array of
+  `{attribution, title, url}`; `data-content-reference-type` is
+  `grouped_webpages` on the enclosing span, `url` for inline links, and
+  `sources_footnote` for the trailing "Sources" control
+- The only `data-testid`s are app shells; the scroll container is
+  `div[data-swipable-detail-body]` (`overflow-y: auto`)
+- The logged-out tab title is the site tagline "ChatGPT: Chat, Work, Create &
+  Code with AI"
+- `document.hidden` is true whenever the window is not visible (for example a
+  background automation window), so the sweep waits for it by design
+
 ### Live Gemini DOM notes (observed 2026-08-17, desktop Chrome)
 
 Verified against a real signed-in conversation. Re-check before trusting it:
@@ -180,6 +219,12 @@ Verified against a real signed-in conversation. Re-check before trusting it:
   `[class*="conversation-title"]` and **mounts after first paint** — it is page
   chrome, not the conversation title
 - The only `h1` is `h1.cdk-visually-hidden` reading "Conversation with Gemini"
+- Re-checked 2026-09-25 in a temporary chat (tab title just "Google Gemini"):
+  the answer's `div.markdown.markdown-main-panel` computes `white-space:
+  pre-wrap`, inherited by every descendant; paragraphs are `p > span` with
+  `<b>` as a sibling of the spans; code is `code-block` >
+  `.code-block-decoration` ("Python") + `pre > code[data-test-id="code-content"]`
+  with no `language` attribute; prompts are `.query-text > p.query-text-line`
 
 ### Selector updates
 
@@ -204,9 +249,9 @@ When ChatGPT/Gemini UI changes, update the provider's selector list in this prio
 
 ## v1.2.0 release hardening
 
-- Primary ChatGPT payload reads have a 60-second request timeout and 120-second retrieval budget; optional metadata/report/image enrichment retains separate 5-second/15-second defaults. Legacy explicit metadata timeout overrides still work. `fetchWithTimeout` consumes the response body inside the deadline and races a timeout even if fetch ignores abort.
+- Primary ChatGPT payload reads — Markdown's payload-first read and the read after an HTML/PDF sweep — have a 60-second request timeout and 120-second retrieval budget; optional metadata/report/image enrichment retains separate 5-second/15-second defaults. Legacy explicit metadata timeout overrides still work. `fetchWithTimeout` consumes the response body inside the deadline and races a timeout even if fetch ignores abort.
 - Authenticated requests refuse redirects. Signed HTTPS image downloads omit credentials and referrers. Streamed image bytes are capped while reading.
-- Preserve media wrapped in preview buttons before stripping UI. Non-empty short turns are valid content.
+- Unwrap buttons that hold message content before stripping UI. Non-empty short turns are valid content.
 - Completed Deep Research reports survive a following assistant summary; missing reports mark the export incomplete. Incomplete notices persist inside saved files.
 - `scripts/build-bookmarklets.js` generates `public/bookmarklets/` from the console bundles with pinned Terser. Do not edit the generated page or URL text files directly.
 - `npm run release:prepare` prepares checksummed artifacts in ignored `dist/`; it does not publish. Read `docs/RELEASE_AUDIT.md` for outstanding live release checks.

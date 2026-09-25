@@ -85,14 +85,14 @@ Use `gemini-exporter-markdown.js` from a conversation at `gemini.google.com/app`
 - Check console for error messages
 
 ### Duplicate messages?
-- The exporters now include better duplicate detection
-- Uses content hashing to identify and skip duplicates
+- Duplicate copies of one message on the page collapse by identity: ChatGPT's message id, its numbered turn, or its position in the conversation
+- Repeated identical turns — two "OK" replies, say — are separate messages and are kept
 
 ## Bookmarklets and large conversations
 
-Open `public/bookmarklets/index.html` in a browser from a downloaded repository (or the hosted site’s `/bookmarklets/` page once deployed). Drag a format link to the bookmarks bar. The entire program is embedded, with no remote code loader; replace the bookmark to upgrade. Browser URL limits and site CSP may prevent execution.
+Open the hosted [bookmarklet page](https://chatgpt-chat-exporter.vercel.app/bookmarklets) (or `public/bookmarklets/index.html` from a downloaded repository) and drag a format link to the bookmarks bar. The entire program is embedded, with no remote code loader; replace the bookmark to upgrade. Each one is over 100,000 characters: Chromium-based browsers store that, while Firefox rejects bookmark URLs longer than 65,536 characters — use the userscript or console there.
 
-For ChatGPT Markdown, `conversationFetchTimeout` defaults to 60000 ms and `conversationMaxDuration` to 120000 ms. Optional enrichment uses a separate 5000 ms request timeout and 15000 ms budget. Existing explicit `metadataFetchTimeout` / `metadataMaxDuration` overrides still apply to the primary read unless the new conversation options are set. A supplied `metadataDeadline` remains an outer bound. HTML/PDF remain DOM-first, with bounded optional recovery from the payload.
+For ChatGPT Markdown, `conversationFetchTimeout` defaults to 60000 ms and `conversationMaxDuration` to 120000 ms. Optional enrichment uses a separate 5000 ms request timeout and 15000 ms budget. Existing explicit `metadataFetchTimeout` / `metadataMaxDuration` overrides still apply to the primary read unless the new conversation options are set. A supplied `metadataDeadline` remains an outer bound. HTML/PDF remain DOM-first: after scrolling, they read the stored conversation with the same primary budget, check the capture against it, and render any turn the sweep missed from it — including after the sweep ran out of `maxDuration`. Temporary chats have no stored copy, so there the page is the only source.
 
 Completed Deep Research reports can be recovered from app metadata and task streams. An unavailable report makes the export incomplete and leaves a visible warning in the saved file. Recovered HTML/PDF text is escaped; it preserves content and sources, not the original iframe’s rendered layout.
 
