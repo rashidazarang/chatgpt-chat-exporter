@@ -17,7 +17,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '1.2.1';
+        const ENGINE_VERSION = '1.2.2';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -216,8 +216,11 @@
             return typeof clock?.now === 'function' ? clock.now() : Date.now();
         }
 
+        // The reader's calendar day, not UTC's: an evening export in the Americas
+        // was dated tomorrow, in its header and its file name.
         function formatDate(date = new Date()) {
-            return date.toISOString().split('T')[0];
+            const pad = value => String(value).padStart(2, '0');
+            return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
         }
 
         function sanitizeHtml(value) {
@@ -1700,11 +1703,79 @@
             return entries.reverse().filter(entry => entry.message);
         }
 
+        // ChatGPT keeps a reply that was stopped, failed or abandoned in its
+        // record for good — as in_progress, or finished_partial_completion — and
+        // only finished_successfully means a reply ran to its end.
+        const STREAMING_STATUS = /^(?:in_progress|pending|waiting)$/;
+
+        function payloadStatus(entry) {
+            return String(payloadRenderableMessage(entry?.message)?.status || '');
+        }
+
+        function isInterruptedPayloadMessage(entry) {
+            const status = payloadStatus(entry);
+            return Boolean(status) && status !== 'finished_successfully' && entry?.message?.author?.role !== 'user';
+        }
+
+        // Only the end of a conversation can still be being written. An
+        // interrupted reply earlier on is part of the record, not a gap in the
+        // export — a real 93-message export was flagged incomplete for a reply
+        // stopped two hours before its last turn. The final turn is judged by its
+        // answer: a stale tool call beside a finished answer is not streaming.
         function hasUnfinishedPayloadMessages(entries) {
-            return entries.some(entry => {
-                const message = payloadRenderableMessage(entry.message);
-                return /^(?:in_progress|pending|waiting|finished_partial|finished_failed)$/.test(message?.status || '');
+            let lastUser = -1;
+            entries.forEach((entry, index) => {
+                if (payloadMessageRole(entry.message) === 'user' && isMainPayloadMessage(entry, true)) lastUser = index;
             });
+            const tail = entries.slice(lastUser + 1);
+            const answers = mainPayloadMessages(tail, true);
+            const streaming = entry => STREAMING_STATUS.test(payloadStatus(entry));
+            return answers.length > 0 ? streaming(answers[answers.length - 1]) : tail.some(streaming);
+        }
+
+        const INTERRUPTED_NOTE = 'This response was not finished in ChatGPT; it ends here.';
+        const UNSAVED_REPLY_NOTE = 'No reply: this response was interrupted in ChatGPT before any text was saved.';
+
+        // Replies ChatGPT never finished, found between two prompts. One with no
+        // saved text rendered nothing, so the export read as two prompts in a
+        // row; each is keyed by the prompt it answered.
+        function interruptedWithoutReply(entries, mainEntries) {
+            const main = new Set(mainEntries);
+            const found = new Map();
+            let prompt = null;
+            let answered = false;
+            let interrupted = null;
+            entries.forEach(entry => {
+                if (main.has(entry) && payloadMessageRole(entry.message, true) === 'user') {
+                    if (prompt && !answered && interrupted) found.set(prompt, interrupted);
+                    prompt = entry;
+                    answered = false;
+                    interrupted = null;
+                } else if (main.has(entry)) {
+                    answered = true;
+                } else if (prompt && !interrupted && isInterruptedPayloadMessage(entry)) {
+                    interrupted = entry;
+                }
+            });
+            return found;
+        }
+
+        // A reply cut off inside a code block leaves its fence open, and every
+        // later message in the export would render as code. Close it where the
+        // reply ends, as ChatGPT's own renderer does.
+        function closeOpenFence(markdown) {
+            let open = null;
+            String(markdown).split('\n').forEach(line => {
+                const fence = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+                if (!fence) return;
+                if (!open) {
+                    // A backtick fence's info string cannot contain a backtick.
+                    if (fence[1][0] !== '`' || !fence[2].includes('`')) open = fence[1];
+                } else if (fence[1][0] === open[0] && fence[1].length >= open.length && !fence[2].trim()) {
+                    open = null;
+                }
+            });
+            return open ? `${markdown}\n${open}` : markdown;
         }
 
         // Regenerating an answer, or editing a prompt, leaves the previous version
@@ -2587,7 +2658,7 @@
 
             const isUser = payloadMessageRole(message) === 'user';
             const content = !text ? '' : (format === 'markdown'
-                ? text
+                ? closeOpenFence(text)
                 : text.split(/\n{2,}/).map(block => `<p>${sanitizeHtml(block).replace(/\n/g, '<br>')}</p>`).join(''));
 
             const exported = {
@@ -2754,6 +2825,7 @@
             const images = rendered.reduce((count, item) =>
                 count + item.descriptors.filter(descriptor => descriptor.kind === 'image').length, 0);
             const exportedEntries = new Map();
+            const unsavedReplies = interruptedWithoutReply(entries, mainEntries);
             const imageOptions = { ...options, metadataDeadline: attachmentDeadline(doc, options, images, options.outerDeadline) };
             let imagesRead = 0;
 
@@ -2802,11 +2874,23 @@
                     message.content = `${message.content}${renderReferences(citations, format)}`.trim();
                 }
 
+                if (message.senderType === 'assistant' && isInterruptedPayloadMessage(entry)) {
+                    message.content = `${message.content}\n\n*${INTERRUPTED_NOTE}*`.trim();
+                }
+
                 // A turn with neither text nor media has nothing to export.
                 if (!normalizeWhitespace(message.content)) continue;
                 message.index = messages.length;
                 messages.push(message);
                 exportedEntries.set(message, entry);
+
+                const unsaved = unsavedReplies.get(entry);
+                if (unsaved) {
+                    const standIn = payloadMessageToExport(unsaved, provider.assistantName, format, doc, { allowEmpty: true });
+                    standIn.content = `*${UNSAVED_REPLY_NOTE}*`;
+                    standIn.index = messages.length;
+                    messages.push(standIn);
+                }
             }
 
             if (messages.length === 0) return null;
@@ -2814,7 +2898,7 @@
             const conversation = buildConversation(doc, provider, options, messages);
             conversation.source = 'payload';
             conversation.expectedMessages = mainEntries.length;
-            conversation.unreachedMessages = Math.max(0, mainEntries.length - messages.length);
+            conversation.unreachedMessages = Math.max(0, mainEntries.length - exportedEntries.size);
             conversation.unresolvedReports = entries.unresolvedReports || 0;
             conversation.missedMessages = 0;
             conversation.recoveredMessages = 0;
@@ -2976,6 +3060,11 @@
                     const label = `[File: ${name}]`;
                     const html = `<span class="card-placeholder">${sanitizeHtml(label)}</span>`;
                     appendMessageEnrichment(message, format === 'markdown' ? label : null, html, name);
+                }
+
+                if (message.senderType === 'assistant' && isInterruptedPayloadMessage(entry)) {
+                    appendMessageEnrichment(message, format === 'markdown' ? `*${INTERRUPTED_NOTE}*` : null,
+                        `<p><em>${sanitizeHtml(INTERRUPTED_NOTE)}</em></p>`, INTERRUPTED_NOTE);
                 }
 
                 const nativeId = String(nativeMessage.id || entry.nodeId);

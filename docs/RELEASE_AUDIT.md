@@ -30,6 +30,16 @@ A real Markdown export (142 messages: 80 from the user, 62 from ChatGPT; 3 MB), 
 | P2 | "The output of this plugin was redacted." and "This code was redacted." shown as reasoning. | Messages addressed to a tool (`recipient` other than `all`) were folded into progress. They are excluded. |
 | P2 | (Latent, found while fixing) `file-service://file-…` pointers produced a bogus `[Image: file-service]`, `sediment://` pointers produced no id, and images sharing a name kept only the first. `includeVariants` paired variants by position, so a turn that rendered nothing shifted them. | Ids are read after the pointer scheme; images are keyed by file id; variants are paired by identity. |
 
+## Export audit — v1.2.1, 2026-09-25
+
+A second real Markdown export (93 messages, 18 MB), made with v1.2.1, confirmed that release's fixes live: 6 generated images exported and all 16 images embedded with no placeholders. It was nevertheless marked "may be incomplete", and showed three more defects, fixed in v1.2.2 with tests in `test/stored-record.test.js`.
+
+| Priority | Witnessed | Cause and disposition |
+|---|---|---|
+| P1 | "This export may be incomplete. A response was unfinished" on a finished conversation. | Any record with an unfinished status anywhere flagged the export; ChatGPT keeps interrupted replies as `in_progress` for good, and the pattern did not even know `finished_partial_completion`. Only the final turn's answer can still be streaming now. |
+| P1 | A reply interrupted before any text was saved was dropped: two prompts in a row. A reply stopped inside a ```` ```text ```` block left its fence open, so the rest of the file rendered as code. | Interrupted replies become a stand-in turn or end with a note, in every format, and an open fence is closed where the reply ends. |
+| P3 | An 18:11 export on 25 September (UTC−6) was dated 2026-09-26. | Dates used `toISOString()`; they now use the local calendar. |
+
 ## Scope and baseline (2026-09-19)
 
 ## Scope and baseline

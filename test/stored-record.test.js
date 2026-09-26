@@ -202,3 +202,90 @@ test('earlier versions sit beside the turn they replaced when a turn renders not
     assert.match(bodies[1], /Earlier version[\s\S]*Replaced first answer\./);
     assert.equal(bodies[2], 'Second question.');
 });
+
+// A second real export (93 messages, 2026-09-25) was flagged incomplete for
+// two replies ChatGPT itself never finished, hours before its last turn: one
+// with no saved text, dropped so two prompts sat in a row, and one stopped
+// inside a code block whose open fence swallowed the rest of the file.
+function interruptedConversation(finalStatus = 'finished_successfully') {
+    const turn = (message, status = 'finished_successfully') => ({ status, ...message });
+    return record([
+        turn(say('user', 'Design the desk.')),
+        turn(say('assistant', 'Here is the desk.')),
+        turn(say('user', 'Write the full protocol spec.')),
+        turn({ author: { role: 'assistant' }, content: { content_type: 'thoughts', thoughts: [] } }, 'in_progress'),
+        turn(say('assistant', ''), 'in_progress'),
+        turn(say('user', 'Audit these older documents.')),
+        turn(say('assistant', 'I would use this:\n\n```text\n# Research Handoff\nApproach this as terminology design for a long-lived'), 'finished_partial_completion'),
+        turn(say('user', 'One more question.')),
+        turn(say('assistant', 'Final answer.'), finalStatus)
+    ]);
+}
+
+test('replies interrupted before the last turn do not make an export incomplete', async t => {
+    const { dom } = page(interruptedConversation());
+    t.after(() => dom.window.close());
+    const { conversation, content } = await engine.exportConversationFull({ document: dom.window.document,
+        provider: 'chatgpt', format: 'markdown', awaitStreaming: false, download: false, notify: false });
+    assert.equal(conversation.complete, true);
+    assert.doesNotMatch(content, /may be incomplete/);
+    assert.deepEqual(conversation.messages.map(m => m.senderType),
+        ['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+    assert.equal(conversation.messages[3].content, '*No reply: this response was interrupted in ChatGPT before any text was saved.*');
+    assert.equal(conversation.messages[5].content,
+        'I would use this:\n\n```text\n# Research Handoff\nApproach this as terminology design for a long-lived\n```\n\n*This response was not finished in ChatGPT; it ends here.*');
+    assert.equal((content.match(/^```/gm) || []).length % 2, 0, 'every code fence in the file is closed');
+});
+
+test('a final answer still being written makes the export incomplete', async t => {
+    const { dom } = page(interruptedConversation('in_progress'));
+    t.after(() => dom.window.close());
+    const result = await extract(dom);
+    assert.equal(result.complete, false);
+    assert.equal(result.unfinishedMessages, true);
+    assert.match(result.messages[result.messages.length - 1].content, /Final answer\.\n\n\*This response was not finished/);
+});
+
+test('a stale tool call beside a finished final answer is not streaming', async t => {
+    const stored = record([
+        say('user', 'Plot it.', { status: 'finished_successfully' }),
+        { author: { role: 'assistant' }, recipient: 'python', status: 'in_progress', content: { content_type: 'code', text: 'plot()' } },
+        say('assistant', 'Here is the plot.', { status: 'finished_successfully' })
+    ]);
+    const { dom } = page(stored);
+    t.after(() => dom.window.close());
+    const result = await extract(dom);
+    assert.equal(result.complete, true);
+    assert.equal(result.messages[1].content, 'Here is the plot.');
+});
+
+test('HTML and PDF exports say where an unfinished reply ends', async t => {
+    const stored = record([
+        say('user', 'Write it.', { status: 'finished_successfully' }),
+        say('assistant', 'Partial text', { status: 'finished_partial_completion' }),
+        say('user', 'Next.', { status: 'finished_successfully' }),
+        say('assistant', 'Done.', { status: 'finished_successfully' })
+    ]);
+    const { dom } = page(stored);
+    t.after(() => dom.window.close());
+    dom.window.document.querySelector('main').innerHTML = ['Write it.', 'Partial text', 'Next.', 'Done.'].map((text, index) =>
+        `<div data-message-author-role="${index % 2 ? 'assistant' : 'user'}" data-message-id="m${index}"><p>${text}</p></div>`).join('');
+    const result = await extract(dom, { format: 'html', scroll: false });
+    assert.equal(result.complete, true);
+    assert.match(result.messages[1].content, /Partial text[\s\S]*<em>This response was not finished in ChatGPT; it ends here\.<\/em>/);
+    assert.doesNotMatch(result.messages[3].content, /not finished/);
+});
+
+test('exports are dated by the reader\'s calendar day, not UTC\'s', t => {
+    const zone = process.env.TZ;
+    process.env.TZ = 'America/Mexico_City';
+    t.after(() => {
+        if (zone === undefined) delete process.env.TZ;
+        else process.env.TZ = zone;
+    });
+    const dom = new JSDOM('<title>Evening export</title><main><div data-message-author-role="user">Hi</div></main>', { url: 'https://chatgpt.com/?temporary-chat=true' });
+    t.after(() => dom.window.close());
+    // 18:11 on 25 September in Mexico City is already 26 September in UTC.
+    const conversation = engine.extractConversation({ document: dom.window.document, provider: 'chatgpt', date: new Date(Date.UTC(2026, 8, 26, 0, 11)) });
+    assert.equal(conversation.date, '2026-09-25');
+});
