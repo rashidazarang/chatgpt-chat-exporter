@@ -196,6 +196,71 @@ for (const format of ['markdown', 'html', 'pdf']) {
     });
 }
 
+// Signed-in ChatGPT scrolls its transcript in a flex-direction: column-reverse
+// container (verified live 2026-09-27): scrollTop is 0 at the newest turn and
+// negative above it, in every engine. A virtualizer mounts one screenful.
+function reversedTranscript(total) {
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Reversed transcript - ChatGPT</title></head><body style="margin:0">
+<main><div id="scroller" data-app-action-timeline-scroll role="presentation" style="display:flex;flex-direction:column-reverse;overflow-y:auto;height:300px">
+<div id="inner" style="position:relative;flex:none;height:${total * 100}px"></div></div></main>
+<script>
+(() => {
+    const scroller = document.getElementById('scroller');
+    const inner = document.getElementById('inner');
+    const mounted = new Map();
+    const render = () => {
+        const offset = scroller.scrollTop + scroller.scrollHeight - scroller.clientHeight;
+        for (let i = 0; i < ${total}; i++) {
+            const visible = i * 100 < offset + scroller.clientHeight && i * 100 + 100 > offset;
+            if (visible && !mounted.has(i)) {
+                const role = i % 2 ? 'assistant' : 'user';
+                const turn = document.createElement('div');
+                turn.setAttribute('data-turn-key', 'turn-' + i);
+                turn.style.cssText = 'position:absolute;left:0;right:0;height:100px;top:' + i * 100 + 'px';
+                const unit = document.createElement('div');
+                unit.setAttribute('data-chatgpt-search-unit-key', 'turn-' + i + ':' + (i % 2 ? 2 : 0) + ':' + role);
+                unit.setAttribute('data-chatgpt-search-message-ids', 'm-' + i);
+                const text = document.createElement('p');
+                text.textContent = 'Message number ' + i + ' of the reversed transcript.';
+                unit.appendChild(text);
+                turn.appendChild(unit);
+                inner.appendChild(turn);
+                mounted.set(i, turn);
+            } else if (!visible && mounted.has(i)) {
+                mounted.get(i).remove();
+                mounted.delete(i);
+            }
+        }
+    };
+    scroller.addEventListener('scroll', render);
+    render();
+})();
+</script></body></html>`;
+}
+
+test('signed-in ChatGPT: a sweep reads a column-reverse transcript from its oldest turn', async ({ page }) => {
+    const total = 40;
+    const errors = await mount(page, { html: reversedTranscript(total) });
+    const result = await page.evaluate(async () => {
+        const scroller = document.getElementById('scroller');
+        const before = scroller.scrollTop;
+        const mountedAtStart = document.querySelectorAll('[data-turn-key]').length;
+        const output = await window.ChatExporterEngine.extractConversationFull({
+            provider: 'chatgpt', format: 'markdown', scrollDelay: 80, historyWait: 300, awaitStreaming: false, chatGptMetadata: false
+        });
+        return { before, mountedAtStart, after: scroller.scrollTop, complete: output.complete,
+            senders: output.messages.map(message => message.senderType),
+            order: output.messages.map(message => Number((message.content.match(/Message number (\d+)/) || [])[1])) };
+    });
+    expect(result.before).toBe(0);
+    expect(result.mountedAtStart).toBeLessThan(total);
+    expect(result.order).toEqual(Array.from({ length: total }, (unused, index) => index));
+    expect(result.senders).toEqual(Array.from({ length: total }, (unused, index) => index % 2 ? 'assistant' : 'user'));
+    expect(result.complete).toBe(true);
+    expect(result.after).toBe(0);
+    expect(errors).toEqual([]);
+});
+
 test('chatgpt 2026 transcript: the userscript launcher exports it under strict CSP', async ({ page }) => {
     const errors = await mount(page, { html: await transcript2026(), script: 'chatgpt-markdown-exporter.user.js', strict: true });
     await expect(page.locator('#chat-exporter-launcher')).toBeVisible();

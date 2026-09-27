@@ -1,11 +1,12 @@
 # Browser compatibility
 
-The browser matrix runs with pinned Playwright 1.63.0 on Linux CI. It uses synthetic conversations and intercepts every network request, so it needs no provider credentials and publishes no private chat data. Each engine runs 26 checks, 78 in all. Current results are attached to the release PR; the matrix must pass before release.
+The browser matrix runs with pinned Playwright 1.63.0 on Linux CI. It uses synthetic conversations and intercepts every network request, so it needs no provider credentials and publishes no private chat data. Each engine runs 27 checks, 81 in all. Current results are attached to the release PR; the matrix must pass before release.
 
 | Distribution or behavior | Chromium | Firefox | WebKit |
 | --- | --- | --- | --- |
 | ChatGPT Markdown, HTML, PDF-ready console bundles | CI | CI | CI |
 | ChatGPT's 2026 transcript layout (`li[data-message-role]`): every format, plus the userscript launcher under strict CSP | CI | CI | CI |
+| Signed-in ChatGPT's `flex-direction: column-reverse` transcript, virtualized: swept from the newest turn up, in order | CI | CI | CI |
 | Gemini Markdown console bundle | CI | CI | CI |
 | Four full self-contained bookmarklet URLs | CI | CI | CI |
 | Both ChatGPT userscripts: Markdown/PDF menu downloads without Share | CI | CI | CI |
@@ -34,7 +35,26 @@ CI retains HTML reports and failure traces for 14 days. Retries are disabled so 
 - Chromium is engine coverage relevant to Chrome/Edge; WebKit is engine coverage relevant to Safari. This is not a certification of every branded release, operating system, mobile browser, or userscript manager.
 - The userscript source executes under a strict policy in CI. Installing/updating through Tampermonkey, Violentmonkey, or Greasemonkey remains a separate manager check. PDF export produces an HTML file intended for the browser's Print / Save as PDF action; it is not a native PDF download.
 - Bookmarklet tests execute the complete JavaScript URL from a link; they do not save a bookmark. Each bookmarklet is over 100,000 characters. Chromium stores bookmark URLs up to 2 MB, but Firefox's Places validator rejects anything over 65,536 characters (`DB_URL_LENGTH_MAX` in `PlacesUtils.sys.mjs`), so Firefox users need the userscript or the console. No remote-code loader or policy bypass is introduced.
-- Actual signed-in temporary-chat image/blob previews, ongoing/completed Deep Research tasks, enterprise workspaces, Gemini virtualization, and the original long-chat report remain live-provider release checks. Do not infer those results from fixture success.
+- Temporary-chat image previews, ongoing/completed Deep Research tasks, enterprise workspaces, Gemini virtualization, and the original long-chat report remain live-provider release checks. Do not infer those results from fixture success.
+
+## Live checks, 2026-09-27 (desktop Chrome, signed in)
+
+Run on the audited conversation with 164–181 messages, 24–30 generated images
+and 48 uploads, with the local build injected into a second tab.
+`test/fixtures/chatgpt-signed-in-2026.html` mirrors the page.
+
+- **Markdown** (read from the stored conversation): complete, 164 messages at
+  the time, all 72 images embedded, fences balanced. v1.2.2 had exported four
+  file reads as ChatGPT replies and left 3 images as placeholders.
+- **HTML** (read from the page): v1.2.2 found no messages on the signed-in
+  layout. With the layout recognised but the scroll unchanged, 15 of 166
+  messages were read from the page. v1.2.3 read 171 of 180 from the page,
+  climbing from the newest turn through about 20 batches of older history.
+  71 of 75 images were embedded as the page's own copies of the files; the
+  other 4 were over the 50 MB cap. It took 129 s, 66 s of it scrolling. The
+  reader's scroll position was restored.
+- `document.hidden` is true whenever the window is covered, including by the
+  window used to answer prompts; the export waits, then resumes.
 
 ## Live checks, 2026-09-25 (desktop Chrome)
 

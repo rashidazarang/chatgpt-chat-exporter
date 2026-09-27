@@ -97,6 +97,26 @@ test('a caption before a generated image stays with it, and the empty reply afte
     assert.equal(images(result.messages[1].content), 1);
 });
 
+test('a file a tool read back is not an answer, though it carries images', async t => {
+    // Seen live 2026-09-27: api_tool stores the pages of an uploaded file as
+    // images plus an instruction to the model. v1.2.1 exported three of them
+    // as ChatGPT replies ("Make sure to include in your response to cite this
+    // file…"). A generated image is a tool record with images and no text.
+    const { dom, downloads } = page(record([
+        say('user', 'Summarize the attached deck.'),
+        { author: { role: 'tool', name: 'api_tool' }, content: { content_type: 'multimodal_text', parts: [
+            { content_type: 'image_asset_pointer', asset_pointer: 'sediment://file_00000000ee55' },
+            'Make sure to include in your response to cite this file, or to surface it as a link.'
+        ] } },
+        say('assistant', 'The deck proposes three changes.')
+    ]));
+    t.after(() => dom.window.close());
+    const result = await extract(dom);
+    assert.deepEqual(result.messages.map(m => m.content), ['Summarize the attached deck.', 'The deck proposes three changes.']);
+    assert.deepEqual(downloads, []);
+    assert.equal(result.complete, true);
+});
+
 test('messages addressed to a tool never reach the export, even as progress', async t => {
     const { dom } = page(record([
         say('user', 'Summarize the page.'),

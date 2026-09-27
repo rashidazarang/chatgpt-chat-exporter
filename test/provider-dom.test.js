@@ -210,6 +210,160 @@ test('userscript: the 2026 transcript counts as a conversation and its per-turn 
     assert.notEqual(launcher.style.display, 'none');
 });
 
+const signedIn = fs.readFileSync(path.join(__dirname, 'fixtures', 'chatgpt-signed-in-2026.html'), 'utf8');
+const PNG_BYTES = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+// The stored record behind the signed-in fixture, in the shapes a real
+// conversation holds: an upload, two generated images stored as tool replies
+// beside a hidden copy and an empty assistant reply, and a reply interrupted
+// before any text was saved.
+function signedInRecord() {
+    const image = pointer => ({ content_type: 'image_asset_pointer', asset_pointer: pointer, width: 1536, height: 1024 });
+    const nodes = [
+        { id: 'u-1', author: { role: 'user' }, content: { content_type: 'multimodal_text',
+            parts: [image('sediment://file_00000000up01'), 'Compare these monitors:\n  - keep this indent'] },
+        metadata: { attachments: [{ id: 'file_00000000up01', name: 'monitors.png', mime_type: 'image/png' }] } },
+        { id: 'a-1', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['**Short answer:** the left one.'] } },
+        { id: 'u-2', author: { role: 'user' }, content: { content_type: 'text', parts: ['Sketch the dashboard.'] } },
+        { id: 'c-2', author: { role: 'assistant' }, recipient: 't2uay3k.sj1i4kz', content: { content_type: 'code', text: '{"prompt":"dashboard"}' } },
+        { id: 't-2', author: { role: 'tool', name: 't2uay3k.sj1i4kz' }, content: { content_type: 'multimodal_text', parts: [image('sediment://file_00000000gen2')] } },
+        { id: 't-2b', author: { role: 'tool', name: 't2uay3k.sj1i4kz' }, content: { content_type: 'multimodal_text', parts: [image('sediment://file_00000000gen3')] } },
+        { id: 'h-2', author: { role: 'tool', name: 't2uay3k.sj1i4kz' }, content: { content_type: 'multimodal_text',
+            parts: [image('sediment://file_00000000gen2'), 'tool text'] }, metadata: { is_visually_hidden_from_conversation: true } },
+        { id: 'a-2', author: { role: 'assistant' }, content: { content_type: 'text', parts: [''] } },
+        { id: 'u-3', author: { role: 'user' }, content: { content_type: 'text', parts: ['Are you still there?'] } },
+        { id: 'a-3', author: { role: 'assistant' }, status: 'in_progress', content: { content_type: 'text', parts: [''] } },
+        { id: 'u-4', author: { role: 'user' }, content: { content_type: 'text', parts: ['Summarize.'] } },
+        { id: 'a-4', author: { role: 'assistant' }, content: { content_type: 'text', parts: ['Two monitors compared; one sketch drawn.'] } }
+    ];
+    const mapping = {};
+    nodes.forEach((message, index) => {
+        mapping[`n-${message.id}`] = { parent: index ? `n-${nodes[index - 1].id}` : null,
+            children: index + 1 < nodes.length ? [`n-${nodes[index + 1].id}`] : [],
+            message: { recipient: 'all', status: 'finished_successfully', create_time: 1790000000 + index, metadata: {}, ...message } };
+    });
+    return { current_node: `n-${nodes[nodes.length - 1].id}`, mapping };
+}
+
+function signedInPage(record = signedInRecord(), { blobs = true } = {}) {
+    const dom = new JSDOM(signedIn, { url: 'https://chatgpt.com/c/signed-in-2026', pretendToBeVisual: true });
+    const downloads = [];
+    const blobReads = [];
+    const serve = backend(record, url => {
+        if (url.startsWith('blob:')) {
+            blobReads.push(url.slice(url.lastIndexOf('/') + 1));
+            return blobs ? new Response(PNG_BYTES, { headers: { 'content-type': 'image/png' } }) : null;
+        }
+        const file = url.match(/\/files\/download\/([^?]+)/);
+        if (file) {
+            downloads.push(decodeURIComponent(file[1]));
+            return json({ status: 'success', download_url: `https://cdn.example/${file[1]}` });
+        }
+        if (url.startsWith('https://cdn.example/')) return new Response(PNG_BYTES, { headers: { 'content-type': 'image/png' } });
+        return null;
+    });
+    // A revoked blob fails the way a browser fails it: the fetch rejects.
+    dom.window.fetch = async (url, init) => {
+        if (String(url).startsWith('blob:') && !blobs) {
+            blobReads.push(String(url).slice(String(url).lastIndexOf('/') + 1));
+            throw new TypeError('Failed to fetch');
+        }
+        return serve(String(url), init);
+    };
+    return { dom, downloads, blobReads };
+}
+
+const imageCount = content => (content.match(/<img /g) || []).length;
+
+for (const format of ['html', 'pdf']) {
+    test(`${format}: signed-in ChatGPT exports every prompt, answer and generated image once`, async t => {
+        const { dom, downloads, blobReads } = signedInPage(); t.after(() => dom.window.close());
+        const result = await extract(dom, { format });
+        assert.deepEqual(result.messages.map(m => m.senderType),
+            ['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+        const [prompt, answer, , images, , standIn, , last] = result.messages.map(m => m.content);
+        assert.match(prompt, /Compare these monitors:/);
+        assert.match(prompt, /keep this indent/);
+        assert.equal(imageCount(prompt), 1, 'the upload appears once, not again from the stored record');
+        assert.match(prompt, /<img class="exported-media" src="data:image\/png;base64,iVBORw0KGgo=" alt="User attachment">/,
+            'the page\'s own copy of the file is embedded byte for byte');
+        assert.match(answer, /<strong>Short answer:<\/strong> the left one\./);
+        assert.match(answer, /<h2>Why<\/h2>/);
+        assert.equal(imageCount(images), 2, 'a gallery of two images is two images: not its thumbnail again, not a third message');
+        assert.match(images, /alt="Generated image 1"/);
+        assert.deepEqual(blobReads.sort(), ['0e2f6a1c-upload-0001', '7a41c3d2-generated-0002', '7a41c3d2-generated-0003']);
+        assert.match(standIn, /No reply: this response was interrupted in ChatGPT before any text was saved\./);
+        assert.match(last, /Two monitors compared; one sketch drawn\./);
+        assert.deepEqual(downloads, [], 'images the page embedded are not downloaded again');
+        assert.doesNotMatch(result.messages.map(m => m.content).join('\n'), /said:|Copy|Share|Edit|Good response|Select image/);
+        assert.equal(result.expectedMessages, 8, 'the empty reply after the images and the lost reply are not messages');
+        assert.equal(result.unreachedMessages, 0);
+        assert.equal(result.recoveredMessages, 0, 'the gallery\'s second image is on the page, not missing');
+        assert.equal(result.complete, true);
+        assert.ok(result.messages.every(m => m.timestampIso), 'every turn is matched to its stored record by id');
+    });
+}
+
+test('signed-in ChatGPT: generated images the page never rendered are recovered from the stored record', async t => {
+    const { dom, downloads } = signedInPage(); t.after(() => dom.window.close());
+    dom.window.document.querySelector('[data-chatgpt-search-message-ids="t-2 t-2b"]').remove();
+    const result = await extract(dom, { format: 'html' });
+    assert.equal(result.recoveredMessages, 2);
+    assert.deepEqual([result.messages[3].senderType, result.messages[4].senderType], ['assistant', 'assistant']);
+    for (const message of result.messages.slice(3, 5)) {
+        assert.match(message.content,
+            /^<figure class="embedded-image"><img class="exported-media" src="data:image\/png;base64,[^"]+" alt="Generated image">/);
+    }
+    assert.deepEqual(downloads, ['file_00000000gen2', 'file_00000000gen3']);
+    assert.equal(result.complete, true);
+});
+
+test('signed-in ChatGPT: an image whose blob is gone falls back to the stored file', async t => {
+    const { dom, downloads, blobReads } = signedInPage(signedInRecord(), { blobs: false }); t.after(() => dom.window.close());
+    const result = await extract(dom, { format: 'html' });
+    assert.equal(blobReads.length, 3, 'each page image is tried once');
+    assert.match(result.messages[0].content, /<span class="media-placeholder">\[Image: User attachment\]<\/span>/);
+    assert.match(result.messages[0].content, /<figure class="embedded-image"><img class="exported-media" src="data:image\/png;base64,[^"]+" alt="monitors.png">/,
+        'the upload is embedded from the stored record instead');
+    assert.deepEqual(downloads, ['file_00000000up01', 'file_00000000gen2']);
+});
+
+test('signed-in ChatGPT: the page path keeps prompts verbatim and images inline in Markdown', async t => {
+    const { dom } = signedInPage(); t.after(() => dom.window.close());
+    const result = await extract(dom, { sourceFromPayload: false });
+    const [prompt, answer, , images] = result.messages.map(m => m.content);
+    assert.match(prompt, /^!\[User attachment\]\(data:image\/png;base64,iVBORw0KGgo=\)/);
+    assert.match(prompt, /Compare these monitors:\n {2}- keep this indent$/);
+    assert.equal(answer, '**Short answer:** the left one.\n\n## Why\n\n> Higher refresh rate.');
+    assert.match(images, /^!\[Generated image 1\]\(data:image\/png;base64,iVBORw0KGgo=\)\s+!\[Image\]\(data:image\/png;base64,iVBORw0KGgo=\)$/);
+});
+
+test('signed-in ChatGPT: units are found and attributed without a stored record', async t => {
+    const { dom } = signedInPage(null); t.after(() => dom.window.close());
+    const result = await extract(dom, { format: 'html' });
+    assert.deepEqual(result.messages.map(m => m.senderType), ['user', 'assistant', 'user', 'assistant', 'user', 'user', 'assistant']);
+    assert.ok(result.messages.every(m => m.reliableSender), 'roles come from unit keys and the image label, not guesses');
+    assert.equal(imageCount(result.messages[3].content), 2);
+});
+
+test('userscript: signed-in turns count as a conversation and their Share buttons stay native', t => {
+    const dom = new JSDOM(signedIn, { url: 'https://chatgpt.com/c/signed-in-2026', pretendToBeVisual: true });
+    t.after(() => dom.window.close());
+    const { window } = dom;
+    window.HTMLElement.prototype.getClientRects = () => [{ width: 100, height: 30 }];
+    window.HTMLElement.prototype.getBoundingClientRect = () => ({ top: 10, right: 200, bottom: 40, left: 100, width: 100, height: 30 });
+    for (const label of ['Share prompt', 'Share', 'Share generated image 1']) {
+        const button = window.document.querySelector(`button[aria-label="${label}"]`);
+        assert.equal(userscriptUi.internals.isHeaderShareButton(button), null, `${label} shares one turn, not the conversation`);
+    }
+    userscriptUi.install({ document: window.document, engine, launcherDelay: 0, syncInterval: 0,
+        exportMarkdown: () => {}, exportPdf: () => {}, copyLink: async () => {} });
+    window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+    const launcher = window.document.querySelector('#chat-exporter-launcher');
+    assert.ok(launcher, 'without a header Share the launcher is the entry point');
+    assert.notEqual(launcher.style.display, 'none');
+});
+
 function researchRecord() {
     const record = stored([['u', 'user', 'Research this.'], ['k', 'assistant', 'Started.'], ['s', 'assistant', 'Summary.']]);
     const kickoff = record.mapping['n-k'].message;

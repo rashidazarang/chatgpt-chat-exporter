@@ -40,6 +40,30 @@ A second real Markdown export (93 messages, 18 MB), made with v1.2.1, confirmed 
 | P1 | A reply interrupted before any text was saved was dropped: two prompts in a row. A reply stopped inside a ```` ```text ```` block left its fence open, so the rest of the file rendered as code. | Interrupted replies become a stand-in turn or end with a note, in every format, and an open fence is closed where the reply ends. |
 | P3 | An 18:11 export on 25 September (UTC−6) was dated 2026-09-26. | Dates used `toISOString()`; they now use the local calendar. |
 
+## Live test — v1.2.3, 2026-09-27, signed in
+
+The audited conversation re-exported while signed in, in desktop Chrome, with
+the local build injected into a second tab. It grew from 164 to 181 messages
+during the session. Tests for every fix are in `test/provider-dom.test.js`
+(signed-in fixture), `test/exporters.test.js` (reverse and lazily loaded
+scrollers), `test/stored-record.test.js`, `test/hardening.test.js` and the
+browser matrix.
+
+| Priority | Witnessed | Cause and disposition |
+|---|---|---|
+| P1 | Markdown carried four ChatGPT "replies" reading "Make sure to include in your response to cite this file…" or "Citation Marker: …". | `api_tool` stores a file it read back as images plus text, and v1.2.1 took every image-bearing tool record for an answer. Only a tool record with images and no text is one now; all 72 images then fit the budget (v1.2.2 left 3 placeholders). |
+| P1 | HTML found no messages on the signed-in page. | A third transcript layout: keyed units in a `[data-turn-key]` that holds a prompt and its answer, and bare units for generated images. Selectors, roles (from the key or the "ChatGPT said:" label) and multi-id matching added. |
+| P1 | HTML read 15 of 166 messages from the page; 151 were rebuilt from the stored record as plain paragraphs. | The scroller is `column-reverse` (newest at `scrollTop` 0) and loads history only while held at the top, in batches 1–6 s apart. The sweep now climbs from the newest message and waits out each batch: 171 of 180 read from the page, the scroll done in 66 s. |
+| P1 | 44 of 75 images were placeholders in HTML. | Canvas re-encoding as PNG made a 1.7 MB image 2.3 MB and spent the 50 MB budget on 20 images. The page's blob — the stored file itself — is embedded instead: 71 of 75, the other 4 over the cap. |
+| P2 | A two-image gallery exported its first image twice, and its second again as an extra ChatGPT turn. | The thumbnail shares the preview's blob, and the unit lists both tool records. Same-blob media is kept once per message, and every listed record counts as on the page. |
+| P2 | "Incomplete — 4 message(s) never loaded" on a complete HTML export. | Empty records (the reply stored after an image, an interrupted reply) were expected. Only records that render something are. |
+| P3 | A sweep step took about 370 ms. | Any pending key anywhere made every step look twice; now only turns on screen do. About 4 s per batch of history instead of 11. |
+
+Still witnessed: 9 of 180 turns — generated images the scroll passed before
+they loaded — are rebuilt from the stored record, with the stored image. The
+redaction notices are tool-addressed or `tool` records, and none reaches the
+export.
+
 ## Scope and baseline (2026-09-19)
 
 ## Scope and baseline
@@ -145,10 +169,10 @@ There were 28 release records. Latest published release: v1.1.0, 2026-08-22. It 
 
 These need a signed-in ChatGPT account or other browsers, which the 2026-09-25 session did not have.
 
-- [ ] Signed in, confirm which transcript layout ChatGPT serves, and on the 2026 layout that each `li`'s `id` equals the stored message id — timestamps, recovery and completeness checks match on it (tests assume it; a mismatch degrades to positional matching).
+- [x] Signed in (2026-09-27): ChatGPT serves a third layout, not the `li` one. Its units list the stored message ids, and HTML exports match every captured turn by id. The logged-out `li` layout has no stored record to check its ids against.
 - [ ] Reproduce #41 on a stored conversation with approximately 1,243 messages and verify beginning, middle, end, turn order, timestamps, and counts, in Markdown and in HTML/PDF.
 - [ ] Reproduce #40 on an actual temporary conversation with uploaded and generated images, including blob-backed previews, in Chrome, Firefox, and Safari. Unavailable bytes must remain a clear placeholder.
-- [ ] Re-export the audited conversation while signed in: confirm its generated images, the embedded count of its 48 uploads, and that the two redaction notices are tool-addressed (the fix assumes the `recipient` field ChatGPT uses for tool calls). Check which message id a page turn with a generated image carries before extending image-bearing tool records to HTML/PDF.
+- [x] Re-export the audited conversation while signed in (2026-09-27): every generated image and all 48 uploads embedded in Markdown; the redaction notices are tool-addressed or `tool` records; a page turn with a generated image lists the tool record's id, and HTML/PDF now match on it. See the v1.2.3 live test above.
 - [ ] Verify current app-backed Deep Research in Markdown, HTML and PDF, including an ongoing/unavailable task and a report in the middle of a conversation.
 - [ ] Install both userscript entry points and bookmarklets in target browsers; verify userscript-manager installation/update and current enterprise menus. CI exercises no-Share fallback, CSP/Trusted Types, and full bookmarklet URL execution; Firefox cannot store the bookmarklets (65,536-character limit).
 - [ ] Verify a long Gemini conversation's scroller. Math, code, tables and lists were verified live on 2026-09-25 in a temporary chat.

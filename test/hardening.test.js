@@ -308,9 +308,11 @@ test('oversized canvases are rejected before serialization or allocation', async
 test('DOM and downloaded attachments share a budget that bounds the next streamed read', async t => {
     const dom = page(); t.after(() => dom.window.close());
     dom.window.document.querySelector('[data-message-id="u"]').innerHTML = `<img src="${png}" alt="preview">`;
+    const record = withImage();
+    record.mapping.u.message.metadata.attachments.push({ id: 'file-second', name: 'second.png', mime_type: 'image/png' });
     let cancelled = false;
     let reads = 0;
-    dom.window.fetch = backend(withImage(), url => {
+    dom.window.fetch = backend(record, url => {
         if (!url.includes('/files/download/')) return null;
         return { ok: true, status: 200, headers: new Headers({ 'content-type': 'image/png' }), body: { getReader: () => ({
             read: async () => { reads++; return { done: false, value: new Uint8Array(3) }; },
@@ -321,7 +323,33 @@ test('DOM and downloaded attachments share a budget that bounds the next streame
     assert.equal(reads, 1, 'only two bytes remain after the four-byte DOM image');
     assert.equal(cancelled, true);
     assert.equal((result.messages[0].content.match(/data:image/g) || []).length, 1);
-    assert.match(result.messages[0].content, /upload.png/);
+    assert.doesNotMatch(result.messages[0].content, /upload.png/, 'the page already embedded the first upload');
+    assert.match(result.messages[0].content, /\[Image: second.png\]/);
+});
+
+test('an upload the page embedded is not added again from the stored record', async t => {
+    const dom = page(); t.after(() => dom.window.close());
+    dom.window.document.querySelector('[data-message-id="u"]').innerHTML = `<img src="${png}" alt="preview">`;
+    let downloads = 0;
+    dom.window.fetch = backend(withImage(), url => {
+        if (url.includes('/files/download/')) downloads++;
+        return null;
+    });
+    const result = await extract(dom, { format: 'html' });
+    assert.equal(downloads, 0);
+    assert.equal((result.messages[0].content.match(/<img /g) || []).length, 1);
+    assert.equal(result.messages[0].attachments[0].name, 'upload.png');
+});
+
+test('an upload the page only linked is still embedded from the stored record', async t => {
+    const dom = page(); t.after(() => dom.window.close());
+    dom.window.document.querySelector('[data-message-id="u"]').innerHTML =
+        '<img src="https://chatgpt.com/backend-api/estuary/content/file-image" alt="preview">';
+    dom.window.fetch = backend(withImage(), url => url.includes('/files/download/')
+        ? new Response(Buffer.from('iVBORw==', 'base64'), { headers: { 'content-type': 'image/png' } }) : null);
+    const result = await extract(dom, { format: 'html' });
+    assert.match(result.messages[0].content, /src="https:\/\/chatgpt.com\/backend-api\/estuary\/content\/file-image"/);
+    assert.match(result.messages[0].content, /<figure class="embedded-image"><img class="exported-media" src="data:image\/png/);
 });
 
 test('explicit non-raster image MIME types cannot be disguised by attachment metadata', async t => {

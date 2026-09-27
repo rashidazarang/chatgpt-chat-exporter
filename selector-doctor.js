@@ -17,7 +17,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '1.2.2';
+        const ENGINE_VERSION = '1.2.3';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -29,6 +29,21 @@
         // Wall-clock budget for a full sweep. Step counts alone can't bound it —
         // a provider that keeps changing height would hold the page for minutes.
         const DEFAULT_MAX_DURATION = 120000;
+
+        // Scroll steps a sweep may take. The wall clock is the real bound; this
+        // only stops a loop that costs no time. A 166-message conversation in a
+        // short window needed 730 steps, so 400 cut it off halfway.
+        const DEFAULT_MAX_SCROLL_STEPS = 2000;
+
+        // How long a sweep holds the top of what is loaded, waiting for older
+        // history, before taking it for the start of the conversation. Signed-in
+        // ChatGPT loads history in batches that arrived 1-6 s apart on a real
+        // conversation (verified live 2026-09-27).
+        const HISTORY_WAIT = 8000;
+
+        // Wall-clock cap on reading the page's own image files after a sweep.
+        // They are local, so this only guards against a read that never returns.
+        const PAGE_MEDIA_MAX_DURATION = 60000;
 
         // How long to watch the newest answer before deciding it has stopped
         // growing. Short enough not to be felt on an idle conversation.
@@ -125,11 +140,15 @@
                 turnSelector: CHATGPT_TURN_SELECTOR,
                 documentTitleSuffix: /\s*[-–—|]\s*ChatGPT\s*$/i,
                 messageSelectors: [
-                    // Two transcript generations are served at once: role-tagged
-                    // divs, and (verified live 2026-09-25) an <ol> of
-                    // <li data-message-role> items. One entry, so neither reads
-                    // as selector drift in the doctor.
-                    'div[data-message-author-role], li[data-message-role]',
+                    // Three transcript generations are served at once:
+                    // role-tagged divs; an <ol> of <li data-message-role> items
+                    // (logged out, verified live 2026-09-25); and units keyed
+                    // "…:user" / "…:assistant" inside a [data-turn-key] that holds
+                    // a prompt *and* its answer (signed in, verified live
+                    // 2026-09-27). A generated image there has no key, only the
+                    // message ids of its tool record. One entry, so none reads as
+                    // drift in the doctor.
+                    'div[data-message-author-role], li[data-message-role], [data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":assistant"], [data-chatgpt-search-message-ids]:not([data-chatgpt-search-unit-key])',
                     'article[data-testid*="conversation-turn"]',
                     'div[data-testid="conversation-turn"]',
                     '.group\\/conversation-turn',
@@ -251,10 +270,20 @@
             const carrier = [element, scope, scope?.querySelector?.('[data-message-id], [data-message-uuid]')]
                 .find(candidate => candidate?.getAttribute?.('data-message-id') || candidate?.getAttribute?.('data-message-uuid'));
             if (carrier) return carrier.getAttribute('data-message-id') || carrier.getAttribute('data-message-uuid') || '';
-            // The 2026 transcript keys each <li data-message-role> by the message's
-            // own id instead of a data attribute.
+            // The signed-in transcript lists the messages a unit renders,
+            // space-separated: an answer's own id twice, or one id per image in a
+            // gallery (verified live 2026-09-27).
+            const unit = [element, scope].find(candidate => candidate?.getAttribute?.('data-chatgpt-search-message-ids'));
+            if (unit) return unit.getAttribute('data-chatgpt-search-message-ids').trim();
+            // The logged-out transcript keys each <li data-message-role> by the
+            // message's own id instead of a data attribute.
             const turn = [element, scope].find(candidate => candidate?.hasAttribute?.('data-message-role') && candidate.id);
             return turn ? turn.id : '';
+        }
+
+        // One id, or the several a signed-in transcript unit renders.
+        function providerIds(value) {
+            return String(value || '').split(/\s+/).filter(Boolean);
         }
 
         function timestampIso(value) {
@@ -618,10 +647,11 @@
                 '[class*="sr-only"]',
                 '[class*="visually-hidden"]',
                 '[class*="visuallyhidden"]',
-                // The 2026 transcript uses atomic class names, so its "You said:"
-                // label, action rows, copy controls and popovers are only
-                // recognizable by their data attributes.
+                // The 2026 transcripts use atomic class names, so their "You
+                // said:" / "ChatGPT said:" labels, action rows, copy controls and
+                // popovers are only recognizable by their data attributes.
                 '[data-message-attribution]',
+                'h4[data-conversation-role]',
                 '[data-message-actions]',
                 '[data-message-content-controls]',
                 '[popover]',
@@ -865,12 +895,40 @@
             }
         }
 
-        function mediaSource(element, budget) {
-            const direct = String(
+        function directMediaSource(element) {
+            return String(
                 element.currentSrc ||
                 element.getAttribute?.('src') ||
                 element.getAttribute?.('data-src') || ''
             ).trim();
+        }
+
+        // The page's own copy of an image: for ChatGPT, the stored file itself.
+        function isPageBlob(source, element) {
+            if (!/^blob:/i.test(source)) return false;
+            try {
+                return new URL(source).origin === getWindow(element.ownerDocument)?.location?.origin;
+            } catch (error) {
+                return false;
+            }
+        }
+
+        // Stands in for media a page capture shows twice, such as a gallery's
+        // selected image and its thumbnail.
+        const DUPLICATE_MEDIA = Object.freeze({});
+
+        function mediaSource(element, budget) {
+            const direct = directMediaSource(element);
+            // Re-drawing a blob image through a canvas as PNG made a 1.7 MB
+            // generated image 2.3 MB, and 20 of them spent the whole image budget
+            // before the uploads (verified live 2026-09-27). An export that can
+            // wait reads the original bytes after the sweep instead; the blob
+            // outlives the image being scrolled away.
+            if (budget.deferred && isPageBlob(direct, element)) {
+                const token = `${MARKER_PREFIX}MEDIA_${budget.deferred.size}__`;
+                budget.deferred.set(token, { url: direct, element });
+                return token;
+            }
             const maxBytes = Math.min(budget.perImage, budget.remaining);
             let embedded = isSafeEmbeddedImageSource(direct, maxBytes) ? direct : '';
             if (!embedded && maxBytes > 0) embedded = canvasDataUrl(element, budget);
@@ -887,15 +945,31 @@
             const sources = new WeakMap();
             const originalMedia = queryAll(original, 'img, canvas');
             const clonedMedia = queryAll(clone, 'img, canvas');
+            // ChatGPT's image gallery shows the selected image large and again as
+            // a thumbnail, from the same blob (verified live 2026-09-27).
+            const blobs = new Set();
             originalMedia.forEach((element, index) => {
                 const cloneElement = clonedMedia[index];
-                if (cloneElement) sources.set(cloneElement, mediaSource(element, budget));
+                if (!cloneElement) return;
+                const direct = directMediaSource(element);
+                if (/^blob:/i.test(direct)) {
+                    if (blobs.has(direct)) {
+                        sources.set(cloneElement, DUPLICATE_MEDIA);
+                        return;
+                    }
+                    blobs.add(direct);
+                }
+                sources.set(cloneElement, mediaSource(element, budget));
             });
             return sources;
         }
 
         function processMedia(clone, format, replacements, mediaSources) {
             queryAll(clone, 'img, canvas, video, audio').forEach(element => {
+                if (mediaSources.get(element) === DUPLICATE_MEDIA) {
+                    element.remove();
+                    return;
+                }
                 const tag = element.tagName.toLowerCase();
                 const alt = normalizeWhitespace(element.getAttribute('alt') || element.getAttribute('aria-label') || element.getAttribute('title') || '');
                 const label = tag === 'img' && alt ? `[Image: ${alt}]` :
@@ -1409,7 +1483,7 @@
             if (text.length > 200000) return false;
             if (matches(element, 'nav, aside, header, footer, form, menu')) return false;
             if (element.querySelector('textarea, input[type="text"], [contenteditable="true"]') &&
-                !matches(element, '[data-message-author-role], [data-message-role]')) return false;
+                !matches(element, '[data-message-author-role], [data-message-role], [data-chatgpt-search-unit-key], [data-chatgpt-search-message-ids]')) return false;
             if (getClassName(element).match(/\b(typing|loading|spinner)\b/i)) return false;
 
             return true;
@@ -1464,10 +1538,27 @@
                 .sort((a, b) => meaningfulScore(b) - meaningfulScore(a))[0] || messageElement;
         }
 
+        // The role a signed-in transcript unit renders: from its key, or, for a
+        // generated image (which has no key), from the "ChatGPT said:" label that
+        // is its sibling.
+        function transcriptUnitRole(element) {
+            const keyed = String(element.getAttribute?.('data-chatgpt-search-unit-key') || '').match(/:(user|assistant)$/)?.[1];
+            if (keyed || !element.hasAttribute?.('data-chatgpt-search-message-ids')) return keyed || '';
+            for (let sibling = element.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
+                if (sibling.hasAttribute('data-chatgpt-search-message-ids')) break;
+                const role = sibling.getAttribute('data-conversation-role');
+                if (role === 'user' || role === 'assistant') return role;
+            }
+            return '';
+        }
+
         function identifySender(element, index, provider) {
             const tag = element.tagName.toLowerCase();
             if (tag === 'user-query') return { sender: 'You', reliable: true };
             if (tag === 'model-response') return { sender: provider.assistantName, reliable: true };
+
+            const unitRole = transcriptUnitRole(element);
+            if (unitRole) return { sender: unitRole === 'user' ? 'You' : provider.assistantName, reliable: true };
 
             const roleSelector = '[data-message-author-role], [data-message-role], [data-author], [data-sender]';
             const roleCarrier = matches(element, roleSelector) ? element : element.querySelector?.(roleSelector);
@@ -1919,9 +2010,12 @@
         // A tool reply the reader sees is one that carries an image: a generated
         // picture, or a chart from code execution. ChatGPT stores both as `tool`
         // records, which is why image-only answers vanished from exports that read
-        // the stored conversation. Everything else a tool returns is plumbing.
+        // the stored conversation. They carry no text (verified live 2026-09-27);
+        // a tool record with images *and* text is the tool talking to the model —
+        // files handed over with "Make sure to include in your response to cite
+        // this file…" — and everything else a tool returns is plumbing too.
         function isToolMediaMessage(message) {
-            return message?.author?.role === 'tool' &&
+            return message?.author?.role === 'tool' && !payloadContentText(message.content) &&
                 payloadAttachmentDescriptors(message).some(descriptor => descriptor.kind === 'image');
         }
 
@@ -1955,6 +2049,23 @@
                 Boolean(payloadContentText(rendered?.content)) || payloadAttachmentDescriptors(rendered).length > 0;
         }
 
+        // A record that shows nothing in any export — the empty reply stored
+        // after a generated image, a reply interrupted before any text was saved —
+        // is not a message the export can be missing.
+        function isRenderablePayloadEntry(entry) {
+            const message = payloadRenderableMessage(entry.message);
+            return isAsyncPayloadResult(entry.message) || Boolean(payloadContentText(message?.content)) ||
+                payloadAttachmentDescriptors(message).length > 0;
+        }
+
+        // Images a page capture embedded. A linked image is not counted: ChatGPT
+        // serves uploads from signed URLs that expire, so the stored copy is still
+        // the only one that lasts.
+        function embeddedPageImageCount(content, format) {
+            const pattern = format === 'markdown' ? /!\[[^\]]*\]\(data:image\//g : /<img class="exported-media" src="data:image\//g;
+            return (String(content || '').match(pattern) || []).length;
+        }
+
         function payloadMessageRole(message, media = false) {
             return isAsyncPayloadResult(message) || (media && isToolMediaMessage(message))
                 ? 'assistant'
@@ -1979,31 +2090,48 @@
             });
         }
 
+        // What a page sweep can match by id: the main messages, plus each visible
+        // generated image, which the signed-in page renders as a unit of its own
+        // listing the tool record's id (verified live 2026-09-27). The reply
+        // selection is unchanged, so a caption the page shows is never folded
+        // into its image as progress.
+        function pagePayloadMessages(entries) {
+            const main = new Set(mainPayloadMessages(entries));
+            return entries.filter(entry => main.has(entry) ||
+                (isToolMediaMessage(entry.message) && isMainPayloadMessage(entry, true)));
+        }
+
         function payloadMessageMatches(conversation, entries) {
-            const mainEntries = mainPayloadMessages(entries);
+            const mainEntries = pagePayloadMessages(entries);
             const byId = new Map(mainEntries.map(entry => [String(entry.message.id || entry.nodeId), entry]));
             const used = new Set();
             const matches = new Map();
+            // Every record a unit lists is on the page, though the unit is one
+            // message: a gallery lists each of its generated images (verified live
+            // 2026-09-27), and recovering the others added them a second time.
+            const represented = new Set();
             const positionalFallbackIsSafe = mainEntries.length === conversation.messages.length;
 
             conversation.messages.forEach(message => {
-                let entry = message.providerMessageId ? byId.get(String(message.providerMessageId)) : null;
-                if (entry && used.has(entry)) entry = null;
+                const listed = providerIds(message.providerMessageId).map(id => byId.get(id)).filter(Boolean);
+                listed.forEach(candidate => represented.add(candidate));
+                let entry = listed.find(candidate => !used.has(candidate)) || null;
 
                 if (!entry && positionalFallbackIsSafe) {
                     entry = mainEntries.find(candidate => {
                         if (used.has(candidate)) return false;
-                        const role = payloadMessageRole(candidate.message);
+                        const role = payloadMessageRole(candidate.message, true);
                         return role === message.senderType;
                     }) || null;
                 }
 
                 if (!entry) return;
                 used.add(entry);
+                represented.add(entry);
                 matches.set(message, entry);
             });
 
-            return matches;
+            return { matches, represented };
         }
 
         function payloadReasoningRecaps(entries, media = false) {
@@ -2645,6 +2773,53 @@
             return dataUrl ? { dataUrl, size: bytes.byteLength } : null;
         }
 
+        // Embeds the images a sweep deferred (see mediaSource): the blob's own
+        // bytes, then a canvas drawing, then a labelled placeholder. Only tokens
+        // that reached the export are read, so dropped media spends no budget.
+        async function resolveDeferredMedia(messages, budget, doc, format, onImage) {
+            const deferred = budget?.deferred;
+            if (!deferred || deferred.size === 0) return;
+            budget.deferred = null;
+            const win = getWindow(doc);
+            const until = now(win) + PAGE_MEDIA_MAX_DURATION;
+            const tokens = Array.from(deferred.keys()).filter(token => messages.some(message => String(message.content).includes(token)));
+            const resolved = new Map();
+            for (const [index, token] of tokens.entries()) {
+                const { url, element } = deferred.get(token);
+                const maxBytes = Math.min(budget.perImage, budget.remaining);
+                let dataUrl = '';
+                if (maxBytes > 0) {
+                    const timeout = Math.min(METADATA_FETCH_TIMEOUT, until - now(win));
+                    const response = timeout > 0 ? await fetchWithTimeout(doc, url, { credentials: 'omit' }, timeout,
+                        response => readImageBody(response, maxBytes)) : null;
+                    const mimeType = imageMimeType(response?.headers?.get?.('content-type'));
+                    if (response?.ok && mimeType && response.body instanceof Uint8Array && response.body.byteLength > 0) {
+                        dataUrl = bytesToDataUrl(response.body, mimeType, doc);
+                    }
+                    if (!dataUrl) dataUrl = canvasDataUrl(element, budget);
+                }
+                if (dataUrl) budget.remaining -= embeddedImageSize(dataUrl);
+                resolved.set(token, dataUrl);
+                onImage?.(index + 1, tokens.length);
+            }
+            messages.forEach(message => {
+                let content = String(message.content);
+                resolved.forEach((dataUrl, token) => {
+                    if (!content.includes(token)) return;
+                    if (dataUrl) {
+                        content = content.split(token).join(dataUrl);
+                        return;
+                    }
+                    const label = alt => alt && alt !== 'Image' ? `[Image: ${alt}]` : '[Image]';
+                    content = format === 'markdown'
+                        ? content.replace(new RegExp(`!\\[((?:\\\\.|[^\\]\\\\])*)\\]\\(${token}\\)`, 'g'), (match, alt) => label(alt))
+                        : content.replace(new RegExp(`<img class="exported-media" src="${token}" alt="([^"]*)">`, 'g'),
+                            (match, alt) => `<span class="media-placeholder">${label(alt)}</span>`);
+                });
+                message.content = content;
+            });
+        }
+
         // Renders a payload message the DOM never showed us. Its parts are the
         // markdown the model actually produced, which is exactly what a markdown
         // export wants; HTML exports escape it and keep the paragraph breaks.
@@ -2687,7 +2862,7 @@
         // precedes it in the conversation. Recovery is skipped entirely when no
         // captured message could be matched to the payload, because then there is
         // no anchor to place anything against.
-        function alignWithPayload(conversation, mainEntries, matches, format, doc) {
+        function alignWithPayload(conversation, mainEntries, matches, represented, format, doc) {
             const indexOfEntry = new Map(mainEntries.map((entry, index) => [entry, index]));
             const positionOf = new Map();
             matches.forEach((entry, message) => {
@@ -2698,8 +2873,7 @@
             // Missing means "not in the export", not "never on screen": a turn the
             // sweep saw but could never read is just as absent. Duplicate DOM
             // representations of one id match one entry, so they recover nothing.
-            const present = new Set(matches.values());
-            const missing = mainEntries.filter(entry => !present.has(entry));
+            const missing = mainEntries.filter(entry => !represented.has(entry));
 
             let recovered = 0;
             missing.forEach(entry => {
@@ -2723,6 +2897,7 @@
                 conversation.messages.splice(insertAt, 0, message);
                 positionOf.set(message, target);
                 matches.set(message, entry);
+                represented.add(entry);
                 recovered++;
             });
 
@@ -2897,8 +3072,8 @@
 
             const conversation = buildConversation(doc, provider, options, messages);
             conversation.source = 'payload';
-            conversation.expectedMessages = mainEntries.length;
-            conversation.unreachedMessages = Math.max(0, mainEntries.length - exportedEntries.size);
+            conversation.expectedMessages = mainEntries.filter(isRenderablePayloadEntry).length;
+            conversation.unreachedMessages = Math.max(0, conversation.expectedMessages - exportedEntries.size);
             conversation.unresolvedReports = entries.unresolvedReports || 0;
             conversation.missedMessages = 0;
             conversation.recoveredMessages = 0;
@@ -2962,18 +3137,18 @@
             const entries = await hydrateDeepResearchEntries(activeEntries, doc, enrichmentOptions);
             conversation.unfinishedMessages = hasUnfinishedPayloadMessages(entries);
             conversation.unresolvedReports = entries.unresolvedReports || 0;
-            const matches = payloadMessageMatches(conversation, entries);
+            const { matches, represented } = payloadMessageMatches(conversation, entries);
             const recaps = payloadReasoningRecaps(entries);
             const imageBudget = options.imageBudget;
 
             // Compare identities, not counts: duplicate DOM representations must
             // not obscure whether each payload turn actually reached the export.
-            const mainEntries = mainPayloadMessages(entries);
-            conversation.expectedMessages = mainEntries.length;
+            const mainEntries = pagePayloadMessages(entries);
+            const expectedEntries = mainEntries.filter(isRenderablePayloadEntry);
+            conversation.expectedMessages = expectedEntries.length;
             const fromSweep = options.fromSweep === true;
             if (fromSweep) {
-                const present = new Set(matches.values());
-                conversation.unreachedMessages = mainEntries.filter(entry => !present.has(entry)).length;
+                conversation.unreachedMessages = expectedEntries.filter(entry => !represented.has(entry)).length;
             }
 
             // A virtualizer can end a sweep anywhere, and a message the sweep never
@@ -2999,7 +3174,7 @@
             }
 
             if (options.recoverMissing !== false && fromSweep) {
-                const aligned = alignWithPayload(conversation, mainEntries, matches, format, doc);
+                const aligned = alignWithPayload(conversation, mainEntries, matches, represented, format, doc);
                 conversation.recoveredMessages = aligned.recovered;
                 if (aligned.recovered > 0) {
                     conversation.unreachedMessages = Math.max(0, (conversation.unreachedMessages || 0) - aligned.recovered);
@@ -3008,6 +3183,23 @@
                 if (aligned.reordered > 0) {
                     console.log(`[Chat Exporter] ${aligned.reordered} message(s) were put back into conversation order using ChatGPT's own record.`);
                 }
+            }
+
+            // A reply interrupted before any text was saved shows nothing on the
+            // page, so the export read as two prompts in a row. Say so where the
+            // reply belongs, as the Markdown export does — unless the page shows a
+            // reply of its own there.
+            const unsavedReplies = interruptedWithoutReply(entries, mainPayloadMessages(entries, true));
+            if (unsavedReplies.size > 0) {
+                const messageOfEntry = new Map(Array.from(matches.entries(), ([message, entry]) => [entry, message]));
+                unsavedReplies.forEach((reply, prompt) => {
+                    const at = conversation.messages.indexOf(messageOfEntry.get(prompt));
+                    if (at < 0 || conversation.messages[at + 1]?.senderType === 'assistant') return;
+                    const standIn = payloadMessageToExport(reply, conversation.providerLabel, format, doc, { allowEmpty: true });
+                    standIn.content = format === 'markdown' ? `*${UNSAVED_REPLY_NOTE}*` : `<p><em>${sanitizeHtml(UNSAVED_REPLY_NOTE)}</em></p>`;
+                    conversation.messages.splice(at + 1, 0, standIn);
+                });
+                conversation.messages.forEach((message, index) => { message.index = index; });
             }
 
             const images = Array.from(matches.values()).reduce((count, entry) =>
@@ -3027,11 +3219,19 @@
 
                 const descriptors = payloadAttachmentDescriptors(nativeMessage);
                 if (descriptors.length > 0) message.attachments = descriptors;
+                // The page already shows an upload's image in its turn; the stored
+                // copy is added only for images the page did not embed, or the
+                // export carried each upload twice.
+                let shownOnPage = message.source ? 0 : embeddedPageImageCount(message.content, format);
 
                 for (const descriptor of descriptors) {
                     const name = descriptor.name || (descriptor.kind === 'image' ? 'Image attachment' : 'File attachment');
 
                     if (descriptor.kind === 'image') {
+                        if (shownOnPage > 0) {
+                            shownOnPage--;
+                            continue;
+                        }
                         let embedded = null;
                         if (attachmentRequestTimeout(doc, imageOptions) > 0 && imageBudget.remaining > 0) {
                             embedded = await fetchEmbeddedImage(doc, descriptor, { ...imageOptions, maxEmbeddedImageBytes: Math.min(imageBudget.perImage, imageBudget.remaining) });
@@ -3100,6 +3300,32 @@
         // the visible fragment (issues #28, #29). The async path below sweeps the
         // scroll container from top to bottom, capturing and serializing each
         // message while its DOM nodes exist.
+
+        // Where a scroller's top and bottom are. ChatGPT's signed-in transcript
+        // scrolls a flex-direction: column-reverse container: it opens on the
+        // newest message, scrollTop 0 is the *bottom*, and older history sits at
+        // negative offsets. A sweep that pinned itself to scrollTop 0 started at
+        // the end and had nowhere left to go (verified live 2026-09-27).
+        function scrollRange(scroller) {
+            const travel = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+            let reversed = scroller.scrollTop < 0;
+            if (!reversed) {
+                try {
+                    reversed = getWindow(scroller.ownerDocument)?.getComputedStyle?.(scroller)?.flexDirection === 'column-reverse';
+                } catch (error) {
+                    // Without computed style, the sign of scrollTop is the only clue.
+                }
+            }
+            return reversed ? { top: -travel, bottom: 0, travel, reversed } : { top: 0, bottom: travel, travel, reversed };
+        }
+
+        // How much of the conversation a sweep has covered: from the top going
+        // down, from the newest message going up.
+        function sweepPercent(scroller, upward = false) {
+            const range = scrollRange(scroller);
+            const covered = upward ? range.bottom - scroller.scrollTop : scroller.scrollTop - range.top;
+            return Math.min(99, Math.max(0, Math.round((covered / Math.max(1, range.travel)) * 100)));
+        }
 
         function findScrollContainer(doc, provider) {
             const win = getWindow(doc);
@@ -3224,7 +3450,7 @@
         }
 
         async function extractConversationFull(options = {}) {
-            options = { ...options, imageBudget: createImageBudget(options) };
+            options = { ...options, imageBudget: { ...createImageBudget(options), deferred: new Map() } };
             const doc = resolveDocument(options.document);
             const provider = providerFor(options.provider, doc);
             const format = options.format || 'markdown';
@@ -3283,7 +3509,8 @@
             }
             const scrollDelay = options.scrollDelay ?? 350;
             const renderQuiet = options.renderQuiet ?? RENDER_QUIET_INTERVAL;
-            const maxScrollSteps = options.maxScrollSteps ?? 400;
+            const maxScrollSteps = options.maxScrollSteps ?? DEFAULT_MAX_SCROLL_STEPS;
+            const historyWait = options.historyWait ?? HISTORY_WAIT;
             const win = getWindow(doc);
             const wait = ms => new Promise(resolve => (win?.setTimeout || setTimeout)(resolve, ms));
 
@@ -3297,8 +3524,13 @@
             // the reason for the return pass below.
             const pendingKeys = new Set();
             let messageSelector = null;
+            // Returns how many turns on screen are not readable yet. Only those
+            // are worth a second look: a turn that never fills in — an
+            // interrupted reply's empty unit — once made every later step wait
+            // twice, and a live sweep took 370 ms a step.
             const capture = () => {
                 messageSelector = messageSelector || resolveMessageSelector(doc, provider);
+                let waiting = 0;
                 findMessageCandidates(doc, messageSelector).forEach(messageElement => {
                     const key = messageKey(messageElement, provider, state.container);
                     if (seenKeys.has(key)) return;
@@ -3311,7 +3543,9 @@
                         return;
                     }
                     pendingKeys.add(key);
+                    waiting++;
                 });
+                return waiting;
             };
 
             // An export must not be able to hang the page: every phase runs against
@@ -3357,12 +3591,10 @@
             // Minutes of silence during a long sweep are indistinguishable from a
             // hang, which is how a working export gets abandoned.
             let lastProgress = now(win);
-            const reportProgress = scroller => {
+            const reportProgress = (scroller, upward = false) => {
                 if (now(win) - lastProgress < PROGRESS_INTERVAL) return;
                 lastProgress = now(win);
-                const travel = Math.max(1, scroller.scrollHeight - scroller.clientHeight);
-                const percent = Math.min(99, Math.max(0, Math.round((scroller.scrollTop / travel) * 100)));
-                console.log(`[Chat Exporter] Sweeping… ${percent}% · ${state.messages.length} messages captured so far.`);
+                console.log(`[Chat Exporter] Sweeping… ${sweepPercent(scroller, upward)}% · ${state.messages.length} messages captured so far.`);
             };
 
             // Wait for the newest answer to stop growing before anything is read,
@@ -3385,6 +3617,161 @@
                 ? true
                 : await awaitStreamingSettled(doc, provider, wait, outOfTime);
 
+            // Replaces a container that client-side navigation swapped out from
+            // under the sweep; writes to a detached node go nowhere.
+            const reattach = scroller => {
+                if (scroller.isConnected !== false) return scroller;
+                const replacement = findScrollContainer(doc, provider);
+                if (replacement) state.container = replacement;
+                return replacement;
+            };
+
+            const sweepDownward = async scroller => {
+                // Pin to the top until the container stops growing so providers
+                // that lazily prepend older history finish loading it. Two stable
+                // rounds, because a virtualizer can pause between batches.
+                let previousHeight = -1;
+                let stableHeights = 0;
+                let guard = 0;
+                while (stableHeights < 2 && guard++ < maxScrollSteps && !outOfTime()) {
+                    scroller.scrollTop = scrollRange(scroller).top;
+                    // Deliberately the full delay, not the mutation-driven
+                    // settle: this loop waits on a *network* fetch of older
+                    // history, which produces no DOM mutation until it lands.
+                    // Settling on quiet here would declare "no more history"
+                    // after 60ms and start the sweep below the real top. It
+                    // runs a handful of times, so it is not worth the risk.
+                    await wait(scrollDelay);
+                    stableHeights = scroller.scrollHeight === previousHeight ? stableHeights + 1 : 0;
+                    previousHeight = scroller.scrollHeight;
+                }
+
+                capture();
+
+                // Sweep down in overlapping steps, capturing whatever the
+                // virtualizer renders at each stop. Progress is judged by messages
+                // captured and by reaching the bottom — never by scrollTop alone,
+                // because swapping rendered turns for shorter placeholders can drag
+                // scrollTop backwards mid-sweep and would end the sweep early,
+                // exporting only the fragment captured so far.
+                let stalls = 0;
+                guard = 0;
+                while (guard++ < maxScrollSteps && !outOfTime()) {
+                    await awaitVisible();
+                    const current = reattach(scroller);
+                    if (!current) break;
+                    scroller = current;
+
+                    const beforeTop = scroller.scrollTop;
+                    const beforeCount = state.messages.length;
+                    scroller.scrollTop = beforeTop + Math.max(scroller.clientHeight * 0.75, 200);
+                    await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
+
+                    // Turns mount before their text renders. Give the ones that were
+                    // not ready a moment and look again here, while they are still on
+                    // screen — once the sweep moves on they are gone, and providers
+                    // that snap back to the newest message make a return trip
+                    // impossible.
+                    if (capture() > 0 && !outOfTime()) {
+                        await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
+                        capture();
+                    }
+
+                    reportProgress(scroller);
+                    emitProgress({ ...describe('sweep'), percent: sweepPercent(scroller) });
+
+                    if (scroller.scrollTop > beforeTop || state.messages.length > beforeCount) {
+                        stalls = 0;
+                        continue;
+                    }
+                    if (scroller.scrollTop >= scrollRange(scroller).bottom - BOTTOM_TOLERANCE) break;
+                    if (++stalls >= MAX_SCROLL_STALLS) break;
+                }
+
+                // However the sweep ended — bottom reached, stalled, or out of
+                // steps — finish at the bottom. A stall can end the loop
+                // anywhere, and the final capture used to run at whatever
+                // position that happened to be: a real conversation stalled at
+                // 85% and shipped without its last two messages, which are
+                // exactly the ones a reader notices are missing.
+                if (!outOfTime()) {
+                    scroller.scrollTop = scrollRange(scroller).bottom;
+                    await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
+                    if (capture() > 0 && !outOfTime()) {
+                        await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
+                    }
+                }
+                return scroller;
+            };
+
+            // A column-reverse transcript (signed-in ChatGPT) opens on its newest
+            // message and loads older history only while the view is held at the
+            // top, in batches that arrived 1-6 s apart on a real conversation
+            // (verified live 2026-09-27). Pinning to the top first saw one batch
+            // settle, took it for the start, and swept the newest 15 of 166
+            // messages. Sweeping up from the newest message loads each batch on
+            // the way, and positions measured from the bottom never move when
+            // history is prepended above them.
+            const awaitOlderHistory = async scroller => {
+                const height = scroller.scrollHeight;
+                emitProgress(describe('history'));
+                let quietSince = now(win);
+                while (now(win) - quietSince < historyWait && !outOfTime()) {
+                    scroller.scrollTop = scrollRange(scroller).top;
+                    await wait(Math.min(scrollDelay, 250));
+                    if (scroller.scrollHeight !== height) return true;
+                    if (doc.hidden) {
+                        if (!(await awaitVisible())) return false;
+                        quietSince = now(win);
+                    }
+                }
+                return scroller.scrollHeight !== height;
+            };
+
+            const sweepUpward = async scroller => {
+                scroller.scrollTop = scrollRange(scroller).bottom;
+                await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
+                capture();
+
+                let stalls = 0;
+                let guard = 0;
+                while (guard++ < maxScrollSteps && !outOfTime()) {
+                    await awaitVisible();
+                    const current = reattach(scroller);
+                    if (!current) break;
+                    scroller = current;
+
+                    const beforeTop = scroller.scrollTop;
+                    const beforeCount = state.messages.length;
+                    scroller.scrollTop = beforeTop - Math.max(scroller.clientHeight * 0.75, 200);
+                    await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
+                    if (capture() > 0 && !outOfTime()) {
+                        await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
+                        capture();
+                    }
+
+                    reportProgress(scroller, true);
+                    // Coverage of what has loaded so far: it reads lower after a
+                    // batch of older history lands, rather than sitting at 99%
+                    // while half the conversation is still to come.
+                    emitProgress({ ...describe('sweep'), percent: sweepPercent(scroller, true) });
+
+                    if (scroller.scrollTop < beforeTop || state.messages.length > beforeCount) {
+                        stalls = 0;
+                        continue;
+                    }
+                    if (scroller.scrollTop <= scrollRange(scroller).top + BOTTOM_TOLERANCE) {
+                        if (await awaitOlderHistory(scroller)) {
+                            stalls = 0;
+                            continue;
+                        }
+                        break;
+                    }
+                    if (++stalls >= MAX_SCROLL_STALLS) break;
+                }
+                return scroller;
+            };
+
             if (container) {
                 const originalTop = container.scrollTop;
                 let scroller = container;
@@ -3392,93 +3779,10 @@
                 try {
                     await awaitVisible();
 
-                    // Pin to the top until the container stops growing so providers
-                    // that lazily prepend older history finish loading it. Two stable
-                    // rounds, because a virtualizer can pause between batches.
-                    let previousHeight = -1;
-                    let stableHeights = 0;
-                    let guard = 0;
-                    while (stableHeights < 2 && guard++ < maxScrollSteps && !outOfTime()) {
-                        scroller.scrollTop = 0;
-                        // Deliberately the full delay, not the mutation-driven
-                        // settle: this loop waits on a *network* fetch of older
-                        // history, which produces no DOM mutation until it lands.
-                        // Settling on quiet here would declare "no more history"
-                        // after 60ms and start the sweep below the real top. It
-                        // runs a handful of times, so it is not worth the risk.
-                        await wait(scrollDelay);
-                        stableHeights = scroller.scrollHeight === previousHeight ? stableHeights + 1 : 0;
-                        previousHeight = scroller.scrollHeight;
-                    }
-
-                    capture();
-
-                    // Sweep down in overlapping steps, capturing whatever the
-                    // virtualizer renders at each stop. Progress is judged by messages
-                    // captured and by reaching the bottom — never by scrollTop alone,
-                    // because swapping rendered turns for shorter placeholders can drag
-                    // scrollTop backwards mid-sweep and would end the sweep early,
-                    // exporting only the fragment captured so far.
-                    let stalls = 0;
-                    guard = 0;
-                    while (guard++ < maxScrollSteps && !outOfTime()) {
-                        await awaitVisible();
-
-                        // Client-side navigation can swap the whole thread out from
-                        // under us; writes to a detached node go nowhere.
-                        if (scroller.isConnected === false) {
-                            const replacement = findScrollContainer(doc, provider);
-                            if (!replacement) break;
-                            scroller = replacement;
-                            state.container = replacement;
-                        }
-
-                        const beforeTop = scroller.scrollTop;
-                        const beforeCount = state.messages.length;
-                        scroller.scrollTop = beforeTop + Math.max(scroller.clientHeight * 0.75, 200);
-                        await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
-                        capture();
-
-                        // Turns mount before their text renders. Give the ones that were
-                        // not ready a moment and look again here, while they are still on
-                        // screen — once the sweep moves on they are gone, and providers
-                        // that snap back to the newest message make a return trip
-                        // impossible.
-                        if (pendingKeys.size > 0 && !outOfTime()) {
-                            await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
-                            capture();
-                        }
-
-                        reportProgress(scroller);
-                        {
-                            const travel = Math.max(1, scroller.scrollHeight - scroller.clientHeight);
-                            emitProgress({
-                                ...describe('sweep'),
-                                percent: Math.min(99, Math.max(0, Math.round((scroller.scrollTop / travel) * 100)))
-                            });
-                        }
-
-                        if (scroller.scrollTop > beforeTop || state.messages.length > beforeCount) {
-                            stalls = 0;
-                            continue;
-                        }
-                        if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - BOTTOM_TOLERANCE) break;
-                        if (++stalls >= MAX_SCROLL_STALLS) break;
-                    }
-
-                    // However the sweep ended — bottom reached, stalled, or out of
-                    // steps — finish at the bottom. A stall can end the loop
-                    // anywhere, and the final capture used to run at whatever
-                    // position that happened to be: a real conversation stalled at
-                    // 85% and shipped without its last two messages, which are
-                    // exactly the ones a reader notices are missing.
-                    if (!outOfTime()) {
-                        scroller.scrollTop = scroller.scrollHeight;
-                        await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
-                        capture();
-                        if (pendingKeys.size > 0 && !outOfTime()) {
-                            await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
-                        }
+                    if (scrollRange(scroller).reversed) {
+                        scroller = await sweepUpward(scroller);
+                    } else {
+                        scroller = await sweepDownward(scroller);
                     }
                     capture();
                 } finally {
@@ -3497,6 +3801,9 @@
             // afterwards has budgets of its own: it is what can still complete an
             // export whose sweep ran out of time (issue #41).
             const sweptInTime = !outOfTime();
+            await resolveDeferredMedia(state.messages, state.imageBudget, doc, format, (done, total) => emitProgress({
+                ...describe('attachments'), percent: Math.round(100 * done / total), lastPreview: `Image ${done} of ${total}`
+            }));
             const conversation = buildConversation(doc, provider, options, sortByConversationOrder(state.messages, provider));
             emitProgress({ ...describe('metadata'), percent: 100 });
             try {
@@ -3510,9 +3817,9 @@
             // Turns that were on screen but never became readable, less those the
             // stored conversation has since filled in. Saying so beats handing
             // over a short file that looks complete.
-            const exportedIds = new Set(conversation.messages.map(message => message.providerMessageId).filter(Boolean));
+            const exportedIds = new Set(conversation.messages.flatMap(message => providerIds(message.providerMessageId)));
             const missed = Array.from(pendingKeys).filter(key =>
-                !(typeof key === 'string' && key.startsWith('id:') && exportedIds.has(key.slice(3)))).length;
+                !(typeof key === 'string' && key.startsWith('id:') && providerIds(key.slice(3)).some(id => exportedIds.has(id)))).length;
             conversation.messages.forEach(message => {
                 delete message.providerMessageId;
                 if (!message.source) message.source = 'dom';

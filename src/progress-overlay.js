@@ -40,6 +40,7 @@
         hidden: 'Paused — bring this tab to the front',
         resumed: 'Resuming…',
         sweep: 'Reading conversation…',
+        history: 'Loading older messages…',
         metadata: 'Adding timestamps, attachments and any missed messages…',
         done: 'Export complete'
     };

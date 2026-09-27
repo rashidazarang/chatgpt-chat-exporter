@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head><title>Monitor architecture - ChatGPT</title></head>
+<body>
+<!--
+  Signed-in ChatGPT transcript, as observed live on 2026-09-27 in desktop
+  Chrome. Class names are atomic and left out; the nesting, data attributes
+  and labels are as observed. Content is synthetic.
+
+  - [data-turn-key] holds a prompt AND its answer; it is never a message.
+  - Units are keyed "<turn>:<n>:user" / "<turn>:<n>:assistant" and list the
+    message ids they render, space-separated (an answer lists its id twice).
+  - A generated image has no unit of its own: a bare element lists the ids of
+    the tool records that hold the images, after a "ChatGPT said:" label. A
+    gallery shows the selected image large and every image as a thumbnail.
+  - Images are the page's own blob: URLs of the stored files.
+  - A reply interrupted before any text was saved renders nothing.
+  - The scroller runs flex-direction: column-reverse.
+-->
+<main>
+<div data-app-action-timeline-scroll role="presentation" style="display: flex; flex-direction: column-reverse; overflow-y: auto">
+ <div>
+  <div data-mcp-app-portal-target data-thread-user-message-navigation-content>
+   <div data-chatgpt-conversation-selection-target data-thread-find-target>
+
+    <div data-turn-key="7d0c0a52-5b1e-4a3f-9d52-3c2f4e1a0001">
+     <div data-content-search-turn-key="7d0c0a52-5b1e-4a3f-9d52-3c2f4e1a0001">
+      <div aria-label="Wednesday 12:13 AM" role="separator"></div>
+      <div data-chatgpt-search-unit-key="fallback-turn-0:0:user" data-chatgpt-search-message-ids="u-1">
+       <div>
+        <div role="button" aria-label="User attachment" type="button" data-state="closed">
+         <img alt="User attachment" src="blob:https://chatgpt.com/0e2f6a1c-upload-0001">
+        </div>
+       </div>
+       <div data-content-search-unit-key="fallback-turn-0:0:user">
+        <div>
+         <div data-user-message-bubble="true">
+          <div><div><div data-search-result-target><div>
+           <div dir="auto" style="white-space: pre-wrap">Compare these monitors:
+  - keep this indent</div>
+          </div></div></div></div>
+         </div>
+         <div><div><div>
+          <span><button type="button" aria-label="Copy message"><svg></svg></button></span>
+          <span><button type="button" aria-label="Share prompt"><svg></svg></button></span>
+          <span><button type="button" aria-label="Edit message"><svg></svg></button></span>
+         </div></div></div>
+        </div>
+       </div>
+      </div>
+      <div><div><div><div><div>
+       <div data-content-search-unit-key="fallback-turn-0:2:assistant" data-chatgpt-search-unit-key="fallback-turn-0:2:assistant" data-chatgpt-search-message-ids="a-1 a-1">
+        <h4 data-conversation-role="assistant" tabindex="-1">ChatGPT said:</h4>
+        <div data-chatgpt-selection-conversation-id="c-1" data-chatgpt-selection-message-id="a-1">
+         <div data-selected-text-overlay-target="_r_1_" dir="auto" data-markdown-text-style="assistant-message">
+          <p dir="auto"><strong><span>Short answer:</span></strong><span> the left one.</span></p>
+          <h2 dir="auto"><span>Why</span></h2>
+          <blockquote dir="auto"><p dir="auto"><span>Higher refresh rate.</span></p></blockquote>
+         </div>
+        </div>
+        <div><div>
+         <span><button type="button" aria-label="Copy response"><svg></svg></button></span>
+         <span><button type="button" aria-label="Good response"><svg></svg></button></span>
+         <span><button type="button" aria-label="Share"><svg></svg></button></span>
+        </div></div>
+       </div>
+      </div></div></div></div></div>
+     </div>
+    </div>
+
+    <div data-turn-key="7d0c0a52-5b1e-4a3f-9d52-3c2f4e1a0002">
+     <div data-content-search-turn-key="7d0c0a52-5b1e-4a3f-9d52-3c2f4e1a0002">
+      <div data-chatgpt-search-unit-key="fallback-turn-1:0:user" data-chatgpt-search-message-ids="u-2">
+       <div data-content-search-unit-key="fallback-turn-1:0:user">
+        <div>
+         <div data-user-message-bubble="true">
+          <div><div><div data-search-result-target><div>
+           <div dir="auto" style="white-space: pre-wrap">Sketch the dashboard.</div>
+          </div></div></div></div>
+         </div>
+        </div>
+       </div>
+      </div>
+      <div><div><div><div><div id="image-answer">
+       <h4 data-conversation-role="assistant" tabindex="-1">ChatGPT said:</h4>
+       <div data-chatgpt-search-message-ids="t-2 t-2b">
+        <div>
+         <div data-testid="generated-image-gallery">
+          <div>
+           <div data-image-transparency-backdrop-scope>
+            <button type="button" data-testid="generated-image-preview" aria-label="Generated image 1" aria-hidden="true">
+             <img draggable="false" width="1536" height="1024" referrerpolicy="no-referrer" alt="Generated image 1" src="blob:https://chatgpt.com/7a41c3d2-generated-0002">
+            </button>
+            <div><div>
+             <div><button type="button" aria-label="Edit generated image 1">Edit</button></div>
+             <div><span data-state="closed"><button type="button" aria-label="Share generated image 1"><span><svg aria-hidden="true"></svg></span></button></span></div>
+            </div></div>
+           </div>
+          </div>
+          <div>
+           <button type="button" aria-label="Select image 1"><img alt="" src="blob:https://chatgpt.com/7a41c3d2-generated-0002"></button>
+           <button type="button" aria-label="Select image 2"><img alt="" src="blob:https://chatgpt.com/7a41c3d2-generated-0003"></button>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div></div></div></div></div>
+     </div>
+    </div>
+
+    <div data-turn-key="7d0c0a52-5b1e-4a3f-9d52-3c2f4e1a0003">
+     <div data-content-search-turn-key="7d0c0a52-5b1e-4a3f-9d52-3c2f4e1a0003">
+      <div data-chatgpt-search-unit-key="fallback-turn-2:0:user" data-chatgpt-search-message-ids="u-3">
+       <div data-content-search-unit-key="fallback-turn-2:0:user">
+        <div>
+         <div data-user-message-bubble="true">
+          <div><div><div data-search-result-target><div>
+           <div dir="auto" style="white-space: pre-wrap">Are you still there?</div>
+          </div></div></div></div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+
+    <div data-turn-key="7d0c0a52-5b1e-4a3f-9d52-3c2f4e1a0004">
+     <div data-content-search-turn-key="7d0c0a52-5b1e-4a3f-9d52-3c2f4e1a0004">
+      <div aria-label="Today 11:52 AM" role="separator"></div>
+      <div data-chatgpt-search-unit-key="fallback-turn-3:0:user" data-chatgpt-search-message-ids="u-4">
+       <div data-content-search-unit-key="fallback-turn-3:0:user">
+        <div>
+         <div data-user-message-bubble="true">
+          <div><div><div data-search-result-target><div>
+           <div dir="auto" style="white-space: pre-wrap">Summarize.</div>
+          </div></div></div></div>
+         </div>
+        </div>
+       </div>
+      </div>
+      <div><div><div><div><div>
+       <div data-content-search-unit-key="fallback-turn-3:2:assistant" data-chatgpt-search-unit-key="fallback-turn-3:2:assistant" data-chatgpt-search-message-ids="a-4 a-4">
+        <h4 data-conversation-role="assistant" tabindex="-1">ChatGPT said:</h4>
+        <div data-chatgpt-selection-conversation-id="c-1" data-chatgpt-selection-message-id="a-4">
+         <div data-selected-text-overlay-target="_r_4_" dir="auto" data-markdown-text-style="assistant-message">
+          <p dir="auto"><span>Two monitors compared; one sketch drawn.</span></p>
+         </div>
+        </div>
+       </div>
+      </div></div></div></div></div>
+     </div>
+    </div>
+
+   </div>
+  </div>
+ </div>
+</div>
+</main>
+</body>
+</html>

@@ -307,11 +307,11 @@
 
     // Message turns carry their own share controls — live ChatGPT renders
     // `share-prompt-link-turn-action-button` inside
-    // `section[data-testid="conversation-turn-N"]`, and the 2026 transcript
-    // puts a "Share" action in every `li[data-message-role]`. Those share the
-    // current message, not the conversation, and must keep their native
-    // behaviour.
-    const TURN_CONTAINER = '[data-message-author-role], [data-message-role], [data-testid^="conversation-turn"], [data-testid^="conversation_turn"], article';
+    // `section[data-testid="conversation-turn-N"]`, and the 2026 transcripts
+    // put a "Share" / "Share prompt" action in every `li[data-message-role]`
+    // and `[data-chatgpt-search-unit-key]`. Those share the current message,
+    // not the conversation, and must keep their native behaviour.
+    const TURN_CONTAINER = '[data-message-author-role], [data-message-role], [data-chatgpt-search-unit-key], [data-chatgpt-search-message-ids], [data-testid^="conversation-turn"], [data-testid^="conversation_turn"], article';
 
     // The data-testid hook works on every ChatGPT locale; the English text
     // match is a fallback for DOM revisions that drop the testid.

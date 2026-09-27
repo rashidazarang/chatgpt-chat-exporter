@@ -2709,6 +2709,13 @@ function installVirtualizedConversation(window, totalMessages, options = {}) {
     const scroller = document.createElement('div');
     scroller.id = 'scroller';
     scroller.style.overflowY = 'auto';
+    // Signed-in ChatGPT's transcript (verified live 2026-09-27): the newest
+    // message sits at scrollTop 0 and the oldest at -(scrollHeight -
+    // clientHeight).
+    if (options.reversed) {
+        scroller.style.display = 'flex';
+        scroller.style.flexDirection = 'column-reverse';
+    }
     document.body.appendChild(scroller);
 
     const MESSAGE_HEIGHT = 100;
@@ -2716,6 +2723,9 @@ function installVirtualizedConversation(window, totalMessages, options = {}) {
     // each stop show a fresh set of turns — as a long ChatGPT answer does.
     const CLIENT_HEIGHT = options.clientHeight || 300;
     let scrollTop = 0;
+    const travel = totalMessages * MESSAGE_HEIGHT - CLIENT_HEIGHT;
+    // Distance from the top of the conversation, whichever way scrollTop counts.
+    const offset = () => options.reversed ? scrollTop + travel : scrollTop;
 
     let renders = 0;
     // Node identity survives being scrolled out of view, as it does in a real
@@ -2729,13 +2739,13 @@ function installVirtualizedConversation(window, totalMessages, options = {}) {
             message.setAttribute('data-message-author-role', i % 2 === 0 ? 'user' : 'assistant');
             message.setAttribute('data-message-id', `msg-${i}`);
             const top = i * MESSAGE_HEIGHT;
-            message.getBoundingClientRect = () => ({ top: top - scrollTop, bottom: top - scrollTop + MESSAGE_HEIGHT, height: MESSAGE_HEIGHT, left: 0, right: 100, width: 100 });
+            message.getBoundingClientRect = () => ({ top: top - offset(), bottom: top - offset() + MESSAGE_HEIGHT, height: MESSAGE_HEIGHT, left: 0, right: 100, width: 100 });
             nodes.set(i, message);
         }
         const message = nodes.get(i);
 
         const fill = () => {
-            if (message.firstChild) return;
+            if (message.firstChild || options.neverFills?.has(i)) return;
             const paragraph = document.createElement('p');
             paragraph.textContent = `Message number ${i} with enough body text to pass the export filters.`;
             message.appendChild(paragraph);
@@ -2759,7 +2769,7 @@ function installVirtualizedConversation(window, totalMessages, options = {}) {
         while (scroller.firstChild) scroller.removeChild(scroller.firstChild);
         for (let i = 0; i < totalMessages; i++) {
             const top = i * MESSAGE_HEIGHT;
-            const inWindow = top < scrollTop + CLIENT_HEIGHT && top + MESSAGE_HEIGHT > scrollTop;
+            const inWindow = top < offset() + CLIENT_HEIGHT && top + MESSAGE_HEIGHT > offset();
             // ChatGPT leaves the turns from the previous scroll position mounted
             // for a moment after jumping to the top.
             const stale = options.staleBottomRenders
@@ -2778,7 +2788,9 @@ function installVirtualizedConversation(window, totalMessages, options = {}) {
     Object.defineProperty(scroller, 'scrollTop', {
         get: () => scrollTop,
         set(value) {
-            const clamped = Math.max(0, Math.min(value, totalMessages * MESSAGE_HEIGHT - CLIENT_HEIGHT));
+            const clamped = options.reversed
+                ? Math.max(-travel, Math.min(value, 0))
+                : Math.max(0, Math.min(value, travel));
             writes += 1;
             scrollTop = options.anchorJumpEvery && writes % options.anchorJumpEvery === 0
                 ? Math.max(0, clamped - (options.anchorJumpBy || MESSAGE_HEIGHT * 2))
@@ -2922,6 +2934,158 @@ test('full extraction survives a virtualizer that drags scrollTop backwards', as
     full.messages.forEach((message, index) => {
         assert.match(message.content, new RegExp(`Message number ${index}\\b`), `message ${index} is in order`);
     });
+});
+
+test('full extraction sweeps a column-reverse scroller from its newest message up', async () => {
+    // Signed-in ChatGPT scrolls its transcript in reverse. A sweep that took
+    // scrollTop 0 for the top stood at the newest message, believed it was at
+    // the oldest, and exported one screenful.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Reversed Fixture</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/reversed',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 30;
+    const scroller = installVirtualizedConversation(dom.window, totalMessages, { reversed: true });
+    const progress = [];
+
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 0,
+        historyWait: 20,
+        onProgress: event => { if (event.phase === 'sweep') progress.push(event.percent); }
+    });
+
+    assert.equal(full.messages.length, totalMessages);
+    assert.equal(full.complete, true);
+    full.messages.forEach((message, index) => {
+        assert.match(message.content, new RegExp(`Message number ${index} `), `message ${index} is in order`);
+    });
+    assert.ok(progress.length > 1 && progress.every((percent, index) => index === 0 || percent >= progress[index - 1]),
+        `sweep progress never goes back: ${progress}`);
+    assert.equal(scroller.scrollTop, 0, 'the reader is returned to the newest message');
+});
+
+// Signed-in ChatGPT's transcript as observed live on 2026-09-27: a
+// column-reverse scroller that opens on the newest messages and loads older
+// history in batches, only while the view is held at the top, with pauses
+// between batches. History is prepended above, so nothing below moves.
+function installLazyHistory(window, totalMessages, { batch, gaps }) {
+    const { document } = window;
+    const scroller = document.createElement('div');
+    scroller.style.overflowY = 'auto';
+    scroller.style.display = 'flex';
+    scroller.style.flexDirection = 'column-reverse';
+    document.body.appendChild(scroller);
+
+    const MESSAGE_HEIGHT = 100;
+    const CLIENT_HEIGHT = 300;
+    let oldestLoaded = totalMessages - batch;
+    let scrollTop = 0;
+    let loading = null;
+    const loads = [];
+    const travel = () => (totalMessages - oldestLoaded) * MESSAGE_HEIGHT - CLIENT_HEIGHT;
+    // Measured from the bottom, which is where a column-reverse view anchors.
+    const topOf = i => (i - totalMessages) * MESSAGE_HEIGHT + CLIENT_HEIGHT - scrollTop;
+
+    const nodes = new Map();
+    const nodeFor = i => {
+        if (!nodes.has(i)) {
+            const message = document.createElement('div');
+            message.setAttribute('data-message-author-role', i % 2 === 0 ? 'user' : 'assistant');
+            message.setAttribute('data-message-id', `msg-${i}`);
+            message.innerHTML = `<p>Message number ${i} with enough body text to pass the export filters.</p>`;
+            message.getBoundingClientRect = () => ({ top: topOf(i), bottom: topOf(i) + MESSAGE_HEIGHT, height: MESSAGE_HEIGHT, left: 0, right: 100, width: 100 });
+            nodes.set(i, message);
+        }
+        return nodes.get(i);
+    };
+
+    const render = () => {
+        while (scroller.firstChild) scroller.removeChild(scroller.firstChild);
+        for (let i = oldestLoaded; i < totalMessages; i++) {
+            if (topOf(i) < CLIENT_HEIGHT && topOf(i) + MESSAGE_HEIGHT > 0) scroller.appendChild(nodeFor(i));
+        }
+        if (oldestLoaded > 0 && scrollTop <= -travel() && !loading) {
+            loading = window.setTimeout(() => {
+                loading = null;
+                loads.push(oldestLoaded);
+                oldestLoaded = Math.max(0, oldestLoaded - batch);
+                render();
+            }, gaps[loads.length % gaps.length]);
+        }
+    };
+
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => travel() + CLIENT_HEIGHT, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { get: () => CLIENT_HEIGHT, configurable: true });
+    Object.defineProperty(scroller, 'scrollTop', {
+        get: () => scrollTop,
+        set(value) {
+            scrollTop = Math.max(-travel(), Math.min(value, 0));
+            render();
+        }
+    });
+    render();
+    return { scroller, loads };
+}
+
+test('a turn that never fills in costs a second look only while it is on screen', async () => {
+    // Every turn pending anywhere used to make every later step wait twice;
+    // a live sweep took 370 ms a step behind an interrupted reply's empty unit.
+    const settles = async neverFills => {
+        const dom = new JSDOM('<!DOCTYPE html><html><head><title>Stuck Turn</title></head><body></body></html>', {
+            url: 'https://chatgpt.com/c/stuck-turn',
+            pretendToBeVisual: true
+        });
+        installVirtualizedConversation(dom.window, 30, { neverFills });
+        const Observer = dom.window.MutationObserver;
+        let observers = 0;
+        dom.window.MutationObserver = class extends Observer {
+            constructor(callback) {
+                super(callback);
+                observers += 1;
+            }
+        };
+        const full = await engine.extractConversationFull({
+            document: dom.window.document, provider: 'chatgpt', format: 'markdown', scrollDelay: 5, awaitStreaming: false
+        });
+        dom.window.close();
+        return { observers, messages: full.messages.length };
+    };
+    const clean = await settles(new Set());
+    const stuck = await settles(new Set([0]));
+    assert.equal(clean.messages, 30);
+    assert.equal(stuck.messages, 29);
+    assert.ok(stuck.observers - clean.observers <= 3,
+        `the empty turn should add a second look at a few stops, not every one: ${clean.observers} vs ${stuck.observers}`);
+});
+
+test('a sweep waits out pauses between batches of older history', async () => {
+    // Live, a 166-message conversation paused up to 6 s between batches. The
+    // sweep took the first pause for the start of the conversation and
+    // exported the newest 15 messages from the page.
+    const dom = new JSDOM('<!DOCTYPE html><html><head><title>Lazy History</title></head><body></body></html>', {
+        url: 'https://chatgpt.com/c/lazy-history',
+        pretendToBeVisual: true
+    });
+    const totalMessages = 40;
+    const { scroller, loads } = installLazyHistory(dom.window, totalMessages, { batch: 8, gaps: [30, 150, 60] });
+
+    const full = await engine.extractConversationFull({
+        document: dom.window.document,
+        provider: 'chatgpt',
+        format: 'markdown',
+        scrollDelay: 10,
+        historyWait: 400
+    });
+
+    assert.equal(loads.length, 4, 'every batch of older history was loaded');
+    assert.equal(full.messages.length, totalMessages);
+    full.messages.forEach((message, index) => {
+        assert.match(message.content, new RegExp(`Message number ${index} `), `message ${index} is in order`);
+    });
+    assert.equal(scroller.scrollTop, 0, 'the reader is returned to the newest message');
 });
 
 test('full extraction sweeps virtualized conversations end to end (issues #28, #29)', async () => {

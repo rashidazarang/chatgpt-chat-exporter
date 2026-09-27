@@ -99,16 +99,27 @@ Chromium, Firefox, and WebKit CI exercise every shipped console bundle, both use
 
 ---
 
-## 🔧 What's New in v1.2.2
+## 🔧 What's New in v1.2.3
+
+Tested live on a signed-in, 180-message conversation with 72 images.
+
+- 🧭 **Signed-in ChatGPT exports to HTML and PDF.** Its page layout was not recognised, and it scrolls in reverse, loading older history in batches seconds apart. The export read 15 of 166 messages from the page and rebuilt the rest from ChatGPT's record as plain paragraphs. It now reads 171 of 180 from the page, with their formatting.
+- 🖼️ **Images are embedded as the original files.** Redrawing them made each one larger, and 44 of 75 became placeholders; 4 still do, over the 50 MB cap. A gallery's images appear once each, not twice, and uploads are not added again.
+- 🧹 **Files ChatGPT read back are no longer exported as its replies** ("Make sure to include in your response to cite this file…").
+- ✅ **No false "incomplete" warnings** from empty records, and an interrupted reply leaves a note in every format.
+
+([release notes](temporal/release-notes-v1.2.3.md))
+
+<details>
+<summary>📝 Previous updates</summary>
+
+### v1.2.2
 
 - ✅ **No more false "may be incomplete" warnings.** ChatGPT keeps replies it never finished — stopped, failed or abandoned — in its record for good, and one anywhere in a conversation flagged the whole export. Only a final answer still being written does now.
 - 💬 **Interrupted replies are shown, not dropped.** One that saved no text appears as ChatGPT's turn saying so, instead of leaving two of your prompts in a row. One stopped part-way ends with a note, and a code block it left open is closed, so it no longer swallows the rest of the file.
 - 📅 **Exports are dated by your calendar day**, not UTC's: evening exports in the Americas were dated tomorrow.
 
 ([release notes](temporal/release-notes-v1.2.2.md))
-
-<details>
-<summary>📝 Previous updates</summary>
 
 ### v1.2.1
 
@@ -386,7 +397,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/EXPORTER_GUIDE.md](docs/EXPORTE
 
 ## 🚀 Version History
 
-- **v1.2.2** (Current) - Interrupted replies shown instead of flagging the export incomplete; closed code fences; local dates
+- **v1.2.3** (Current) - Signed-in ChatGPT in HTML and PDF: its page layout, reverse scrolling and lazily loaded history; original image files; tool file reads no longer exported as replies
+- **v1.2.2** - Interrupted replies shown instead of flagging the export incomplete; closed code fences; local dates
 - **v1.2.1** - Generated images and every uploaded image in Markdown exports; tool plumbing no longer shown as reasoning
 - **v1.2.0** - ChatGPT's new page layout, short prompts and temporary-chat images, complete long conversations, Deep Research, bookmarklets, Gemini formatting, and release hardening
 - **v1.1.0** - Canonical userscript updates, stable titles, reasoning progress, and citation whitespace fixes
