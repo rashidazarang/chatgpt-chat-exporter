@@ -31,7 +31,7 @@
   "homepage": "https://github.com/rashidazarang/chatgpt-chat-exporter#readme",
   "devDependencies": {
     "@playwright/test": "1.63.0",
-    "jsdom": "30.1.0",
+    "jsdom": "30.1.1",
     "terser": "5.51.2"
   },
   "engines": {
