@@ -17,7 +17,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '1.2.3';
+        const ENGINE_VERSION = '1.2.4';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -4258,11 +4258,213 @@
             return format === 'markdown' ? 'text/markdown' : 'text/html';
         }
 
+        // Parse just an inline image destination, advancing past each label once.
+        // A regex over complete image expressions can rescan megabytes after every
+        // malformed opening bracket. Payloads and labels are scanned linearly here.
+        function markdownImageDestination(content, offset) {
+            let cursor = offset + 2;
+            let depth = 1;
+            while (cursor < content.length && content[cursor] !== '\n' && depth) {
+                const character = content[cursor++];
+                if (character === '\\') cursor++;
+                else if (character === '[') depth++;
+                else if (character === ']') depth--;
+            }
+            const result = { next: cursor };
+            if (depth || content[cursor++] !== '(') return result;
+            while (/\s/.test(content[cursor] || '') && cursor < content.length) cursor++;
+            const angled = content[cursor] === '<';
+            if (angled) cursor++;
+            const start = cursor;
+            const prefix = /data:image\/(?:png|jpe?g|gif|webp|avif|bmp);base64,/iy;
+            prefix.lastIndex = cursor;
+            if (!prefix.exec(content)) return result;
+            cursor = prefix.lastIndex;
+            while (cursor < content.length) {
+                const code = content.charCodeAt(cursor);
+                if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) ||
+                    (code >= 48 && code <= 57) || code === 43 || code === 47 || code === 61 ||
+                    code === 9 || code === 10 || code === 13 || code === 32) cursor++;
+                else break;
+            }
+            let end = cursor;
+            while (end > start && /\s/.test(content[end - 1])) end--;
+            if (angled && content[cursor++] !== '>') return { next: cursor };
+            while (/\s/.test(content[cursor] || '') && cursor < content.length) cursor++;
+            if ('"\'('.includes(content[cursor] || '\0')) {
+                const delimiter = content[cursor++] === '(' ? ')' : content[cursor - 1];
+                while (cursor < content.length && content[cursor] !== delimiter && content[cursor] !== '\n') {
+                    if (content[cursor++] === '\\') cursor++;
+                }
+                if (content[cursor++] !== delimiter) return { next: cursor };
+                while (/\s/.test(content[cursor] || '') && cursor < content.length) cursor++;
+            }
+            if (content[cursor] !== ')') return { next: cursor };
+            return { start, end, next: cursor + 1 };
+        }
+
+        // Keep Markdown readable and portable: image bytes belong beside the text,
+        // not in a multi-megabyte data URL. Only rewrite image syntax outside code.
+        function bundleMarkdownImages(content, doc) {
+            const images = [];
+            const bySource = new Map();
+            const win = doc ? getWindow(doc) : null;
+            const decode = win?.atob?.bind(win) || (typeof atob === 'function' ? atob : null);
+            if (!decode) return { content, images };
+
+            const tokens = /^([ \t>]*)(`{3,}|~{3,})([^\n]*)(?:\n|$)|(`+)|(!\[)|<(\/?)(small|pre|code)\b[^<>\n]*>/gmi;
+            const html = [];
+            const parts = [];
+            let fence = null;
+            let inlineEnd = -1;
+            let written = 0;
+            const escaped = offset => {
+                let slashes = 0;
+                while (offset > 0 && content[--offset] === '\\') slashes++;
+                return slashes % 2 === 1;
+            };
+            let token;
+            while ((token = tokens.exec(content))) {
+                const [, indentation, fenceRun, info, ticks, imageStart, closingTag, tag] = token;
+                const offset = token.index;
+                if (offset < inlineEnd) continue;
+                if (tag) {
+                    if (!fence) {
+                        if (!closingTag) html.push(tag.toLowerCase());
+                        else if (html.at(-1) === tag.toLowerCase()) html.pop();
+                    }
+                    continue;
+                }
+                // Reasoning recaps are raw HTML with <br> line breaks. Their literal
+                // backticks must not open a Markdown fence over subsequent turns.
+                if (html.length) continue;
+                if (fenceRun) {
+                    const indent = indentation.replace(/> ?/g, '').replace(/\t/g, '    ');
+                    if (indent.length <= 3) {
+                        if (fence) {
+                            if (fenceRun[0] === fence[0] && fenceRun.length >= fence.length && !info.trim()) fence = null;
+                        } else if (fenceRun[0] !== '`' || !info.includes('`')) fence = fenceRun;
+                    }
+                    continue;
+                }
+                if (fence || escaped(offset)) continue;
+                if (ticks) {
+                    const closing = new RegExp('(?<!`)' + ticks + '(?!`)', 'g');
+                    closing.lastIndex = offset + ticks.length;
+                    const end = closing.exec(content);
+                    const paragraphEnd = content.indexOf('\n\n', offset);
+                    if (end && (paragraphEnd < 0 || end.index < paragraphEnd)) inlineEnd = end.index + ticks.length;
+                    continue;
+                }
+                if (!imageStart) continue;
+                const destination = markdownImageDestination(content, offset);
+                tokens.lastIndex = destination.next;
+                if (destination.start === undefined) continue;
+                const normalized = content.slice(destination.start, destination.end).replace(/\s/g, '');
+                if (!isSafeEmbeddedImageSource(normalized, Infinity)) continue;
+                let image = bySource.get(normalized);
+                if (!image) {
+                    try {
+                        const binary = decode(normalized.slice(normalized.indexOf(',') + 1));
+                        const data = new Uint8Array(binary.length);
+                        for (let i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i);
+                        const subtype = /^data:image\/([^;]+)/i.exec(normalized)[1].toLowerCase();
+                        const extension = /^jpe?g$/.test(subtype) ? 'jpg' : subtype;
+                        image = { path: `images/image-${String(images.length + 1).padStart(3, '0')}.${extension}`, data };
+                        images.push(image);
+                        bySource.set(normalized, image);
+                    } catch (error) {
+                        // Malformed provider text remains verbatim.
+                        continue;
+                    }
+                }
+                parts.push(content.slice(written, destination.start), image.path);
+                written = destination.end;
+            }
+            parts.push(content.slice(written));
+            return { content: parts.join(''), images };
+        }
+
+        let crcTable;
+        function crc32(bytes) {
+            if (!crcTable) {
+                crcTable = new Uint32Array(256);
+                for (let i = 0; i < 256; i++) {
+                    let value = i;
+                    for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0);
+                    crcTable[i] = value >>> 0;
+                }
+            }
+            let crc = 0xffffffff;
+            for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ crcTable[(crc ^ bytes[i]) & 0xff];
+            return (crc ^ 0xffffffff) >>> 0;
+        }
+
+        // Stored ZIP entries need no third-party library or remote code. Raster
+        // images are already compressed. Return Blob parts to avoid copying the
+        // entire image collection into another contiguous buffer.
+        function createZip(files, doc) {
+            const win = doc ? getWindow(doc) : null;
+            const Encoder = win?.TextEncoder || TextEncoder;
+            const encoder = new Encoder();
+            if (files.length > 0xffff) throw new Error('Too many files for a ZIP export.');
+            const parts = [];
+            const directory = [];
+            let offset = 0;
+            let directorySize = 0;
+            files.forEach(file => {
+                const name = encoder.encode(file.path);
+                const data = typeof file.data === 'string' ? encoder.encode(file.data) : file.data;
+                if (name.length > 0xffff || data.length > 0xffffffff || offset + 30 + name.length + data.length > 0xffffffff) {
+                    throw new Error('This export exceeds the ZIP size limit.');
+                }
+                const crc = crc32(data);
+                const local = new Uint8Array(30 + name.length);
+                const header = new DataView(local.buffer);
+                header.setUint32(0, 0x04034b50, true);
+                header.setUint16(4, 20, true);
+                header.setUint16(6, 0x0800, true); // UTF-8 filenames, stored method.
+                header.setUint16(12, 0x0021, true); // Jan 1, 1980; no clock dependency.
+                header.setUint32(14, crc, true);
+                header.setUint32(18, data.length, true);
+                header.setUint32(22, data.length, true);
+                header.setUint16(26, name.length, true);
+                local.set(name, 30);
+                parts.push(local, data);
+
+                const central = new Uint8Array(46 + name.length);
+                const entry = new DataView(central.buffer);
+                entry.setUint32(0, 0x02014b50, true);
+                entry.setUint16(4, 20, true);
+                entry.setUint16(6, 20, true);
+                entry.setUint16(8, 0x0800, true);
+                entry.setUint16(14, 0x0021, true);
+                entry.setUint32(16, crc, true);
+                entry.setUint32(20, data.length, true);
+                entry.setUint32(24, data.length, true);
+                entry.setUint16(28, name.length, true);
+                entry.setUint32(42, offset, true);
+                central.set(name, 46);
+                directory.push(central);
+                directorySize += central.length;
+                offset += local.length + data.length;
+            });
+            if (offset + directorySize + 22 > 0xffffffff) throw new Error('This export exceeds the ZIP size limit.');
+            const end = new Uint8Array(22);
+            const footer = new DataView(end.buffer);
+            footer.setUint32(0, 0x06054b50, true);
+            footer.setUint16(8, files.length, true);
+            footer.setUint16(10, files.length, true);
+            footer.setUint32(12, directorySize, true);
+            footer.setUint32(16, offset, true);
+            return [...parts, ...directory, end];
+        }
+
         function downloadFile(doc, content, filename, mimeType) {
             const win = getWindow(doc);
             const BlobCtor = win?.Blob || Blob;
             const urlApi = win?.URL || URL;
-            const blob = new BlobCtor([content], { type: mimeType });
+            const blob = new BlobCtor(Array.isArray(content) ? content : [content], { type: mimeType });
             const url = urlApi.createObjectURL(blob);
             const anchor = doc.createElement('a');
 
@@ -4291,11 +4493,27 @@
                 return { conversation, content: '' };
             }
 
-            const content = render(conversation, format);
-            const filename = options.filename || filenameFor(conversation, format);
+            let content = render(conversation, format);
+            let filename = options.filename || filenameFor(conversation, format);
+            let downloadContent = content;
+            let mimeType = mimeFor(format);
+            let files = [];
+            if (format === 'markdown' && options.bundleImages !== false) {
+                const bundle = bundleMarkdownImages(content, doc);
+                if (bundle.images.length) {
+                    content = bundle.content;
+                    // Custom names must not introduce paths into the archive.
+                    const basename = String(filename).split(/[\\/]/).pop().replace(/[<>:"|?*\u0000-\u001f\u007f]/g, '').replace(/[. ]+$/, '') || 'Conversation.md';
+                    const markdownName = basename.replace(/\.(?:md|zip)$/i, '') + '.md';
+                    filename = markdownName.replace(/\.md$/i, '.zip');
+                    files = [{ path: markdownName, data: content }, ...bundle.images];
+                    downloadContent = createZip(files, doc);
+                    mimeType = 'application/zip';
+                }
+            }
 
             if (options.download !== false) {
-                downloadFile(doc, content, filename, mimeFor(format));
+                downloadFile(doc, downloadContent, filename, mimeType);
                 console.log(`[Chat Exporter] Exported ${conversation.messages.length} messages to ${filename}`);
             }
 
@@ -4314,7 +4532,7 @@
                 if (typeof win?.alert === 'function') win.alert(message);
             }
 
-            return { conversation, content, filename };
+            return { conversation, content, filename, files };
         }
 
         function exportConversation(options = {}) {
@@ -4362,7 +4580,9 @@
                 tableToHtml,
                 collectCitations,
                 findScrollContainer,
-                messageKey
+                messageKey,
+                bundleMarkdownImages,
+                createZip
             }
         };
     });

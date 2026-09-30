@@ -1,6 +1,7 @@
 const { test, expect } = require('@playwright/test');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { readZip } = require('../test-support/read-zip');
 const root = path.resolve(__dirname, '..');
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMwmHnmPwAFJwKVhZG1WQAAAABJRU5ErkJggg==';
 const answer = `<h2>Compatibility fixture</h2><p>OK</p>
@@ -46,6 +47,12 @@ async function mount(page, { provider = 'chatgpt', script = 'src/extraction-engi
 
 async function downloadedText(download) {
     expect(await download.failure()).toBeNull();
+    if (download.suggestedFilename().endsWith('.zip')) {
+        const files = readZip(await fs.readFile(await download.path()));
+        const markdown = [...files].find(([name]) => name.endsWith('.md'));
+        expect(markdown).toBeTruthy();
+        return markdown[1].toString('utf8');
+    }
     return fs.readFile(await download.path(), 'utf8');
 }
 
@@ -65,9 +72,17 @@ for (const provider of ['chatgpt', 'gemini']) {
             expect(text).toBe(result.content);
             expect(result.count).toBe(3);
             expect(result.complete).toBe(true);
-            expect(download.suggestedFilename()).toMatch(format === 'markdown' ? /\.md$/ : /\.html$/);
-            for (const expected of ['Synthetic prompt', '👍', 'console.log', 'Price', 'x^2 + y^2 = z^2', 'https://example.com', 'data:image/png']) expect(text).toContain(expected);
+            expect(download.suggestedFilename()).toMatch(format === 'markdown' ? /\.zip$/ : /\.html$/);
+            for (const expected of ['Synthetic prompt', '👍', 'console.log', 'Price', 'x^2 + y^2 = z^2', 'https://example.com']) expect(text).toContain(expected);
+            if (format === 'markdown') {
+                const files = readZip(await fs.readFile(await download.path()));
+                expect(files.size).toBe(2);
+                expect(files.get('images/image-001.png')).toEqual(Buffer.from(png.split(',')[1], 'base64'));
+                expect(text).toContain('![Fixture image](images/image-001.png)');
+                expect(text).not.toContain('data:image');
+            }
             if (format !== 'markdown') {
+                expect(text).toContain('data:image/png');
                 await page.route('**/export.html', route => route.fulfill({ contentType: 'text/html', body: text }));
                 await page.goto('https://chatgpt.com/export.html');
                 await expect(page.locator('table')).toHaveCount(1);
@@ -79,6 +94,18 @@ for (const provider of ['chatgpt', 'gemini']) {
         });
     }
 }
+
+test('text-only Markdown still downloads a plain file', async ({ page }) => {
+    const errors = await mount(page, { turns: '<div data-message-author-role="user">Text only 👍</div>' });
+    const downloading = page.waitForEvent('download');
+    await page.evaluate(() => window.ChatExporterEngine.exportConversationFull({
+        format: 'markdown', scroll: false, awaitStreaming: false, chatGptMetadata: false, notify: false
+    }));
+    const download = await downloading;
+    expect(download.suggestedFilename()).toMatch(/\.md$/);
+    expect(await downloadedText(download)).toContain('Text only 👍');
+    expect(errors).toEqual([]);
+});
 
 const runners = [
     ['chatgpt-markdown', 'exporter-markdown.js'], ['chatgpt-html', 'exporter-html.js'],

@@ -46,7 +46,7 @@
         {
           "@type":"HowToStep",
           "name":"Click Export as Markdown",
-          "text":"Look for the new Export button in the ChatGPT interface and click it. The .md file will download automatically with smart naming."
+          "text":"Choose Export to Markdown from the conversation menu. Text-only chats download as .md; chats with available image bytes download as a ZIP containing Markdown and image files."
         }
       ],
       "totalTime":"PT2M",
@@ -108,7 +108,7 @@
         <!-- Main Header -->
         <h1>How to Export ChatGPT to Markdown (Free, Open-Source)</h1>
         <div class="meta">
-            Last updated: January 2025 • 2 minute read • By Rashid Azarang
+            Last updated: September 29, 2026 • 2 minute read • By Rashid Azarang
         </div>
 
         <!-- Introduction -->
@@ -159,7 +159,8 @@
         <div class="step">
             <h3><span class="step-number">4</span>Click the Export Button</h3>
             <p>With the userscript installed, open the conversation’s <strong>•••</strong> or <strong>Share</strong> menu and choose <strong>Export to Markdown</strong>. If sharing is unavailable, use the floating Export button.</p>
-            <p>Click it, and your conversation will automatically download as a .md file with smart naming based on your conversation title.</p>
+            <p>The download is named after your conversation. Text-only chats save as <code>.md</code>. Chats with available image bytes save as a <code>.zip</code> containing the Markdown document and an <code>images/</code> folder.</p>
+            <p>Extract the ZIP and keep the folder beside the document so image links work. Each image is also a normal file you can open, copy or share.</p>
         </div>
 
         <!-- Method 2: Console -->
@@ -223,7 +224,7 @@ Here are several ways to center a div:
             
             <div class="faq-item">
                 <div class="faq-question">Images showing as placeholders?</div>
-                <p>ChatGPT images are referenced as links. The exporter includes image placeholders that link to the original sources.</p>
+                <p>Extract the ZIP before opening its Markdown, and keep the <code>images/</code> folder beside the document. Images whose bytes cannot be read remain links or readable placeholders.</p>
             </div>
             
             <div class="faq-item">
