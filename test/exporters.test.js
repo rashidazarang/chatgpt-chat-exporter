@@ -6,6 +6,7 @@ const { JSDOM } = require('jsdom');
 const engine = require('../src/extraction-engine.js');
 const userscriptUi = require('../src/userscript-ui.js');
 const progressOverlay = require('../src/progress-overlay.js');
+const { readZip } = require('../test-support/read-zip');
 
 const repoRoot = path.resolve(__dirname, '..');
 
@@ -270,9 +271,11 @@ async function runExporter(filename, html, url = 'https://chatgpt.com/c/test-fix
 
     assert.ok(downloads.length > 0, `${filename} should create a downloadable blob`);
     const latest = downloads[downloads.length - 1];
+    const files = latest.filename.endsWith('.zip') ? readZip(Buffer.from(await latest.blob.arrayBuffer())) : null;
     return {
         filename: latest.filename,
-        content: await latest.blob.text()
+        content: files ? [...files].find(([name]) => name.endsWith('.md'))[1].toString('utf8') : await latest.blob.text(),
+        files
     };
 }
 
@@ -1055,10 +1058,13 @@ test('image-only turns keep embedded media and turn-level metadata (issues #32, 
 });
 
 test('built Markdown exporter captures an image-only turn end to end (issue #33)', async () => {
-    const { content } = await runExporter('exporter-markdown.js', issue32And33Fixture());
+    const { content, filename, files } = await runExporter('exporter-markdown.js', issue32And33Fixture());
 
+    assert.match(filename, /\.zip$/);
     assert.match(content, /### \*\*You\*\* · Tue, Jun 9 at 12:47 PM/);
-    assert.match(content, /!\[uploaded-sketch\.png\]\(data:image\/png;base64,/);
+    assert.match(content, /!\[uploaded-sketch\.png\]\(images\/image-001.png\)/);
+    assert.ok(files.get('images/image-001.png').length > 0);
+    assert.doesNotMatch(content, /data:image/);
     assert.match(content, /\[File: Uploaded_Filename\.zip\]/);
     assert.match(content, /\[File: ABC Workbook\]\(sandbox:\/mnt\/data\/ABC_Workbook\.xlsx\)/);
 });

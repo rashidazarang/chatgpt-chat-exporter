@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>How to Export Gemini Conversations to Markdown</title>
-    <meta name="description" content="Save any Google Gemini chat as Markdown using the ChatGPT Exporter userscript. Preserve code blocks, citations, and structure with a single click." />
+    <meta name="description" content="Save Google Gemini chats as Markdown with the console exporter. Available images download in a ZIP beside the document." />
     <link rel="canonical" href="https://chatgpt-chat-exporter.vercel.app/how-to/export-gemini-to-markdown" />
     <meta property="og:type" content="article" />
     <meta property="og:title" content="How to Export Gemini Conversations to Markdown" />
@@ -106,35 +106,35 @@
 
         <div class="badge">Gemini support</div>
         <h1>How to Export Gemini Conversations to Markdown</h1>
-        <div class="meta">Updated January 2025 • 3 minute read • By Rashid Azarang</div>
+        <div class="meta">Updated September 29, 2026 • 3 minute read • By Rashid Azarang</div>
 
         <div class="intro">
-            <p>Version 0.4 of ChatGPT Exporter added first-class support for <strong>gemini.google.com</strong>. Using the same userscript, you can now download Gemini responses as clean Markdown — ideal for notes, documentation, or publishing.</p>
-            <p>This guide covers the recommended userscript flow and common troubleshooting tips.</p>
+            <p>The Gemini console exporter saves responses as clean Markdown with headings, lists, code, math and tables. Available image bytes are saved as files in a ZIP with the document.</p>
+            <p>This guide covers console export and common troubleshooting tips.</p>
         </div>
 
         <h2>Install and export</h2>
         <div class="step">
             <span class="step-number">1</span>
             <div>
-                <h3>Install a userscript manager</h3>
-                <p>Use <a href="https://www.tampermonkey.net/" target="_blank" rel="noopener">Tampermonkey</a> or <a href="https://violentmonkey.github.io/" target="_blank" rel="noopener">Violentmonkey</a>. Once installed, pin it so you can enable the script on both ChatGPT and Gemini domains.</p>
+                <h3>Open your Gemini conversation</h3>
+                <p>Go to <a href="https://gemini.google.com/">Gemini</a> and open the conversation you want to save.</p>
             </div>
         </div>
 
         <div class="step">
             <span class="step-number">2</span>
             <div>
-                <h3>Install the exporter</h3>
-                <p>Install the Markdown userscript from <a href="https://greasyfork.org/en/scripts/530789-chatgpt-chat-exporter-markdown" target="_blank" rel="noopener">GreasyFork</a>. If you prefer manual installs, grab the latest bundle from <a href="https://github.com/rashidazarang/chatgpt-chat-exporter" target="_blank" rel="noopener">GitHub releases</a>.</p>
+                <h3>Copy the exporter</h3>
+                <p>Copy the complete <a href="https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/gemini-exporter-markdown.js">Gemini Markdown exporter</a> from GitHub.</p>
             </div>
         </div>
 
         <div class="step">
             <span class="step-number">3</span>
             <div>
-                <h3>Enable Gemini domain access</h3>
-                <p>After the first export, your userscript manager may prompt you to allow <code>https://gemini.google.com/*</code>. Approve it so the Export button injects on Gemini pages.</p>
+                <h3>Run the exporter</h3>
+                <p>On your Gemini tab, open Developer Tools (F12), paste the exporter into the Console, and press Enter.</p>
             </div>
         </div>
 
@@ -142,7 +142,7 @@
             <span class="step-number">4</span>
             <div>
                 <h3>Export your Markdown</h3>
-                <p>Open the Gemini conversation, click <strong>Export Markdown</strong>, and download the <code>.md</code> file. The output mirrors ChatGPT export formatting (headings, lists, code blocks, citations).</p>
+                <p>The file downloads automatically. Text-only chats save as <code>.md</code>. Chats with available image bytes save as a ZIP containing the document and an <code>images/</code> folder. Extract the ZIP and keep the folder beside the document.</p>
             </div>
         </div>
 

@@ -1,6 +1,6 @@
 # Browser compatibility
 
-The browser matrix runs with pinned Playwright 1.63.0 on Linux CI. It uses synthetic conversations and intercepts every network request, so it needs no provider credentials and publishes no private chat data. Each engine runs 27 checks, 81 in all. Current results are attached to the release PR; the matrix must pass before release.
+The browser matrix runs with pinned Playwright 1.63.0 on Linux CI. It uses synthetic conversations and intercepts every network request, so it needs no provider credentials and publishes no private chat data. Each engine runs 28 checks, 84 in all. Current results are attached to the release PR; the matrix must pass before release.
 
 | Distribution or behavior | Chromium | Firefox | WebKit |
 | --- | --- | --- | --- |
@@ -11,6 +11,7 @@ The browser matrix runs with pinned Playwright 1.63.0 on Linux CI. It uses synth
 | Four full self-contained bookmarklet URLs | CI | CI | CI |
 | Both ChatGPT userscripts: Markdown/PDF menu downloads without Share | CI | CI | CI |
 | Rich ChatGPT/Gemini extraction in all engine formats; rendered HTML images/tables | CI | CI | CI |
+| Markdown ZIP downloads: readable local image links, exact raster bytes, valid ZIP CRCs; text-only `.md` fallback | CI | CI | CI |
 | 1,243-message payload: every turn, order, timestamp, no DOM sweep | CI | CI | CI |
 | App-backed research recovery in Markdown/HTML/PDF-ready output | CI | CI | CI |
 | Strict script CSP; UI icons without any parser/HTML sink | CI | CI | CI |

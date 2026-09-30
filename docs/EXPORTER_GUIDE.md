@@ -5,15 +5,17 @@
 All shipped exporters are generated from the shared engine in `src/extraction-engine.js`. The console scripts remain self-contained and pasteable; the userscripts embed the same engine plus the native ChatGPT menu integration from `src/userscript-ui.js` at build time.
 
 ### 1. **exporter-markdown.js** - Markdown Export
-- **Output:** `.md` files
+- **Output:** `.md` for text-only conversations; `.zip` when image bytes are available
 - **Best for:** Text editors, GitHub, documentation
-- **File naming:** `{ConversationTitle} (YYYY-MM-DD).md`
+- **File naming:** `{ConversationTitle} (YYYY-MM-DD).md` or `.zip`
 - **Features:**
   - Clean markdown formatting
   - Preserves code blocks with syntax highlighting
   - Converts rendered tables to Markdown tables
   - Exports MathJax/KaTeX equations as `$...$` and `$$...$$`
-  - Embeds available raster images, with links or readable placeholders when bytes are unavailable
+  - Saves available raster images as files in an `images/` folder, referenced by relative Markdown links
+  - Downloads the document and images together as a ZIP; repeated images share one file
+  - Keeps remote links or readable placeholders when image bytes are unavailable
   - Lightweight text format
   - Easy to edit and share
 
@@ -58,7 +60,7 @@ Use `gemini-exporter-markdown.js` from a conversation at `gemini.google.com/app`
 
 | Format | File Size | Editability | Formatting | Best Use Case |
 |--------|-----------|-------------|------------|---------------|
-| Markdown (.md) | Smallest | Easy | Basic | Documentation, GitHub |
+| Markdown (.md / .zip) | Small text; separate image bytes | Easy | Basic | Documentation, GitHub |
 | PDF (.pdf) | Medium | No | Professional | Archiving, Sharing |
 | HTML (.html) | Small | Yes (with editor) | Rich | Web viewing, Custom styling |
 
@@ -69,6 +71,7 @@ Use `gemini-exporter-markdown.js` from a conversation at `gemini.google.com/app`
 - **HTML Exporter:** Basic HTML for web viewing. Can also be printed to PDF but without special formatting
 - **File Names:** All exporters now use the conversation title for better organization
 - **Math:** Markdown exports use common MathJax delimiters so compatible viewers can render equations
+- **Markdown images:** Extract the ZIP before opening the `.md` file. Keep its `images/` folder beside it so local image links work. Image files can be opened and copied independently. HTML/PDF-ready output continues to embed images.
 - **Compatibility:** synthetic regression tests cover ChatGPT and Gemini shapes. Current live browser validation is tracked in [RELEASE_AUDIT.md](RELEASE_AUDIT.md); historical live observations are not a current compatibility guarantee.
 - **Development:** Run `npm run build` after editing `src/extraction-engine.js`; `npm test` verifies generated scripts are up to date and runs jsdom fixture coverage.
 
@@ -101,3 +104,5 @@ Downloaded images get time in proportion to their number: 15 seconds plus 3 per 
 Signed-in ChatGPT scrolls its transcript in reverse and loads older history only while it is held at the top, in batches seconds apart. The export climbs from the newest message and holds the top for `historyWait` (default 8000 ms) before taking it for the start of the conversation. `maxScrollSteps` (default 2000) only stops a scroll that costs no time; `maxDuration` bounds it.
 
 Embedded DOM images and downloaded attachments share `maxTotalEmbeddedImageBytes` (default 50 MiB) and `maxEmbeddedImageBytes` (default 20 MiB). `maxCanvasPixels` defaults to 16,777,216 and is checked before canvas allocation or serialization. Set a byte budget to zero to disable embedding; remote URLs or readable placeholders remain. These limits do not rewrite data URLs already contained in the provider’s native Markdown text.
+
+At download time, Markdown image data URLs are moved into the ZIP as raster files; code examples remain verbatim. The engine's `exportConversation` and `exportConversationFull` return the rewritten Markdown as `content`, the download name as `filename`, and the archive entries as `files` (each has `path` and `data`). Passing `download: false` prepares the same entries without saving them. Set `bundleImages: false` to retain the previous inline-data-URL Markdown behavior. The low-level Markdown serializer remains a text serializer.

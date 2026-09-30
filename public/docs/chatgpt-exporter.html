@@ -64,7 +64,7 @@
         </div>
 
         <h1>ChatGPT Exporter Documentation</h1>
-        <div class="meta">Install, update, and customize the open-source exporter • Last updated January 2025</div>
+        <div class="meta">Install, update, and customize the open-source exporter • Last updated September 29, 2026</div>
 
         <div class="intro">
             <p>This documentation covers the userscript installation flow, console snippet, Gemini support, troubleshooting, and release history for <strong>ChatGPT Exporter</strong>.</p>
@@ -94,7 +94,7 @@
                             <li><a href="https://greasyfork.org/en/scripts/530790-chatgpt-chat-exporter-pdf" target="_blank" rel="noopener">PDF exporter</a></li>
                         </ul>
                     </li>
-                    <li>Open ChatGPT or Gemini, refresh once, and use the new <strong>Export</strong> button that appears near the conversation title.</li>
+                    <li>Open ChatGPT, refresh once, and choose <strong>Export to Markdown</strong> or <strong>Export to PDF</strong> from the conversation menu. If sharing is unavailable, use the floating <strong>Export</strong> button.</li>
                 </ol>
                 <p>Updates arrive automatically; your manager will prompt you before applying new versions.</p>
             </div>
@@ -104,24 +104,20 @@
             <h2>Console method</h2>
             <div class="card">
                 <p>For restricted environments or quick one-off exports, run the exporter from the browser console without installing anything.</p>
-                <h3>Markdown console snippet</h3>
-                <pre><code>await import("https://cdn.jsdelivr.net/gh/rashidazarang/chatgpt-chat-exporter@main/exporter-markdown.js");
-window.chatGPTChatExporter.exportCurrentChat();</code></pre>
-                <p>Open Developer Tools (F12), switch to the Console tab, paste the snippet, and press Enter. A <code>.md</code> file downloads instantly.</p>
-                <h3>PDF console snippet</h3>
-                <pre><code>await import("https://cdn.jsdelivr.net/gh/rashidazarang/chatgpt-chat-exporter@main/exporter-pdf.js");
-window.chatGPTChatExporter.exportCurrentChat({ format: "pdf" });</code></pre>
-                <p>Make sure popups are allowed so the browser can open the print dialog.</p>
+                <h3>Markdown console exporter</h3>
+                <p>Copy the complete <a href="https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-markdown.js">Markdown exporter</a>, open Developer Tools (F12), paste it into the Console, and press Enter. Text-only conversations download as <code>.md</code>. Conversations with available image bytes download as <code>.zip</code>.</p>
+                <h3>PDF console exporter</h3>
+                <p>Run the complete <a href="https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-pdf.js">PDF exporter</a> in the same way. Open its downloaded HTML file, then use Print / Save as PDF.</p>
             </div>
         </section>
 
         <section id="gemini">
             <h2>Gemini support</h2>
             <div class="card">
-                <p>Version 0.4+ includes Gemini selectors. The userscript automatically detects <code>gemini.google.com</code>. Approve the additional domain the first time you export.</p>
+                <p>Open a conversation at <code>gemini.google.com</code>, then copy the complete <a href="https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/gemini-exporter-markdown.js">Gemini Markdown exporter</a> into its browser Console.</p>
                 <ul>
-                    <li>Markdown naming uses the conversation title with <code>-gemini.md</code>.</li>
-                    <li>Console usage: run the same snippets while on a Gemini conversation.</li>
+                    <li>The filename uses your conversation title and date.</li>
+                    <li>Text-only chats download as <code>.md</code>; available image files are bundled in a ZIP.</li>
                     <li>Experimental Gemini layouts may require selector tweaks — open an issue if you hit one.</li>
                 </ul>
             </div>
@@ -140,11 +136,11 @@ window.chatGPTChatExporter.exportCurrentChat({ format: "pdf" });</code></pre>
                 </div>
                 <div class="card">
                     <h3>Images & attachments</h3>
-                    <p>Images are referenced as inline placeholders. Download originals via the chat viewer if you need binaries.</p>
+                    <p>Markdown with image bytes downloads as a ZIP containing the document and an <code>images/</code> folder. Extract it and keep the folder beside the document. Image files can be opened or copied individually. Unavailable images remain links or readable placeholders.</p>
                 </div>
                 <div class="card">
                     <h3>Styling tweaks</h3>
-                    <p>Fork the repo, edit the HTML template in <code>exporter-html.js</code>, and build locally. Contributions welcome.</p>
+                    <p>Fork the repo, edit the shared engine in <code>src/extraction-engine.js</code>, and run <code>npm run build</code> to regenerate the exporters. Contributions welcome.</p>
                 </div>
             </div>
         </section>

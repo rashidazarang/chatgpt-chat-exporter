@@ -1,6 +1,6 @@
 # ChatGPT Chat Exporter
 
-[![Version](https://img.shields.io/badge/version-1.2.2-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
+[![Version](https://img.shields.io/badge/version-1.2.4-blue.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/rashidazarang/chatgpt-chat-exporter/actions/workflows/ci.yml)
 
@@ -17,7 +17,7 @@ No install, no server, no account: everything runs locally in your browser.
 - 📝 Captures **all messages** with proper sender attribution
 - 📜 **Long conversations export fully**: the exporter auto-scrolls through virtualized (lazy-loaded) conversations so messages ChatGPT removed from the page are still captured
 - 🔗 **Web-search references included**: citation sources in a response are appended as a numbered **References** list, matching ChatGPT's own copy output
-- 🖼️ **Images are kept**: image-only turns are captured and images are embedded directly in Markdown, HTML, and PDF-ready exports when their bytes are available
+- 🖼️ **Images are kept**: Markdown with available image bytes downloads as a ZIP containing a readable `.md` file and an `images/` folder. Repeated images share a file. HTML and PDF-ready exports embed their images.
 - 🕓 **Per-turn context included**: ChatGPT timestamps, uploaded/generated file references, download paths, and visible reasoning recaps are preserved when available
 - 🔤 **Faithful text**: prompt line breaks, indentation, and backslashes are preserved exactly as written — no re-flowed whitespace, no doubled `\` escapes
 - 🔧 Preserves **code blocks** (including CodeMirror), tables, MathJax/KaTeX equations, lists, links, media, and file/artifact cards
@@ -63,11 +63,13 @@ No install, no server, no account: everything runs locally in your browser.
 1. Open a conversation in ChatGPT
 2. Open DevTools → Console (`F12` or `Cmd+Option+J`)
 3. Paste the contents of the exporter you want and press Enter:
-   - **Markdown (.md):** [exporter-markdown.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-markdown.js)
+   - **Markdown (.md, or .zip with images):** [exporter-markdown.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-markdown.js)
    - **HTML (.html):** [exporter-html.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-html.js)
    - **PDF (print-ready HTML):** [exporter-pdf.js](https://github.com/rashidazarang/chatgpt-chat-exporter/raw/master/exporter-pdf.js)
    - To omit ChatGPT's per-answer reasoning/progress blocks, change `const INCLUDE_REASONING = true` to `false` before pasting.
 4. The file downloads automatically, named after your conversation title
+
+For a Markdown ZIP, extract it and keep the `.md` file beside its `images/` folder. Open the Markdown in a viewer that supports local images; every image is also a normal file you can open or copy. Text-only conversations still download as a single `.md` file. Images whose bytes are unavailable retain their remote link or a readable placeholder.
 
 ### Google Gemini
 
@@ -99,7 +101,14 @@ Chromium, Firefox, and WebKit CI exercise every shipped console bundle, both use
 
 ---
 
-## 🔧 What's New in v1.2.3
+## 🔧 What's New in v1.2.4
+
+- 🖼️ **Markdown with images downloads as a ZIP.** The readable `.md` document links to individual files in an `images/` folder, with repeated images stored once. Extract the ZIP to view or copy the images. Text-only chats still download as `.md`.
+- 🔤 **Code examples stay verbatim.** Image syntax inside fenced or inline code and HTML reasoning recaps is preserved.
+
+([release notes](temporal/release-notes-v1.2.4.md))
+
+### v1.2.3
 
 Tested live on a signed-in, 180-message conversation with 72 images.
 
