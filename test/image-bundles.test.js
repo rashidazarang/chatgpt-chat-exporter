@@ -104,3 +104,15 @@ test('many malformed image labels are preserved without repeatedly scanning the 
     assert.equal(bundle.content, source);
     assert.deepEqual(bundle.images, []);
 });
+
+test('custom archive filenames are bounded and trim trailing dots and spaces in linear time', t => {
+    const { dom } = page(t);
+    const options = { document: dom.window.document, format: 'markdown', download: false, notify: false };
+    for (const filename of ['../' + ' '.repeat(100000) + 'x.md', '..\\' + '.'.repeat(100000) + 'x.md']) {
+        const result = engine.exportConversation({ ...options, filename });
+        assert.equal(result.filename, 'Conversation.zip');
+        assert.equal(result.files[0].path, 'Conversation.md');
+    }
+    const result = engine.exportConversation({ ...options, filename: 'Folder/Report.md...   ' });
+    assert.equal(result.filename, 'Report.zip');
+});

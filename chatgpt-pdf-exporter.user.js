@@ -4518,7 +4518,12 @@
                 if (bundle.images.length) {
                     content = bundle.content;
                     // Custom names must not introduce paths into the archive.
-                    const basename = String(filename).split(/[\\/]/).pop().replace(/[<>:"|?*\u0000-\u001f\u007f]/g, '').replace(/[. ]+$/, '') || 'Conversation.md';
+                    const requestedName = String(filename);
+                    const nameStart = Math.max(requestedName.lastIndexOf('/'), requestedName.lastIndexOf('\\')) + 1;
+                    let basename = requestedName.slice(nameStart, nameStart + 160).replace(/[<>:"|?*\u0000-\u001f\u007f]/g, '');
+                    let nameEnd = basename.length;
+                    while (nameEnd > 0 && (basename[nameEnd - 1] === '.' || basename[nameEnd - 1] === ' ')) nameEnd--;
+                    basename = basename.slice(0, nameEnd) || 'Conversation.md';
                     const markdownName = basename.replace(/\.(?:md|zip)$/i, '') + '.md';
                     filename = markdownName.replace(/\.md$/i, '.zip');
                     files = [{ path: markdownName, data: content }, ...bundle.images];
