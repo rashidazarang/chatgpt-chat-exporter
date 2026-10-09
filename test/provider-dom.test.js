@@ -202,12 +202,13 @@ test('userscript: the 2026 transcript counts as a conversation and its per-turn 
     window.HTMLElement.prototype.getClientRects = () => [{ width: 100, height: 30 }];
     window.HTMLElement.prototype.getBoundingClientRect = () => ({ top: 10, right: 200, bottom: 40, left: 100, width: 100, height: 30 });
     assert.equal(userscriptUi.internals.isHeaderShareButton(window.document.querySelector('#turn-share')), null);
-    userscriptUi.install({ document: window.document, engine, launcherDelay: 0, syncInterval: 0,
+    window.document.body.insertAdjacentHTML('afterbegin', '<header><div id="conversation-header-actions"></div></header>');
+    userscriptUi.install({ document: window.document, engine, syncInterval: 0,
         exportMarkdown: () => {}, exportPdf: () => {}, copyLink: async () => {} });
     window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
-    const launcher = window.document.querySelector('#chat-exporter-launcher');
-    assert.ok(launcher, 'without a header Share the launcher is the entry point');
-    assert.notEqual(launcher.style.display, 'none');
+    const shareButton = window.document.querySelector('#chat-exporter-share-button');
+    assert.ok(shareButton, 'without a native Share button the header fallback is the entry point');
+    assert.notEqual(shareButton.style.display, 'none');
 });
 
 const signedIn = fs.readFileSync(path.join(__dirname, 'fixtures', 'chatgpt-signed-in-2026.html'), 'utf8');
@@ -356,12 +357,13 @@ test('userscript: signed-in turns count as a conversation and their Share button
         const button = window.document.querySelector(`button[aria-label="${label}"]`);
         assert.equal(userscriptUi.internals.isHeaderShareButton(button), null, `${label} shares one turn, not the conversation`);
     }
-    userscriptUi.install({ document: window.document, engine, launcherDelay: 0, syncInterval: 0,
+    window.document.body.insertAdjacentHTML('afterbegin', '<header><div id="conversation-header-actions"></div></header>');
+    userscriptUi.install({ document: window.document, engine, syncInterval: 0,
         exportMarkdown: () => {}, exportPdf: () => {}, copyLink: async () => {} });
     window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
-    const launcher = window.document.querySelector('#chat-exporter-launcher');
-    assert.ok(launcher, 'without a header Share the launcher is the entry point');
-    assert.notEqual(launcher.style.display, 'none');
+    const shareButton = window.document.querySelector('#chat-exporter-share-button');
+    assert.ok(shareButton, 'without a native Share button the header fallback is the entry point');
+    assert.notEqual(shareButton.style.display, 'none');
 });
 
 function researchRecord() {
