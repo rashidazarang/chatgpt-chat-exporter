@@ -328,3 +328,31 @@ test('the generated Markdown exporter converts a GPT-6 widget payload (issue #47
     expect(prose).not.toContain('<radio-group');
     expect(errors).toEqual([]);
 });
+
+// The second pass on issue #47. A real export still dropped a widget's own code,
+// leaked the template's control syntax, and left rich-text components as raw
+// tags. All of it is checked here through the generated file, as a real download.
+test('the generated Markdown exporter keeps a widget\'s code and converts its rich-text tags (issue #47 follow-up)', async ({ page }) => {
+    const payload = conversation(2);
+    payload.mapping.n1.message.content = {
+        content_type: 'text',
+        parts: [[genUiFixture.codeBlockAttribute, genUiFixture.controlEach, genUiFixture.pascalLinkOnly].join('\n\n')]
+    };
+
+    const downloading = page.waitForEvent('download');
+    const errors = await mount(page, { payload, script: 'exporter-markdown.js' });
+    const text = await downloadedText(await downloading);
+
+    // P0: the code the component carried is still there, and still marked as code.
+    expect(text).toContain("GM_setValue('roast', 1);");
+    expect(text).toContain('```javascript');
+    // P1: no control keyword or handler source survives.
+    expect(text).not.toContain('{#each');
+    expect(text).not.toContain('{/if}');
+    expect(text).not.toContain('GenUI.copy');
+    expect(text).toContain('**复制**');
+    // P2: the link component became a Markdown link, not a tag.
+    expect(text).toContain('[Roast notes](https://example.com/roast-notes)');
+    expect(text).not.toContain('<Link');
+    expect(errors).toEqual([]);
+});

@@ -3694,3 +3694,109 @@ test('a widget part that never closes still renders everything it held (issue #4
         '- Large — two shots, milk and a second cup'
     ]);
 });
+
+// ── Issue #47, second pass: a real export still lost content ────────────────
+// The first fix converted the controls a reader could read. A real export then
+// showed four more shapes going wrong — and the worst of them dropped the
+// reader's own code without a trace. Losing data outranks any formatting flaw,
+// so each shape below is pinned by its own test. The parts are synthetic.
+
+test('code a widget component carries is kept and fenced, never dropped (issue #47 P0)', async () => {
+    const fixture = genUiFixture();
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: 'How do I change the saved value?' },
+        { role: 'assistant', body: fixture.codeBlockAttribute }
+    ]);
+    const answer = conversation.messages[1].content;
+
+    assertNoComponentSource(answer);
+    assert.match(answer, /GM_setValue\('roast', 1\);/, 'the code the component carried survives');
+    assert.match(answer, /^```javascript$/m, 'and it is still marked as code');
+    assert.match(answer, /把原来的/, 'the prose around it is kept');
+    assert.match(answer, /改为/);
+});
+
+test('a code component that holds its body as text keeps every line (issue #47 P0)', async () => {
+    const fixture = genUiFixture();
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: 'Show me the snippet.' },
+        { role: 'assistant', body: fixture.codeBlockChildren }
+    ]);
+    const answer = conversation.messages[1].content;
+
+    assertNoComponentSource(answer);
+    assert.match(answer, /^if \(batch\.finished\) \{$/m, 'the body survives, dedented to its own margin');
+    assert.match(answer, /^ {2}GM_setValue\('lastBatch', batch\.id\);$/m,
+        'and indentation inside the block still lines up');
+    assert.match(answer, /删除这两行/);
+});
+
+test('template control blocks and bindings do not leak into a mixed reply (issue #47 P1)', async () => {
+    const fixture = genUiFixture();
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: 'Show the steps.' },
+        { role: 'assistant', body: fixture.controlEach }
+    ]);
+    const answer = conversation.messages[1].content;
+
+    assertNoComponentSource(answer);
+    assert.doesNotMatch(answer, /\{#|\{\/|\{:\s*(?:else|then|catch)\b/, 'no control keyword survives');
+    assert.doesNotMatch(answer, /GenUI\.copy/, 'no handler source survives');
+    assert.match(answer, /^下面循环渲染$/m, 'the prose beside the loop is kept');
+    assert.match(answer, /^\*\*复制\*\*$/m, 'the guarded branch keeps the text its button showed');
+});
+
+test('a widget reply that also holds maths keeps its braces (issue #47 P1)', async () => {
+    const body = '<box gap={2}><text>指标</text></box>\n\n'
+        + '改进量 $\\Delta J = J_{after} - J_{before}$，其中 $x_{i}$ 是第 $i$ 项。';
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: 'Show the delta.' },
+        { role: 'assistant', body }
+    ]);
+    const answer = conversation.messages[1].content;
+
+    assertNoComponentSource(answer);
+    assert.match(answer, /J_\{after\} - J_\{before\}/, 'a subscript is not a binding');
+    assert.match(answer, /x_\{i\}/);
+});
+
+test('a reply whose only component is a rich-text tag still converts (issue #47 P2)', async () => {
+    // No layout container switches the gate on here; the component itself must.
+    const fixture = genUiFixture();
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: 'Link the notes.' },
+        { role: 'assistant', body: fixture.pascalLinkOnly }
+    ]);
+    const answer = conversation.messages[1].content;
+
+    assertNoComponentSource(answer);
+    assert.match(answer, /参考资料：\[Roast notes\]\(https:\/\/example\.com\/roast-notes\)$/,
+        'the component becomes a Markdown link');
+});
+
+test('a writing component keeps its body and formatting instead of its tag (issue #47 P2)', async () => {
+    const fixture = genUiFixture();
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: 'Write it up.' },
+        { role: 'assistant', body: fixture.writingBlock }
+    ]);
+    const answer = conversation.messages[1].content;
+
+    assertNoComponentSource(answer);
+    assert.match(answer, /^第一段正文。$/m);
+    assert.match(answer, /^- 列表项$/m, 'the list is kept as a list');
+    assert.match(answer, /^> 引用$/m, 'the quote is kept as a quote');
+});
+
+test('a citation with no metadata becomes no link, never a fabricated one (issue #47 P2)', async () => {
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: 'Cite it.' },
+        { role: 'assistant', body: '结论如下<Cite ref="missing-ref" />' }
+    ]);
+    const answer = conversation.messages[1].content;
+
+    assertNoComponentSource(answer);
+    assert.doesNotMatch(answer, /\[[^\]]*\]\(/, 'no link is invented');
+    assert.doesNotMatch(answer, /[\uE200-\uE20F]/, 'and no private-use marker is left behind');
+    assert.match(answer, /^结论如下$/m);
+});

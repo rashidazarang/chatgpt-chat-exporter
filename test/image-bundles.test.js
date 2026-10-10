@@ -116,3 +116,39 @@ test('custom archive filenames are bounded and trim trailing dots and spaces in 
     const result = engine.exportConversation({ ...options, filename: 'Folder/Report.md...   ' });
     assert.equal(result.filename, 'Report.zip');
 });
+
+// ── Issue #47 P3: every image must become a file, not an inline data URL ────
+// A reasoning recap is raw HTML that the exporter prepends to a reply. A recap
+// the model left open used to suppress image bundling for the rest of the file,
+// which is how two images stayed as multi-megabyte Base64 in the reader's
+// Markdown while the others became local PNGs beside it.
+
+test('an unclosed reasoning recap cannot strand later images as inline data URLs (issue #47 P3)', () => {
+    const recap = '<small class="reasoning-recap"><strong>Reasoning / progress:</strong><br>\nstep one<br>\nstep two';
+    // Two distinct images, so neither is deduplicated away.
+    const second = png.replace(/g==$/, 'h==');
+    const source = `${recap}\n\n![First](${png})\n\n![Second](${second})`;
+    const bundle = engine.internals.bundleMarkdownImages(source);
+
+    assert.deepEqual(bundle.images.map(image => image.path), ['images/image-001.png', 'images/image-002.png']);
+    assert.equal(bundle.content.includes('data:image'), false, 'no data URL is left in the Markdown body');
+    assert.ok(bundle.content.includes('![First](images/image-001.png)'));
+    assert.ok(bundle.content.includes('![Second](images/image-002.png)'));
+});
+
+test('a recap that left an inner tag open still releases the images after it (issue #47 P3)', () => {
+    const source = `<small>reasoning <code>console.log(1)<br>\n\n![After](${png})`;
+    const bundle = engine.internals.bundleMarkdownImages(source);
+
+    assert.deepEqual(bundle.images.map(image => image.path), ['images/image-001.png']);
+    assert.equal(bundle.content.includes('data:image'), false);
+});
+
+test('a genuinely unfinished <pre> still protects the literal example inside it (issue #47 P3)', () => {
+    const literal = `![Example](${png})`;
+    const source = `<pre>${literal}`;
+    const bundle = engine.internals.bundleMarkdownImages(source);
+
+    assert.deepEqual(bundle.images, [], 'a verbatim block is not media');
+    assert.equal(bundle.content, source);
+});

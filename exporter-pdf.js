@@ -1789,7 +1789,10 @@
         // Layout. A container only arranges what it holds, so the reader sees the
         // children; a row reads as one line, a column as a sequence of blocks.
         const GENUI_ROW_TAGS = new Set(['row', 'hstack', 'line', 'inline']);
-        const GENUI_BLOCK_TAGS = new Set(['box', 'col', 'column', 'vstack', 'card', 'grid', 'stack', 'panel', 'section', 'group', 'layout', 'list']);
+        const GENUI_BLOCK_TAGS = new Set(['box', 'col', 'column', 'vstack', 'card', 'grid', 'stack', 'panel', 'section', 'group', 'layout', 'list',
+            // A writing component is a block of prose; its paragraph breaks are the
+            // reader's formatting and are kept as blocks (issue #47 P2).
+            'writingblock', 'writing-block', 'writing']);
         // A group holds the choices the reader picked between.
         const GENUI_GROUP_TAGS = new Set(['radio-group', 'checkbox-group', 'choice-group', 'segmented-control', 'toggle-group', 'option-group', 'select', 'dropdown', 'picker', 'tabs']);
         const GENUI_OPTION_TAGS = new Set(['radio', 'checkbox', 'option', 'segment', 'toggle', 'tab']);
@@ -1797,15 +1800,37 @@
         const GENUI_ICON_TAGS = new Set(['icon', 'glyph']);
         const GENUI_RULE_TAGS = new Set(['divider', 'separator', 'hr']);
         const GENUI_TEXT_TAGS = new Set(['text', 'span', 'label', 'em', 'strong', 'b', 'i', 'code', 'small', 'caption', 'title']);
+        // A *block* of code, not the inline `<code>` element above. Its body is the
+        // reader's code and belongs in a fence — losing it would be a silent hole in
+        // the export, which is the worst outcome of all (issue #47 P0).
+        const GENUI_CODE_TAGS = new Set(['codeblock', 'code-block', 'codeblock-custom', 'codesnippet', 'code-snippet']);
+        // Inside a code element nothing is widget source — not a `<tag>`, not a
+        // `{binding}`. Its text is the reader's code and is kept byte for byte.
+        const GENUI_RAW_TEXT_TAGS = new Set([...GENUI_CODE_TAGS, 'code', 'pre']);
         // Widgets that are a picture of data. Markdown has no way to hold one, and
         // inventing a table from data this release cannot see would be worse than
         // saying so.
         const GENUI_UNREPRESENTABLE = new Set(['chart', 'graph', 'plot', 'sparkline', 'map', 'canvas', 'diagram', 'visualization', 'widget', 'iframe', 'embed', 'video', 'audio', 'carousel', 'gallery', 'avatar', 'progress', 'slider']);
         // The gate. Converting is only worth its risk when the part really holds
         // widget source, and these names are ones ordinary markdown and ordinary
-        // prose do not produce in angle brackets — `<button>`, `<link>`, `<text>`
-        // and `<cite>` are HTML-shaped and never switch it on by themselves.
+        // prose do not produce in angle brackets. `<button>` and `<text>` stay out:
+        // they are HTML-shaped, and only a container or control beside them tells
+        // the difference. See GENUI_PASCAL_GATE_TAGS for the ones spelled as
+        // components.
         const GENUI_GATE_TAGS = new Set(['box', 'row', 'col', 'column', 'vstack', 'hstack', 'card', 'grid', 'stack', 'radio-group', 'checkbox-group', 'segmented-control', 'toggle-group', 'option-group', 'picker']);
+        // Rich-text components carry reading text rather than interaction. Their
+        // names never occur as ordinary markdown, so a part made only of these is
+        // still component source and must convert rather than leak its tags.
+        const GENUI_COMPONENT_GATE_TAGS = new Set([...GENUI_GATE_TAGS,
+            'codeblock', 'code-block', 'writingblock', 'writing-block', 'citation', 'reference', 'minicard', 'quoteblock', 'quote-block']);
+        // `<Link>` and `<Cite>` are components; `<link>` and `<cite>` are the HTML
+        // elements a message may legitimately be written *about*. Only the
+        // capitalised spelling is evidence of widget source on its own.
+        const GENUI_PASCAL_GATE_TAGS = new Set(['link', 'cite', 'code', 'citation', 'image']);
+        // `{#each …}` / `{#if …}` / `{:else}` / `{/each}` — the widget template's
+        // control syntax, which plain prose never produces.
+        const GENUI_CONTROL_BLOCK = '#control';
+        const GENUI_CONTROL_PATTERN = /\{#[a-z][\w-]*|\{\/[a-z][\w-]*|\{:(?:else|then|catch|finally)\b/;
         // A code span needs its closing run; a pathological run of backticks is not
         // worth a quadratic scan.
         const GENUI_INLINE_CODE_RUN_LIMIT = 512;
@@ -1876,6 +1901,23 @@
         // renders, in order.
         const GENUI_TAG_NAME = /^<(\/?)([a-zA-Z][\w.-]*)/;
     
+        // A `{…}` in a widget's text is a data binding — a property of runtime
+        // state, or a call the widget made. It is never text the reader read, so it
+        // goes. A brace in maths is not a binding, though: `x_{i}`, `J_{after}` and
+        // `\frac{a}{b}` all keep their braces, which is why only a member access or
+        // a call counts and a command's own argument never does.
+        function isGenUiBinding(source, index) {
+            const previous = source[index - 1] || '';
+            if (previous === '_' || previous === '^' || previous === '\\') return false;
+            if (/\\[a-zA-Z]*$/.test(source.slice(0, index))) return false;
+            const end = genUiPreambleEnd(source, index);
+            if (end < 0) return false;
+            const inner = source.slice(index + 1, end);
+            if (!inner || inner.length > 4096) return false;
+            if (!/^[\x20-\x7e]+$/.test(inner)) return false;
+            return /[.(]/.test(inner);
+        }
+    
         function parseGenUi(source) {
             const root = { children: [] };
             const stack = [root];
@@ -1890,12 +1932,65 @@
             while (cursor < source.length) {
                 const char = source[cursor];
     
+                // Inside a code element, everything up to its own closing tag is
+                // literal: braces and angle brackets there are the reader's code,
+                // not a binding or a component (issue #47 P0).
+                const openName = stack[stack.length - 1].name;
+                if (GENUI_RAW_TEXT_TAGS.has(openName)) {
+                    const closingTag = `</${openName}`;
+                    const here = source.slice(cursor, cursor + closingTag.length).toLowerCase();
+                    const atClose = here === closingTag && /[\s>/]/.test(source[cursor + closingTag.length] || '>');
+                    if (!atClose) {
+                        text += char;
+                        cursor++;
+                        continue;
+                    }
+                }
+    
                 if (char === '{' && source[cursor + 1] === '@') {
                     const end = genUiPreambleEnd(source, cursor);
                     if (end >= 0) {
                         flush();
                         cursor = end + 1;
                         continue;
+                    }
+                }
+    
+                if (char === '{') {
+                    const marker = source[cursor + 1];
+                    // Template control. The block's own text is what the reader
+                    // read, so the block is transparent and only its keyword goes:
+                    // `{#each items as item}` renders the rows it held, `{#if …}`
+                    // renders the branch it guards.
+                    if (marker === '#' || marker === '/' || marker === ':') {
+                        const end = source.indexOf('}', cursor + 2);
+                        if (end >= 0) {
+                            flush();
+                            if (marker === '#') {
+                                const block = { type: 'element', name: GENUI_CONTROL_BLOCK, attributes: new Map(), selfClosing: false, children: [] };
+                                stack[stack.length - 1].children.push(block);
+                                stack.push(block);
+                            } else if (marker === '/') {
+                                for (let at = stack.length - 1; at > 0; at--) {
+                                    if (stack[at].name !== GENUI_CONTROL_BLOCK) continue;
+                                    while (stack.length - 1 > at) stack.pop();
+                                    stack.pop();
+                                    break;
+                                }
+                            }
+                            cursor = end + 1;
+                            continue;
+                        }
+                    }
+                    // A bare binding: state, not prose. The value the reader saw was
+                    // runtime data this release cannot know, so the binding goes and
+                    // the words around it stay.
+                    if (marker !== '@' && isGenUiBinding(source, cursor)) {
+                        const end = genUiPreambleEnd(source, cursor);
+                        if (end >= 0) {
+                            cursor = end + 1;
+                            continue;
+                        }
                     }
                 }
     
@@ -1995,11 +2090,74 @@
             return src || alt ? '[Image]' : '';
         }
     
+        // Trim the blank edges and lift the indentation the surrounding markup gave
+        // the whole block, keeping each line's indentation relative to the rest —
+        // `if x:` and the body under it still line up.
+        function genUiDedent(text) {
+            const lines = text.replace(/^\n+/, '').replace(/\s+$/, '').split('\n');
+            let indent = Infinity;
+            lines.forEach(line => {
+                if (!line.trim()) return;
+                const match = /^[ \t]*/.exec(line);
+                if (match[0].length < indent) indent = match[0].length;
+            });
+            if (!Number.isFinite(indent) || indent === 0) return lines.join('\n');
+            return lines.map(line => (line.trim() ? line.slice(indent) : '')).join('\n');
+        }
+    
+        // A code component's body is the reader's code — either the text it held or
+        // a literal string attribute. Either way it is kept: a code block that
+        // vanishes without a trace is worse than any formatting flaw (issue #47 P0).
+        function genUiCodeText(node, attributes) {
+            const text = renderGenUiNodes(node.children, 'markdown');
+            if (text.trim()) return genUiDedent(text);
+            for (const key of ['code', 'content', 'source', 'text', 'value']) {
+                const value = attributes.get(key);
+                if (typeof value === 'string' && value) return value;
+            }
+            return '';
+        }
+    
+        // A fence long enough that the code inside cannot close it early.
+        function genUiFence(code) {
+            let longest = 0;
+            (code.match(/`+/g) || []).forEach(run => { if (run.length > longest) longest = run.length; });
+            return '`'.repeat(Math.max(3, longest + 1));
+        }
+    
+        function renderGenUiCode(node, attributes, format) {
+            const code = genUiCodeText(node, attributes);
+            if (!code) return '';
+            if (format !== 'markdown') return code;
+            const language = String(attributes.get('lang') || attributes.get('language') || attributes.get('type') || '').trim();
+            const label = /^[a-z0-9+#._-]{1,24}$/i.test(language) ? language : '';
+            const fence = genUiFence(code);
+            return `\n\n${fence}${label}\n${code}\n${fence}\n\n`;
+        }
+    
+        // The one text a component still carries once its children say nothing: a
+        // literal string attribute such as `code`, `label` or `caption`. Reading it
+        // is what stops an unknown component from silently swallowing its content.
+        const GENUI_CONTENT_ATTRIBUTES = ['text', 'content', 'code', 'body', 'caption', 'label', 'title', 'alt'];
+        function genUiLiteralContent(attributes) {
+            for (const key of GENUI_CONTENT_ATTRIBUTES) {
+                const value = attributes.get(key);
+                if (typeof value === 'string' && value.trim()) return value.trim();
+            }
+            return '';
+        }
+    
         function renderGenUiNode(node, format) {
             if (node.type === 'text') return node.value;
     
             const name = node.name;
             const attributes = node.attributes || new Map();
+    
+            if (name === GENUI_CONTROL_BLOCK) {
+                return `\n\n${joinGenUi(node.children, format, '\n\n')}\n\n`;
+            }
+    
+            if (GENUI_CODE_TAGS.has(name)) return renderGenUiCode(node, attributes, format);
     
             // Decorative: the label beside an icon carries the meaning.
             if (GENUI_ICON_TAGS.has(name)) return '';
@@ -2065,6 +2223,11 @@
             // data gets said out loud rather than dropped in silence.
             const content = joinGenUi(node.children, format, '\n\n');
             if (content) return content;
+            // Nothing was shown, but the component may still carry its own text in
+            // a literal attribute. Keeping that text is what makes this an export
+            // rather than a silent hole (issue #47 P0).
+            const literal = genUiLiteralContent(attributes);
+            if (literal) return literal;
             if (GENUI_UNREPRESENTABLE.has(name)) return `\n\n[Chat Exporter: an unsupported "${name}" component was not converted]\n\n`;
             return '';
         }
@@ -2166,10 +2329,16 @@
         // component names is the reader's code, not evidence of a widget.
         function looksLikeGenUi(value) {
             if (value.includes('{@')) return true;
+            if (GENUI_CONTROL_PATTERN.test(value)) return true;
             const pattern = /<(\/?)([a-zA-Z][\w.-]*)/g;
             let match;
             while ((match = pattern.exec(value)) !== null) {
-                if (GENUI_GATE_TAGS.has(match[2].toLowerCase())) return true;
+                const raw = match[2];
+                const lower = raw.toLowerCase();
+                if (GENUI_COMPONENT_GATE_TAGS.has(lower)) return true;
+                // Only the component spelling switches it on: a message about the
+                // HTML `<link>` or `<cite>` element stays the reader's text.
+                if (GENUI_PASCAL_GATE_TAGS.has(lower) && /^[A-Z]/.test(raw)) return true;
             }
             return false;
         }
@@ -2184,7 +2353,7 @@
         // export byte-identical.
         function renderGenUiPayload(value, format) {
             const source = String(value ?? '');
-            if (!source.includes('{@') && !/<[a-zA-Z/]/.test(source)) return source;
+            if (!source.includes('{@') && !/<[a-zA-Z/]/.test(source) && !/\{[/#:]/.test(source)) return source;
     
             const fenced = splitGenUiCodeSegments(source);
             const prose = fenced.map(segment => segment.type === 'text' ? segment.value : '').join('');
@@ -2206,6 +2375,15 @@
                 if (!part || typeof part !== 'object') return '';
                 if (typeof part.text === 'string') return part.text;
                 if (typeof part.content === 'string') return part.content;
+                // A part that is code carries it under its own key. Without this a
+                // standalone code part would vanish, because it is not prose and has
+                // no `text` — a silent hole in the reader's file (issue #47 P0).
+                if (typeof part.code === 'string' && part.code.trim() &&
+                    /^(?:code|code_block|codeblock)$/i.test(String(part.content_type || ''))) {
+                    const code = part.code.replace(/\n+$/, '');
+                    const fence = genUiFence(code);
+                    return `${fence}\n${code}\n${fence}`;
+                }
                 // A multimodal part is an asset pointer with no text of its own.
                 // Returning '' for it is why an image-only turn rendered empty and
                 // was dropped entirely; its media is added by the caller from
@@ -4761,6 +4939,7 @@
             const parts = [];
             let fence = null;
             let inlineEnd = -1;
+            let htmlStart = -1;
             let written = 0;
             const escaped = offset => {
                 let slashes = 0;
@@ -4774,14 +4953,36 @@
                 if (offset < inlineEnd) continue;
                 if (tag) {
                     if (!fence) {
-                        if (!closingTag) html.push(tag.toLowerCase());
-                        else if (html.at(-1) === tag.toLowerCase()) html.pop();
+                        const name = tag.toLowerCase();
+                        if (!closingTag) {
+                            if (!html.length) htmlStart = offset;
+                            html.push(name);
+                        } else {
+                            // Close the nearest matching tag rather than requiring a
+                            // perfect LIFO top: a recap that left a <code> open inside
+                            // it must not keep suppressing media for the whole file.
+                            const at = html.lastIndexOf(name);
+                            if (at >= 0) html.length = at;
+                            if (!html.length) htmlStart = -1;
+                        }
                     }
                     continue;
                 }
                 // Reasoning recaps are raw HTML with <br> line breaks. Their literal
                 // backticks must not open a Markdown fence over subsequent turns.
-                if (html.length) continue;
+                if (html.length) {
+                    // A recap is one block, and a blank line ends it even when the
+                    // model never closed the tag — otherwise a broken recap would
+                    // strand every later image as an inline data URL in the reader's
+                    // file instead of a local image beside it (issue #47 P3).
+                    const recap = html.includes('small');
+                    const ended = recap && htmlStart >= 0 && /\n[ \t]*\n/.test(content.slice(htmlStart, offset));
+                    if (!ended) continue;
+                    html.length = 0;
+                    htmlStart = -1;
+                    fence = null;
+                    inlineEnd = -1;
+                }
                 if (fenceRun) {
                     const indent = indentation.replace(/> ?/g, '').replace(/\t/g, '    ');
                     if (indent.length <= 3) {

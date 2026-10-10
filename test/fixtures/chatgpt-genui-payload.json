@@ -8,6 +8,11 @@
   "unknownWithText": "<box gap={2}><rating value={4} max={5}>4 of 5 beans</rating></box>",
   "unknownEmpty": "<box gap={2}><text>The roast curve is below.</text><chart data={curve} type=\"line\"/></box>",
   "nestedGroups": "<card>\n  <text weight=\"medium\">出杯方式</text>\n  <box gap={2}>\n    <segmented-control value={mode}>\n      <segment value=\"here\">在店里喝</segment>\n      <segment value=\"togo\">打包带走</segment>\n    </segmented-control>\n    <radio-group value={size}>\n      <radio value=\"sm\">小杯</radio>\n      <radio value=\"lg\">大杯</radio>\n    </radio-group>\n  </box>\n  <button>确认下单</button>\n</card>",
+  "codeBlockAttribute": "<box gap={2}>\n  <text>把原来的</text>\n  <CodeBlock lang=\"javascript\" code=\"GM_setValue('roast', 1);\" />\n  <text>改为</text>\n</box>",
+  "codeBlockChildren": "<box gap={2}>\n  <text>把原来的两行删掉</text>\n  <CodeBlock lang=\"javascript\">\n    if (batch.finished) {\n      GM_setValue('lastBatch', batch.id);\n    }\n  </CodeBlock>\n  <text>删除这两行</text>\n</box>",
+  "controlEach": "<box gap={2}>\n  <text>下面循环渲染</text>\n  {#each steps as step}\n    <row><text>{step.label}</text></row>\n  {/each}\n  {#if canCopy}\n    <button on:click={() => GenUI.copy(\"roast-log\")}>复制</button>\n  {/if}\n</box>",
+  "pascalLinkOnly": "参考资料：<Link href=\"https://example.com/roast-notes\" title=\"Roast notes\" />",
+  "writingBlock": "<WritingBlock>\n第一段正文。\n\n- 列表项\n\n> 引用\n</WritingBlock>",
   "citeRow": "The roast notes corroborate the grind setting. <cite ref=\"turn4210search0\"/>",
   "citeReference": {
     "matchedText": "\uE200cite\uE202turn4210search0\uE201",
