@@ -1,0 +1,16 @@
+{
+  "note": "Synthetic GPT-6 generative-UI message parts for issue #47. The component shapes are transcribed from the issue screenshots; every string here is invented for this fixture, so no real conversation, account, selector report or token is committed. A payload part of this kind is component source rather than markdown, which is why the payload-first read wrote it into the reader's file verbatim.",
+  "selection": "<box gap={3}>\n  {@body const [choice,setChoice] = DIL.useState(\"sm\")}\n  <radio-group direction=\"col\" value={choice} onChange={setChoice}>\n    <radio value=\"sm\">Small — one espresso shot</radio>\n    <radio value=\"md\">Medium — two shots and steamed milk</radio>\n    <radio value=\"lg\">Large — two shots, milk and a second cup</radio>\n  </radio-group>\n  <button block onClick={()=>GenUI.issueNewTurn(choice=\"sm\"?\"Order the small one and confirm the pickup time.\":choice=\"md\"?\"Order the medium one and confirm the pickup time.\":\"Order the large one and confirm the pickup time.\")}>继续操作 <icon name=\"arrow-right\" inline/></button>\n</box>",
+  "layoutCard": "<box border radius=\"lg\" padding={3} gap={2}>\n  <row align=\"center\" gap={2}>\n    <icon name=\"file-text\" color=\"secondary\"/>\n    <text weight=\"medium\">Roast log 2026.md</text>\n  </row>\n  <divider color=\"subtle\"/>\n  <text color=\"secondary\" size=\"xs\">Markdown 文件内容示例</text>\n  <box background=\"surface-secondary\" radius=\"md\" padding={3} gap={2}>\n    <text weight=\"medium\">Roast log</text>\n    <text>Batch 114 finished at 11:40. The first crack landed early.</text>\n  </box>\n</box>",
+  "linkRow": "<row align=\"center\" gap={2}>\n  <icon name=\"github\" size=\"lg\"/>\n  <link url=\"https://example.com/roast-notes\" title=\"Roast notes\"/>\n</row>",
+  "codeAboutComponents": "```jsx\n<radio-group value={choice}>\n  <radio value=\"a\">A</radio>\n</radio-group>\n```",
+  "inlineCodeAboutComponents": "The tag `<radio-group>` is the one to use, and `<box gap={3}>` wraps it.",
+  "unknownWithText": "<box gap={2}><rating value={4} max={5}>4 of 5 beans</rating></box>",
+  "unknownEmpty": "<box gap={2}><text>The roast curve is below.</text><chart data={curve} type=\"line\"/></box>",
+  "nestedGroups": "<card>\n  <text weight=\"medium\">出杯方式</text>\n  <box gap={2}>\n    <segmented-control value={mode}>\n      <segment value=\"here\">在店里喝</segment>\n      <segment value=\"togo\">打包带走</segment>\n    </segmented-control>\n    <radio-group value={size}>\n      <radio value=\"sm\">小杯</radio>\n      <radio value=\"lg\">大杯</radio>\n    </radio-group>\n  </box>\n  <button>确认下单</button>\n</card>",
+  "citeRow": "The roast notes corroborate the grind setting. <cite ref=\"turn4210search0\"/>",
+  "citeReference": {
+    "matchedText": "\uE200cite\uE202turn4210search0\uE201",
+    "items": [{ "title": "Roast notes", "url": "https://example.com/roast-notes" }]
+  }
+}

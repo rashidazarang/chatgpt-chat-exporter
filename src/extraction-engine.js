@@ -1753,6 +1753,443 @@
         return stripPayloadMarkers(result);
     }
 
+    // ── GPT-6 generative-UI payloads (issue #47) ─────────────────────────────
+    //
+    // A GPT-6 reply is not always markdown. ChatGPT stores the model's widget
+    // source — a JSX-like component language, `{@body …}<box><radio-group>` —
+    // as the message part, and compiles it into the interactive controls the
+    // reader actually sees. The payload-first read is right for a markdown
+    // reply, where the part *is* the markdown the model produced; for a widget
+    // reply the part is the source of a rendering, so `{@body const [choice,
+    // setChoice] = DIL.useState("md")}` and `<radio-group direction="col"
+    // value={choice} onChange={setChoice}>` were written into the reader's file
+    // verbatim. The page rendered all of it correctly, and the export is read
+    // by people: Markdown cannot hold the interaction, so the aim is narrower —
+    // keep what the reader could read. The visible text of every control, the
+    // options in their order, links, and the reading order of the layout
+    // around them.
+    //
+    // Nothing here runs the source. Attributes, click handlers included, are
+    // consumed as text and dropped; no expression is evaluated. Code fences and
+    // inline code are returned untouched, so a message *about* `<button>` or
+    // `<radio-group>` still exports as the code it is, and a component this
+    // release does not know degrades to its visible text rather than to
+    // garbage. Only an assistant turn is converted: a prompt that pastes widget
+    // source is the reader's own text, and must still read back as typed.
+
+    // Layout. A container only arranges what it holds, so the reader sees the
+    // children; a row reads as one line, a column as a sequence of blocks.
+    const GENUI_ROW_TAGS = new Set(['row', 'hstack', 'line', 'inline']);
+    const GENUI_BLOCK_TAGS = new Set(['box', 'col', 'column', 'vstack', 'card', 'grid', 'stack', 'panel', 'section', 'group', 'layout', 'list']);
+    // A group holds the choices the reader picked between.
+    const GENUI_GROUP_TAGS = new Set(['radio-group', 'checkbox-group', 'choice-group', 'segmented-control', 'toggle-group', 'option-group', 'select', 'dropdown', 'picker', 'tabs']);
+    const GENUI_OPTION_TAGS = new Set(['radio', 'checkbox', 'option', 'segment', 'toggle', 'tab']);
+    // Decorative and structural leaves.
+    const GENUI_ICON_TAGS = new Set(['icon', 'glyph']);
+    const GENUI_RULE_TAGS = new Set(['divider', 'separator', 'hr']);
+    const GENUI_TEXT_TAGS = new Set(['text', 'span', 'label', 'em', 'strong', 'b', 'i', 'code', 'small', 'caption', 'title']);
+    // Widgets that are a picture of data. Markdown has no way to hold one, and
+    // inventing a table from data this release cannot see would be worse than
+    // saying so.
+    const GENUI_UNREPRESENTABLE = new Set(['chart', 'graph', 'plot', 'sparkline', 'map', 'canvas', 'diagram', 'visualization', 'widget', 'iframe', 'embed', 'video', 'audio', 'carousel', 'gallery', 'avatar', 'progress', 'slider']);
+    // The gate. Converting is only worth its risk when the part really holds
+    // widget source, and these names are ones ordinary markdown and ordinary
+    // prose do not produce in angle brackets — `<button>`, `<link>`, `<text>`
+    // and `<cite>` are HTML-shaped and never switch it on by themselves.
+    const GENUI_GATE_TAGS = new Set(['box', 'row', 'col', 'column', 'vstack', 'hstack', 'card', 'grid', 'stack', 'radio-group', 'checkbox-group', 'segmented-control', 'toggle-group', 'option-group', 'picker']);
+    // A code span needs its closing run; a pathological run of backticks is not
+    // worth a quadratic scan.
+    const GENUI_INLINE_CODE_RUN_LIMIT = 512;
+
+    // The state preamble `{@body …}` is machinery the reader never sees, and a
+    // brace inside one of its strings would fool a lazy regex; consume it
+    // brace-aware instead.
+    function genUiPreambleEnd(source, index) {
+        let depth = 0;
+        let quote = '';
+        for (let at = index; at < source.length; at++) {
+            const char = source[at];
+            if (quote) {
+                if (char === '\\') { at++; continue; }
+                if (char === quote) quote = '';
+                continue;
+            }
+            if (char === '"' || char === "'") { quote = char; continue; }
+            if (char === '{') { depth++; continue; }
+            if (char === '}') {
+                depth--;
+                if (depth === 0) return at;
+            }
+        }
+        return -1;
+    }
+
+    // Where an element's attribute list ends. A `>` inside `{…}` (an arrow
+    // function's `=>`) or inside a quoted string is not the end of the tag.
+    // Null means the construct never closes: the caller then leaves the rest of
+    // the part as literal text instead of guessing at a format it cannot read.
+    function genUiTagEnd(source, index) {
+        let depth = 0;
+        let quote = '';
+        for (let at = index; at < source.length; at++) {
+            const char = source[at];
+            if (quote) {
+                if (char === '\\') { at++; continue; }
+                if (char === quote) quote = '';
+                continue;
+            }
+            if (char === '"' || char === "'") { quote = char; continue; }
+            if (char === '{') { depth++; continue; }
+            if (char === '}') { depth = Math.max(0, depth - 1); continue; }
+            if (char === '>' && depth === 0) return { end: at, selfClosing: source[at - 1] === '/' };
+        }
+        return null;
+    }
+
+    // Only literal attribute values are read — a link's url and title, a
+    // citation's ref, an image's alt. `{…}` values are expressions: state,
+    // handlers, and whatever else the widget wanted at runtime.
+    function genUiAttributes(source, start, end) {
+        const attributes = new Map();
+        const pattern = /([a-zA-Z_][\w:-]*)\s*=\s*"([^"]*)"|([a-zA-Z_][\w:-]*)\s*=\s*'([^']*)'/g;
+        const region = source.slice(start, end);
+        let match;
+        let count = 0;
+        while ((match = pattern.exec(region)) !== null && count < 32) {
+            attributes.set((match[1] || match[3]).toLowerCase(), match[1] ? match[2] : match[4]);
+            count++;
+        }
+        return attributes;
+    }
+
+    // An element never closes where a stopped reply left it, so an unclosed
+    // element is closed where the part ends — everything it did contain still
+    // renders, in order.
+    const GENUI_TAG_NAME = /^<(\/?)([a-zA-Z][\w.-]*)/;
+
+    function parseGenUi(source) {
+        const root = { children: [] };
+        const stack = [root];
+        let text = '';
+        let cursor = 0;
+        const flush = () => {
+            if (!text) return;
+            stack[stack.length - 1].children.push({ type: 'text', value: text });
+            text = '';
+        };
+
+        while (cursor < source.length) {
+            const char = source[cursor];
+
+            if (char === '{' && source[cursor + 1] === '@') {
+                const end = genUiPreambleEnd(source, cursor);
+                if (end >= 0) {
+                    flush();
+                    cursor = end + 1;
+                    continue;
+                }
+            }
+
+            if (char === '<') {
+                const name = GENUI_TAG_NAME.exec(source.slice(cursor, cursor + 80));
+                if (name) {
+                    const closing = name[1] === '/';
+                    const tag = name[2].toLowerCase();
+                    let next = -1;
+                    let element = null;
+                    if (closing) {
+                        const end = source.indexOf('>', cursor + name[0].length);
+                        if (end >= 0) next = end + 1;
+                    } else {
+                        const end = genUiTagEnd(source, cursor + name[0].length);
+                        if (end) {
+                            element = {
+                                type: 'element',
+                                name: tag,
+                                attributes: genUiAttributes(source, cursor + name[0].length, end.end),
+                                selfClosing: end.selfClosing,
+                                children: []
+                            };
+                            next = end.end + 1;
+                        }
+                    }
+
+                    if (next >= 0) {
+                        flush();
+                        if (closing) {
+                            // Close the nearest matching element. Anything still
+                            // open inside it stays attached to it, so a part that
+                            // skips a closing tag loses nothing.
+                            for (let at = stack.length - 1; at > 0; at--) {
+                                if (stack[at].name !== tag) continue;
+                                while (stack.length - 1 > at) stack.pop();
+                                stack.pop();
+                                break;
+                            }
+                        } else {
+                            stack[stack.length - 1].children.push(element);
+                            if (!element.selfClosing) stack.push(element);
+                        }
+                        cursor = next;
+                        continue;
+                    }
+                }
+            }
+
+            text += char;
+            cursor++;
+        }
+
+        flush();
+        return root.children;
+    }
+
+    // Renders a child list and joins what it produced. Trimming each child
+    // first is what keeps a container's own indentation out of the result and
+    // what stops two containers from gluing their words together.
+    function joinGenUi(nodes, format, separator) {
+        return (nodes || [])
+            .map(node => String(renderGenUiNode(node, format)).trim())
+            .filter(Boolean)
+            .join(separator);
+    }
+
+    function renderGenUiNodes(nodes, format) {
+        return (nodes || []).map(node => renderGenUiNode(node, format)).join('');
+    }
+
+    function flattenGenUi(nodes, format) {
+        return renderGenUiNodes(nodes, format).replace(/\s+/g, ' ').trim();
+    }
+
+    function renderGenUiLink(node, attributes, format) {
+        const href = String(attributes.get('url') || attributes.get('href') || '').trim();
+        const title = String(attributes.get('title') || attributes.get('label') || '').trim() ||
+            flattenGenUi(node.children, format);
+        if (!title) return '';
+        if (!href || isUnsafeHref(href)) return title;
+        return format === 'markdown'
+            ? `[${escapeMarkdownLinkText(title)}](${escapeMarkdownUrl(href)})`
+            : `${title} (${href})`;
+    }
+
+    function renderGenUiImage(attributes, format) {
+        const src = String(attributes.get('src') || attributes.get('url') || '').trim();
+        const alt = String(attributes.get('alt') || attributes.get('label') || '').trim();
+        // A `data:` source is deliberately not embedded: the payload's own
+        // attachment path already knows which bytes are the stored file, and a
+        // widget's copy of an image is not necessarily that file.
+        if (src && !isUnsafeHref(src) && format === 'markdown') {
+            return `![${escapeMarkdownLinkText(alt || 'Image')}](${escapeMarkdownUrl(src)})`;
+        }
+        if (alt) return `[Image: ${alt}]`;
+        return src || alt ? '[Image]' : '';
+    }
+
+    function renderGenUiNode(node, format) {
+        if (node.type === 'text') return node.value;
+
+        const name = node.name;
+        const attributes = node.attributes || new Map();
+
+        // Decorative: the label beside an icon carries the meaning.
+        if (GENUI_ICON_TAGS.has(name)) return '';
+
+        if (GENUI_RULE_TAGS.has(name)) return '\n\n---\n\n';
+
+        if (name === 'cite') {
+            const reference = String(attributes.get('ref') || attributes.get('id') || '').trim();
+            if (!reference) return '';
+            // Hand it to the citation machinery that already ships: a marker
+            // that resolves becomes its source link, and one that does not is
+            // stripped, exactly as the private-use form is.
+            return `\uE200cite\uE202${reference}\uE201`;
+        }
+
+        if (name === 'img' || name === 'image' || name === 'picture') {
+            return renderGenUiImage(attributes, format);
+        }
+
+        if (name === 'link' || name === 'a') {
+            return renderGenUiLink(node, attributes, format);
+        }
+
+        if (name === 'button') {
+            // The reader saw an action; bold is what plain text has instead.
+            const label = flattenGenUi(node.children, format);
+            return label ? `**${label}**` : '';
+        }
+
+        if (GENUI_OPTION_TAGS.has(name)) {
+            // Outside a group an option is a label, not a list item.
+            return flattenGenUi(node.children, format);
+        }
+
+        if (GENUI_GROUP_TAGS.has(name)) {
+            const blocks = [];
+            node.children.forEach(child => {
+                if (child.type === 'element' && GENUI_OPTION_TAGS.has(child.name)) {
+                    const label = flattenGenUi(child.children, format);
+                    if (label) blocks.push(`- ${label}`);
+                    return;
+                }
+                const rendered = String(renderGenUiNode(child, format)).trim();
+                if (rendered) blocks.push(rendered);
+            });
+            return blocks.length ? `\n\n${blocks.join('\n')}\n\n` : '';
+        }
+
+        if (GENUI_ROW_TAGS.has(name)) {
+            return joinGenUi(node.children, format, ' ');
+        }
+
+        if (GENUI_BLOCK_TAGS.has(name)) {
+            return `\n\n${joinGenUi(node.children, format, '\n\n')}\n\n`;
+        }
+
+        if (GENUI_TEXT_TAGS.has(name)) {
+            return renderGenUiNodes(node.children, format);
+        }
+
+        // A component this release does not know keeps what it showed. Only when
+        // it showed nothing is there a choice to make, and then a picture of
+        // data gets said out loud rather than dropped in silence.
+        const content = joinGenUi(node.children, format, '\n\n');
+        if (content) return content;
+        if (GENUI_UNREPRESENTABLE.has(name)) return `\n\n[Chat Exporter: an unsupported "${name}" component was not converted]\n\n`;
+        return '';
+    }
+
+    // A fenced block is the reader's own code. A fence the model left open runs
+    // to the end of the part, because everything after an unclosed fence is
+    // inside it.
+    function splitGenUiCodeSegments(source) {
+        const segments = [];
+        let text = '';
+        let cursor = 0;
+        const pushText = () => {
+            if (!text) return;
+            segments.push({ type: 'text', value: text });
+            text = '';
+        };
+
+        while (cursor < source.length) {
+            const lineEnd = source.indexOf('\n', cursor);
+            const stop = lineEnd < 0 ? source.length : lineEnd + 1;
+            const fence = /^ {0,3}(`{3,}|~{3,})/.exec(source.slice(cursor, stop));
+            if (!fence) {
+                text += source.slice(cursor, stop);
+                cursor = stop;
+                continue;
+            }
+
+            pushText();
+            const fenceChar = fence[1][0];
+            const fenceLength = fence[1].length;
+            const isCloser = line => {
+                const trimmed = line.trim();
+                return trimmed.length >= fenceLength && trimmed.split('').every(char => char === fenceChar);
+            };
+            let at = stop;
+            while (at < source.length) {
+                const nextEnd = source.indexOf('\n', at);
+                const nextStop = nextEnd < 0 ? source.length : nextEnd + 1;
+                const candidate = source.slice(at, nextStop);
+                at = nextStop;
+                if (isCloser(candidate)) break;
+            }
+            segments.push({ type: 'code', value: source.slice(cursor, at) });
+            cursor = at;
+        }
+
+        pushText();
+        return segments;
+    }
+
+    // A run of N backticks opens a code span closed by the next run of exactly
+    // N; an unpaired run is ordinary text.
+    function splitGenUiInlineCode(value) {
+        if (!value.includes('`')) return [{ type: 'text', value }];
+
+        const runs = [];
+        let cursor = 0;
+        while (cursor < value.length) {
+            if (value[cursor] !== '`') { cursor++; continue; }
+            let run = 0;
+            while (value[cursor + run] === '`') run++;
+            runs.push({ at: cursor, run });
+            cursor += run;
+        }
+        if (runs.length > GENUI_INLINE_CODE_RUN_LIMIT) return [{ type: 'text', value }];
+
+        const segments = [];
+        let text = '';
+        let at = 0;
+        let scan = 0;
+        while (scan < runs.length) {
+            const open = runs[scan];
+            let close = -1;
+            for (let next = scan + 1; next < runs.length; next++) {
+                if (runs[next].run === open.run) { close = next; break; }
+            }
+            if (close < 0) {
+                text += value.slice(at, open.at + open.run);
+                at = open.at + open.run;
+                scan++;
+                continue;
+            }
+            text += value.slice(at, open.at);
+            if (text) {
+                segments.push({ type: 'text', value: text });
+                text = '';
+            }
+            const end = runs[close].at + runs[close].run;
+            segments.push({ type: 'code', value: value.slice(open.at, end) });
+            at = end;
+            scan = close + 1;
+        }
+        if (at < value.length) text += value.slice(at);
+        if (text) segments.push({ type: 'text', value: text });
+        return segments;
+    }
+
+    // The gate reads only the part that is not code: a code fence full of
+    // component names is the reader's code, not evidence of a widget.
+    function looksLikeGenUi(value) {
+        if (value.includes('{@')) return true;
+        const pattern = /<(\/?)([a-zA-Z][\w.-]*)/g;
+        let match;
+        while ((match = pattern.exec(value)) !== null) {
+            if (GENUI_GATE_TAGS.has(match[2].toLowerCase())) return true;
+        }
+        return false;
+    }
+
+    function trimGenUiText(value) {
+        return value.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+    }
+
+    // The entry point: a payload part in, a static rendering out. Ordinary
+    // markdown never reaches the parser — without widget source in it the part
+    // is returned exactly as it arrived, which is what keeps every existing
+    // export byte-identical.
+    function renderGenUiPayload(value, format) {
+        const source = String(value ?? '');
+        if (!source.includes('{@') && !/<[a-zA-Z/]/.test(source)) return source;
+
+        const fenced = splitGenUiCodeSegments(source);
+        const prose = fenced.map(segment => segment.type === 'text' ? segment.value : '').join('');
+        if (!looksLikeGenUi(prose)) return source;
+
+        return fenced.map(segment => {
+            if (segment.type === 'code') return segment.value;
+            return splitGenUiInlineCode(segment.value).map(inner => {
+                if (inner.type === 'code') return inner.value;
+                return trimGenUiText(renderGenUiNodes(parseGenUi(inner.value), format));
+            }).join('');
+        }).join('').trim();
+    }
+
     function payloadContentText(content) {
         if (!content || !Array.isArray(content.parts)) return '';
         return content.parts.map(part => {
@@ -2819,13 +3256,17 @@
     // export wants; HTML exports escape it and keep the paragraph breaks.
     function payloadMessageToExport(entry, assistantName, format, doc, options = {}) {
         const message = payloadRenderableMessage(entry.message);
-        const text = resolvePayloadCitations(payloadContentText(message.content), message, format);
+        const isUser = payloadMessageRole(message) === 'user';
+        const raw = payloadContentText(message.content);
+        // A widget reply's part is the source of a rendering, not markdown
+        // (issue #47). A prompt is the reader's own text and is never rewritten.
+        const converted = isUser ? raw : renderGenUiPayload(raw, format);
+        const text = resolvePayloadCitations(converted, message, format);
         // No text is not the same as no message: an image-only turn carries its
         // content in attachments, which the caller appends.
         const allowEmpty = options.allowEmpty === true;
         if (!text && !allowEmpty) return null;
 
-        const isUser = payloadMessageRole(message) === 'user';
         const content = !text ? '' : (format === 'markdown'
             ? closeOpenFence(text)
             : text.split(/\n{2,}/).map(block => `<p>${sanitizeHtml(block).replace(/\n/g, '<br>')}</p>`).join(''));
@@ -4574,6 +5015,7 @@
         },
         internals: {
             serializeMessageContent,
+            renderGenUiPayload,
             extractCodeBlock,
             tableToMarkdown,
             tableToHtml,

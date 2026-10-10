@@ -2,6 +2,7 @@ const { test, expect } = require('@playwright/test');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { readZip } = require('../test-support/read-zip');
+const genUiFixture = require('../test/fixtures/chatgpt-genui-payload.json');
 const root = path.resolve(__dirname, '..');
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMwmHnmPwAFJwKVhZG1WQAAAABJRU5ErkJggg==';
 const answer = `<h2>Compatibility fixture</h2><p>OK</p>
@@ -297,5 +298,33 @@ test('chatgpt 2026 transcript: the userscript launcher exports it under strict C
     const text = await downloadedText(await downloading);
     expect(text).toContain('### **You**\n\nHi\n');
     expect(text).toContain('[Official Node.js releases](https://nodejs.org/en/about/previous-releases)');
+    expect(errors).toEqual([]);
+});
+
+// The shipped Markdown exporter, end to end, on a GPT-6 widget reply: the case
+// in issue #47 came from a real download, so it is checked as a real download —
+// in every engine, through the generated file rather than the source engine.
+test('the generated Markdown exporter converts a GPT-6 widget payload (issue #47)', async ({ page }) => {
+    const payload = conversation(2);
+    payload.mapping.n1.message.content = {
+        content_type: 'text',
+        parts: [`${genUiFixture.selection}\n\n${genUiFixture.codeAboutComponents}`]
+    };
+
+    const downloading = page.waitForEvent('download');
+    const errors = await mount(page, { payload, script: 'exporter-markdown.js' });
+    const text = await downloadedText(await downloading);
+
+    expect(text).toContain('- Small — one espresso shot');
+    expect(text).toContain('- Medium — two shots and steamed milk');
+    expect(text).toContain('- Large — two shots, milk and a second cup');
+    expect(text).toContain('**继续操作**');
+    // Code is not a component, however much it looks like one.
+    expect(text).toContain(genUiFixture.codeAboutComponents);
+    // And outside that code, no component source is left where a reader meets it.
+    const prose = text.replace(genUiFixture.codeAboutComponents, '');
+    expect(prose).not.toContain('{@body');
+    expect(prose).not.toContain('onChange=');
+    expect(prose).not.toContain('<radio-group');
     expect(errors).toEqual([]);
 });

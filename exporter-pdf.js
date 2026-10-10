@@ -9,67 +9,67 @@
 
     (function initChatExporterEngine(root, factory) {
         const engine = factory();
-
+    
         if (root) {
             root.ChatExporterEngine = engine;
         }
-
+    
         if (typeof module !== 'undefined' && module.exports) {
             module.exports = engine;
         }
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
-
+    
         const ENGINE_VERSION = '1.2.4';
-
+    
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
-
+    
         // Scroll steps that neither advance nor capture anything before the sweep
         // gives up, so a virtualizer that drags scrollTop backwards gets retries.
         const MAX_SCROLL_STALLS = 5;
-
+    
         // Wall-clock budget for a full sweep. Step counts alone can't bound it —
         // a provider that keeps changing height would hold the page for minutes.
         const DEFAULT_MAX_DURATION = 120000;
-
+    
         // Scroll steps a sweep may take. The wall clock is the real bound; this
         // only stops a loop that costs no time. A 166-message conversation in a
         // short window needed 730 steps, so 400 cut it off halfway.
         const DEFAULT_MAX_SCROLL_STEPS = 2000;
-
+    
         // How long a sweep holds the top of what is loaded, waiting for older
         // history, before taking it for the start of the conversation. Signed-in
         // ChatGPT loads history in batches that arrived 1-6 s apart on a real
         // conversation (verified live 2026-09-27).
         const HISTORY_WAIT = 8000;
-
+    
         // Wall-clock cap on reading the page's own image files after a sweep.
         // They are local, so this only guards against a read that never returns.
         const PAGE_MEDIA_MAX_DURATION = 60000;
-
+    
         // How long to watch the newest answer before deciding it has stopped
         // growing. Short enough not to be felt on an idle conversation.
         const STREAM_SETTLE_INTERVAL = 250;
-
+    
         // How long the conversation container must stop mutating before a scroll
         // step counts as rendered. The sweep used to sleep a fixed scrollDelay per
         // step whether or not the virtualizer had already finished — on a long
         // conversation that is most of the export's wall clock.
         const RENDER_QUIET_INTERVAL = 60;
-
+    
         // Total time the sweep will wait for a hidden tab to come back before
         // giving up and exporting what is on the page. Separate from maxDuration:
         // waiting on the reader is not the export spending its budget.
         const MAX_HIDDEN_WAIT = 60000;
-
+    
         // How often a long sweep says where it has got to. Minutes of silence read
         // as a hang.
         const PROGRESS_INTERVAL = 5000;
         // Random run token so conversation text can never collide with (or inject
         // through) the internal block placeholders used during serialization.
         const MARKER_PREFIX = `__CHAT_EXPORTER_BLOCK_${Math.random().toString(36).slice(2, 10)}_`;
-
+    
         // The element that owns one turn — the message plus whatever the provider
         // renders beside it. ChatGPT puts uploaded media outside the role node, so
         // the turn wrapper is what has to be read (issues #32, #33). This is a
@@ -83,14 +83,14 @@
             '.group\\/conversation-turn',
             'li[data-message-role]'
         ].join(', ');
-
+    
         // Gemini's own wrapper, .conversation-container, holds a *pair* — one
         // user-query and one model-response. Scoping a message to it would hand
         // both turns to selectContentRoot, which sorts candidates by text length:
         // the pair would win and every answer would be prefixed with its question.
         // The message element is the turn here.
         const GEMINI_TURN_SELECTOR = 'user-query, model-response';
-
+    
         const MESSAGE_TIMESTAMP_SELECTOR = [
             'time[datetime]',
             'time[data-testid*="timestamp"]',
@@ -98,7 +98,7 @@
             '[data-created-at]',
             '[data-create-time]'
         ].join(', ');
-
+    
         const METADATA_FETCH_TIMEOUT = 5000;
         const METADATA_MAX_DURATION = 15000;
         // The primary conversation can be megabytes; optional metadata should
@@ -114,13 +114,13 @@
         const ATTACHMENT_MAX_DURATION = 180000;
         const MAX_EMBEDDED_IMAGE_BYTES = 20 * 1024 * 1024;
         const MAX_TOTAL_EMBEDDED_IMAGE_BYTES = 50 * 1024 * 1024;
-
+    
         // ChatGPT's private API is reached through the page's own session. The
         // bearer token the app uses lives behind the session endpoint; the accounts
         // endpoint names the workspaces the reader may act as.
         const CHATGPT_SESSION_ENDPOINT = '/api/auth/session';
         const CHATGPT_ACCOUNTS_ENDPOINT = '/backend-api/accounts/check/v4-2023-04-27';
-
+    
         // A refused request comes back as 404 carrying one of these codes instead
         // of 401/403, so the status line alone cannot say why it failed.
         const CHATGPT_AUTH_ERROR_CODES = new Set([
@@ -130,7 +130,7 @@
             'invalid_token',
             'token_expired'
         ]);
-
+    
         const PROVIDERS = {
             chatgpt: {
                 id: 'chatgpt',
@@ -210,17 +210,17 @@
                 ]
             }
         };
-
+    
         function resolveDocument(doc) {
             if (doc) return doc;
             if (typeof document !== 'undefined') return document;
             throw new Error('ChatExporterEngine requires a document.');
         }
-
+    
         function getWindow(doc) {
             return doc.defaultView || (typeof window !== 'undefined' ? window : null);
         }
-
+    
         // A callback, never a DOM node: the engine is used headless in tests and
         // must not grow a dependency on a document it can draw into. A listener
         // that throws is the listener's problem, never the export's.
@@ -232,19 +232,19 @@
                 // A broken progress UI must not cost the reader their export.
             }
         }
-
+    
         function now(win) {
             const clock = win?.performance || (typeof performance !== 'undefined' ? performance : null);
             return typeof clock?.now === 'function' ? clock.now() : Date.now();
         }
-
+    
         // The reader's calendar day, not UTC's: an evening export in the Americas
         // was dated tomorrow, in its header and its file name.
         function formatDate(date = new Date()) {
             const pad = value => String(value).padStart(2, '0');
             return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
         }
-
+    
         function sanitizeHtml(value) {
             return String(value ?? '')
                 .replace(/&/g, '&amp;')
@@ -253,11 +253,11 @@
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
         }
-
+    
         function normalizeWhitespace(value) {
             return String(value ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
         }
-
+    
         function messageScope(element, provider) {
             const selector = provider?.turnSelector;
             if (!element || !selector || typeof element.closest !== 'function') return element;
@@ -267,7 +267,7 @@
                 return element;
             }
         }
-
+    
         function providerMessageId(element, provider) {
             const scope = messageScope(element, provider);
             const carrier = [element, scope, scope?.querySelector?.('[data-message-id], [data-message-uuid]')]
@@ -283,15 +283,15 @@
             const turn = [element, scope].find(candidate => candidate?.hasAttribute?.('data-message-role') && candidate.id);
             return turn ? turn.id : '';
         }
-
+    
         // One id, or the several a signed-in transcript unit renders.
         function providerIds(value) {
             return String(value || '').split(/\s+/).filter(Boolean);
         }
-
+    
         function timestampIso(value) {
             if (value === null || value === undefined || value === '') return '';
-
+    
             let date;
             if (typeof value === 'number' || /^\d+(?:\.\d+)?$/.test(String(value).trim())) {
                 const numeric = Number(value);
@@ -300,14 +300,14 @@
             } else {
                 date = new Date(String(value));
             }
-
+    
             return Number.isNaN(date.getTime()) ? '' : date.toISOString();
         }
-
+    
         function formatMessageTimestamp(value, doc) {
             const iso = timestampIso(value);
             if (!iso) return '';
-
+    
             const date = new Date(iso);
             const win = getWindow(doc);
             const DateTimeFormat = win?.Intl?.DateTimeFormat || Intl.DateTimeFormat;
@@ -323,13 +323,13 @@
                 return iso;
             }
         }
-
+    
         function extractMessageTimestamp(element, provider) {
             const scope = messageScope(element, provider);
             const timeElement = scope?.querySelector?.(MESSAGE_TIMESTAMP_SELECTOR) || null;
             const sources = [timeElement, element, scope].filter(Boolean);
             let raw = '';
-
+    
             for (const source of sources) {
                 raw = source.getAttribute?.('datetime') ||
                     source.getAttribute?.('data-message-timestamp') ||
@@ -337,31 +337,31 @@
                     source.getAttribute?.('data-create-time') || '';
                 if (raw) break;
             }
-
+    
             const iso = timestampIso(raw);
             const visible = normalizeWhitespace(
                 timeElement?.textContent ||
                 timeElement?.getAttribute?.('aria-label') ||
                 timeElement?.getAttribute?.('title') || ''
             );
-
+    
             if (!iso && !visible) return null;
             return {
                 timestamp: visible || formatMessageTimestamp(iso, element?.ownerDocument),
                 timestampIso: iso
             };
         }
-
+    
         function getClassName(element) {
             const className = element?.className;
             if (!className) return '';
             if (typeof className === 'string') return className;
             return className.baseVal || '';
         }
-
+    
         function queryAll(root, selector) {
             if (!root || !selector) return [];
-
+    
             try {
                 return Array.from(root.querySelectorAll(selector));
             } catch (error) {
@@ -369,43 +369,43 @@
                 return [];
             }
         }
-
+    
         function matches(element, selector) {
             if (!element || !selector || typeof element.matches !== 'function') return false;
-
+    
             try {
                 return element.matches(selector);
             } catch (error) {
                 return false;
             }
         }
-
+    
         function getText(element) {
             if (!element) return '';
             const innerText = typeof element.innerText === 'string' ? element.innerText : '';
             return (innerText || element.textContent || '').replace(/\u00a0/g, ' ').trim();
         }
-
+    
         function collectTextWithBreaks(node) {
             if (!node) return '';
-
+    
             if (node.nodeType === 3) {
                 return node.nodeValue || '';
             }
-
+    
             if (node.nodeType !== 1) {
                 return '';
             }
-
+    
             const tag = node.tagName.toLowerCase();
             if (tag === 'br') return '\n';
             if (['script', 'style', 'button', 'svg'].includes(tag)) return '';
-
+    
             const before = ['div', 'p', 'li', 'tr', 'section', 'article'].includes(tag) ? '\n' : '';
             const after = ['div', 'p', 'li', 'tr', 'section', 'article'].includes(tag) ? '\n' : '';
             return before + Array.from(node.childNodes).map(collectTextWithBreaks).join('') + after;
         }
-
+    
         // Code keeps every newline its text holds, blank lines included — two
         // between Python definitions are style, and collapsing runs of them was
         // an edit. Line elements (a <div> per line) end a line exactly once.
@@ -434,16 +434,16 @@
             walk(node);
             return text;
         }
-
+    
         function getCodeText(element) {
             if (!element) return '';
-
+    
             // innerText is unreliable here: serialization works on detached clones,
             // where browsers fall back to textContent and drop the line breaks that
             // come from element boundaries or <br> tags (issue #25).
             return collectCodeText(element).replace(/\u00a0/g, ' ').trimEnd();
         }
-
+    
         function normalizeCodeText(value) {
             return String(value ?? '')
                 .replace(/\r\n?/g, '\n')
@@ -451,7 +451,7 @@
                 .replace(/^\n+/, '')
                 .replace(/\n+$/, '');
         }
-
+    
         function isPreWrapElement(element) {
             if (!element || element.nodeType !== 1) return false;
             if (element.hasAttribute?.('data-chat-exporter-pre-wrap')) return true;
@@ -459,7 +459,7 @@
             const style = element.getAttribute?.('style') || '';
             return /white-space\s*:\s*(pre-wrap|break-spaces)/i.test(style);
         }
-
+    
         // Clones lose stylesheet-driven formatting, so inspect the live tree and
         // tag elements whose computed white-space preserves author line breaks.
         // cloneNode(true) yields an identical tree order, letting both element
@@ -467,14 +467,14 @@
         function annotatePreWrapElements(original, clone) {
             const win = original?.ownerDocument ? getWindow(original.ownerDocument) : null;
             if (!win || typeof win.getComputedStyle !== 'function') return;
-
+    
             const originalElements = [original, ...queryAll(original, '*')];
             const cloneElements = [clone, ...queryAll(clone, '*')];
-
+    
             originalElements.forEach((element, index) => {
                 const cloneElement = cloneElements[index];
                 if (!cloneElement || typeof cloneElement.setAttribute !== 'function') return;
-
+    
                 try {
                     const whiteSpace = win.getComputedStyle(element)?.whiteSpace || '';
                     if (whiteSpace === 'pre-wrap' || whiteSpace === 'break-spaces') {
@@ -486,12 +486,12 @@
                 }
             });
         }
-
+    
         // Tags that carry their own Markdown meaning, and the rendered structure
         // that proves an element holds formatted content rather than typed text.
         const MARKDOWN_STRUCTURE_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'table', 'strong', 'b', 'em', 'i']);
         const MARKDOWN_STRUCTURE_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, ul, ol, li, blockquote, pre, code, table, strong, b, em, i, hr';
-
+    
         // Pre-wrap marks text whose line breaks are the author's own. It is not
         // proof of that by itself: Gemini sets white-space: pre-wrap on its whole
         // rendered answer, and reading that verbatim flattened every heading,
@@ -504,7 +504,7 @@
                 !isPreWrapElement(element.parentElement) &&
                 !element.querySelector(MARKDOWN_STRUCTURE_SELECTOR);
         }
-
+    
         function preWrapText(element) {
             return collectTextWithBreaks(element)
                 .replace(/\u00a0/g, ' ')
@@ -513,54 +513,54 @@
                 .replace(/^\n+/, '')
                 .trimEnd();
         }
-
+    
         function markdownFenceFor(code) {
             const runs = String(code ?? '').match(/`{3,}/g) || [];
             const longest = runs.reduce((max, run) => Math.max(max, run.length), 2);
             return '`'.repeat(longest + 1);
         }
-
+    
         function safeInfoString(lang) {
             return String(lang || '').replace(/[^a-zA-Z0-9_+#.-]/g, '');
         }
-
+    
         function createTextNode(reference, text) {
             return reference.ownerDocument.createTextNode(text);
         }
-
+    
         function addReplacement(replacements, value) {
             const marker = `${MARKER_PREFIX}${replacements.length}__`;
             replacements.push({ marker, value });
             return marker;
         }
-
+    
         function restoreReplacements(value, replacements) {
             return replacements.reduce((result, replacement) => result.replaceAll(replacement.marker, replacement.value), value);
         }
-
+    
         function splitMarkdownFencedBlocks(value) {
             const source = String(value ?? '');
             const pattern = /(?:^|\n)(`{3,})[^\n]*\n[\s\S]*?\n\1(?=\n|$)/g;
             const segments = [];
             let cursor = 0;
             let match;
-
+    
             while ((match = pattern.exec(source)) !== null) {
                 if (match.index > cursor) {
                     segments.push({ type: 'text', value: source.slice(cursor, match.index) });
                 }
-
+    
                 segments.push({ type: 'code', value: match[0] });
                 cursor = match.index + match[0].length;
             }
-
+    
             if (cursor < source.length) {
                 segments.push({ type: 'text', value: source.slice(cursor) });
             }
-
+    
             return segments;
         }
-
+    
         // Only trims trailing whitespace and collapses blank-line runs. Leading
         // indentation is intentional (nested lists), and text extracted from the
         // DOM is already entity-decoded, so un-escaping here would corrupt
@@ -571,7 +571,7 @@
                 .replace(/\n (?=\S)/g, '\n')
                 .replace(/\n{3,}/g, '\n\n');
         }
-
+    
         function cleanMarkdown(markdown) {
             const segments = splitMarkdownFencedBlocks(markdown);
             return segments.map((segment, index) => {
@@ -582,13 +582,13 @@
                 return segments[index + 1]?.type === 'code' ? text.replace(/\n+$/, '\n') : text;
             }).join('').trim();
         }
-
+    
         function escapeMarkdownLinkText(value) {
             return String(value ?? '')
                 .replace(/\\/g, '\\\\')
                 .replace(/([\[\]])/g, '\\$1');
         }
-
+    
         function escapeMarkdownUrl(value) {
             return String(value ?? '')
                 .replace(/\\/g, '%5C')
@@ -596,7 +596,7 @@
                 .replace(/\)/g, '%29')
                 .replace(/\s/g, '%20');
         }
-
+    
         function isUnsafeHref(href) {
             // Browsers ignore whitespace and control characters inside a scheme, so
             // "java\tscript:…" navigates just fine — strip them before testing or
@@ -608,15 +608,15 @@
                 lower.startsWith('vbscript:') ||
                 lower.startsWith('#');
         }
-
+    
         function topLevelElements(elements) {
             return elements.filter(element => !elements.some(other => other !== element && other.contains(element)));
         }
-
+    
         // Content that can sit inside a <button>: a control never holds paragraphs
         // or lists, so a button that does is a wrapper around the message itself.
         const BUTTON_CONTENT_SELECTOR = 'p, pre, blockquote, ul, ol, table, h1, h2, h3, h4, h5, h6, [data-user-message-copy]';
-
+    
         function removeUiElements(clone) {
             // Message content can live inside a button. The 2026 ChatGPT transcript
             // wraps every prompt in <button data-user-message-bubble>, and uploaded
@@ -667,10 +667,10 @@
                 '[aria-label*="More"]',
                 '[aria-label*="more"]'
             ].join(',');
-
+    
             queryAll(clone, uiSelector).forEach(element => element.remove());
         }
-
+    
         function detectLanguage(block) {
             const codeElement = matches(block, 'code') ? block : block.querySelector('code');
             const sources = [
@@ -683,7 +683,7 @@
                 codeElement?.getAttribute?.('lang'),
                 block.getAttribute?.('aria-label')
             ].filter(Boolean).map(String);
-
+    
             for (const source of sources) {
                 const languageMatch = source.match(/language-([a-zA-Z0-9_+#.-]+)/);
                 if (languageMatch) return languageMatch[1].toLowerCase();
@@ -691,7 +691,7 @@
                     return source.toLowerCase();
                 }
             }
-
+    
             // A header is chrome beside the code, never the code itself: Gemini
             // marks its <code> data-test-id="code-content", and taking that as the
             // header turned `print("hello")` into the fence's language.
@@ -701,16 +701,16 @@
             if (headerText && headerText.length < 32 && !headerText.includes('\n')) {
                 return headerText.toLowerCase();
             }
-
+    
             return '';
         }
-
+    
         function extractCodeBlock(block) {
             const clone = block.cloneNode(true);
             const language = detectLanguage(clone);
-
+    
             queryAll(clone, 'button, svg, [aria-label*="Copy"], [aria-label*="copy"], [class*="sticky"], [class*="code-header"], [data-testid*="copy"], [data-test-id*="copy"], [slot="header"]').forEach(element => element.remove());
-
+    
             const cmContent = clone.querySelector('.cm-content');
             if (cmContent) {
                 const cmLines = queryAll(cmContent, '.cm-line');
@@ -720,46 +720,46 @@
                         code: normalizeCodeText(cmLines.map(line => line.textContent || '').join('\n'))
                     };
                 }
-
+    
                 return {
                     lang: language,
                     code: normalizeCodeText(getCodeText(cmContent))
                 };
             }
-
+    
             const codeElement = matches(clone, 'code') ? clone : clone.querySelector('code');
             return {
                 lang: language,
                 code: normalizeCodeText(getCodeText(codeElement || clone))
             };
         }
-
+    
         function formatCodeBlock(block, format, replacements) {
             const { lang, code } = extractCodeBlock(block);
-
+    
             if (format === 'markdown') {
                 const fence = markdownFenceFor(code);
                 return `\n\n${fence}${safeInfoString(lang)}\n${code}\n${fence}\n\n`;
             }
-
+    
             const langClass = lang ? ` class="language-${sanitizeHtml(lang)}"` : '';
             if (format === 'pdf') {
                 const label = lang ? `<div class="code-language">${sanitizeHtml(lang)}</div>` : '';
                 return addReplacement(replacements, `<pre class="code-block">${label}<code>${sanitizeHtml(code)}</code></pre>`);
             }
-
+    
             return addReplacement(replacements, `<pre><code${langClass}>${sanitizeHtml(code)}</code></pre>`);
         }
-
+    
         function processCodeBlocks(clone, format, replacements) {
             const blocks = topLevelElements(queryAll(clone, 'pre, code-block, [data-testid*="code-block"], [data-test-id*="code-block"]'));
-
+    
             blocks.forEach(block => {
                 const replacement = formatCodeBlock(block, format, replacements);
                 block.replaceWith(createTextNode(block, replacement));
             });
         }
-
+    
         // Every renderer in use puts the TeX source somewhere different, and each
         // one also emits a *visual* duplicate of the same formula. Miss the source
         // and you do not merely lose the markup — you serialize the duplicate too,
@@ -768,7 +768,7 @@
         // Rendered-for-the-eye copies. KaTeX and MathJax both mark theirs; dropping
         // them leaves exactly one representation behind.
         const MATH_VISUAL_DUPLICATE = '.katex-html, mjx-container [aria-hidden="true"], annotation-xml[encoding*="MathML" i]';
-
+    
         function texFromNode(node) {
             // 1. MathML <annotation encoding="application/x-tex"> — KaTeX, MathJax v3.
             for (const annotation of queryAll(node, 'annotation, annotation-xml')) {
@@ -791,12 +791,12 @@
             }
             return '';
         }
-
+    
         // ChatGPT's 2026 transcript wraps native MathML in a span.katex inside
         // [data-assistant-math-rendered="display"], so the marker can sit on
         // either side of the node that carries the TeX.
         const DISPLAY_MATH_MARKER = '.katex-display, mjx-container[display="true"], [display="block"], [data-assistant-math-rendered="display"]';
-
+    
         function isDisplayMath(node) {
             if (matches(node, `${DISPLAY_MATH_MARKER}, [class*="math-block"]`)) return true;
             if (node.closest?.(DISPLAY_MATH_MARKER)) return true;
@@ -805,20 +805,20 @@
             if (node.querySelector?.(DISPLAY_MATH_MARKER)) return true;
             return String(node.getAttribute?.('display') || '').toLowerCase() === 'block';
         }
-
+    
         function processMath(clone) {
             const handled = new Set();
-
+    
             topLevelElements(queryAll(clone, MATH_ROOT_SELECTOR)).forEach(root => {
                 if (handled.has(root)) return;
                 handled.add(root);
-
+    
                 const tex = texFromNode(root);
                 if (tex) {
                     root.replaceWith(createTextNode(root, isDisplayMath(root) ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
                     return;
                 }
-
+    
                 // No TeX anywhere. Drop the visual copy *only* if an accessible one
                 // survives it. Gemini renders KaTeX as .katex-html alone — with no
                 // MathML beside it — so removing the duplicate there would delete
@@ -827,7 +827,7 @@
                     queryAll(root, MATH_VISUAL_DUPLICATE).forEach(duplicate => duplicate.remove());
                 }
             });
-
+    
             // A bare script left outside any renderer wrapper.
             queryAll(clone, 'script[type^="math/tex"]').forEach(script => {
                 const tex = normalizeCodeText(script.textContent).trim();
@@ -835,7 +835,7 @@
                 script.replaceWith(createTextNode(script, /mode=display/.test(script.type) ? `\n\n$$${tex}$$\n\n` : `$${tex}$`));
             });
         }
-
+    
         function embeddedImageSize(source) {
             const match = /^data:image\/(?:png|jpe?g|gif|webp|avif|bmp);base64,([a-z0-9+/=\s]+)$/i.exec(String(source || ''));
             if (!match) return Infinity;
@@ -844,7 +844,7 @@
             if (payload.length % 4 !== 0 || !/^[a-z0-9+/]+$/i.test(unpadded)) return Infinity;
             return payload.length * 3 / 4 - (payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0);
         }
-
+    
         function createImageBudget(options = {}) {
             const limit = (value, fallback) => Number.isFinite(value) ? Math.max(0, value) : fallback;
             return {
@@ -853,12 +853,12 @@
                 maxPixels: limit(options.maxCanvasPixels, 16 * 1024 * 1024)
             };
         }
-
+    
         function isSafeEmbeddedImageSource(source, maxBytes = MAX_EMBEDDED_IMAGE_BYTES) {
             const size = embeddedImageSize(source);
             return size > 0 && Number.isFinite(size) && size <= maxBytes;
         }
-
+    
         function isSafeRemoteImageSource(source) {
             try {
                 const protocol = new URL(String(source || '')).protocol.toLowerCase();
@@ -867,12 +867,12 @@
                 return false;
             }
         }
-
+    
         function canvasDataUrl(element, budget) {
             try {
                 const CanvasRenderingContext2D = element.ownerDocument?.defaultView?.CanvasRenderingContext2D;
                 if (typeof CanvasRenderingContext2D !== 'function') return '';
-
+    
                 const width = element.naturalWidth || element.width || 0;
                 const height = element.naturalHeight || element.height || 0;
                 if (!Number.isFinite(width * height) || width <= 0 || height <= 0 || width * height > budget.maxPixels) return '';
@@ -882,7 +882,7 @@
                     const value = element.toDataURL?.('image/png') || '';
                     return isSafeEmbeddedImageSource(value, maxBytes) ? value : '';
                 }
-
+    
                 const canvas = element.ownerDocument?.createElement?.('canvas');
                 const context = canvas?.getContext?.('2d');
                 if (!canvas || !context) return '';
@@ -897,7 +897,7 @@
                 return '';
             }
         }
-
+    
         function directMediaSource(element) {
             return String(
                 element.currentSrc ||
@@ -905,7 +905,7 @@
                 element.getAttribute?.('data-src') || ''
             ).trim();
         }
-
+    
         // The page's own copy of an image: for ChatGPT, the stored file itself.
         function isPageBlob(source, element) {
             if (!/^blob:/i.test(source)) return false;
@@ -915,11 +915,11 @@
                 return false;
             }
         }
-
+    
         // Stands in for media a page capture shows twice, such as a gallery's
         // selected image and its thumbnail.
         const DUPLICATE_MEDIA = Object.freeze({});
-
+    
         function mediaSource(element, budget) {
             const direct = directMediaSource(element);
             // Re-drawing a blob image through a canvas as PNG made a 1.7 MB
@@ -942,7 +942,7 @@
             const resolved = String(element.src || direct).trim();
             return isSafeRemoteImageSource(resolved) ? resolved : '';
         }
-
+    
         function annotateMediaSources(original, clone, budget) {
             // Keep exporter annotations outside page-controlled attributes.
             const sources = new WeakMap();
@@ -966,7 +966,7 @@
             });
             return sources;
         }
-
+    
         function processMedia(clone, format, replacements, mediaSources) {
             queryAll(clone, 'img, canvas, video, audio').forEach(element => {
                 if (mediaSources.get(element) === DUPLICATE_MEDIA) {
@@ -981,10 +981,10 @@
                     tag === 'video' ? '[Video]' :
                     tag === 'audio' ? '[Audio]' :
                     '[Media]';
-
+    
                 const source = (tag === 'img' || tag === 'canvas') ? (mediaSources.get(element) || '') : '';
                 const imageAlt = alt || (tag === 'canvas' ? 'Canvas or chart' : 'Image');
-
+    
                 const replacement = format === 'markdown' ?
                     (source ? `![${escapeMarkdownLinkText(imageAlt)}](${escapeMarkdownUrl(source)})` : label) :
                     addReplacement(replacements, source ?
@@ -993,13 +993,13 @@
                 element.replaceWith(createTextNode(element, replacement));
             });
         }
-
+    
         // Markdown this pass generated for media sitting inside a link. Media is
         // processed first, so by the time a link is serialized its text already
         // contains `![alt](src)` or a `[Image: name]` placeholder.
         const GENERATED_IMAGE_MARKDOWN = /!\[[^\]]*\]\([^)]*\)/g;
         const GENERATED_MEDIA_PLACEHOLDER = /\[(?:Image|Canvas or chart|Video|Audio|Media)(?::[^\]]*)?\]/g;
-
+    
         // ChatGPT's inline citations are a favicon plus a label inside one link.
         // Escaping the image markdown into the link text produced
         // `[!\[Image\](data:image/png;base64,…)Label](url)` — not a link at all,
@@ -1011,31 +1011,31 @@
             const label = normalizeWhitespace(
                 raw.replace(GENERATED_IMAGE_MARKDOWN, ' ').replace(GENERATED_MEDIA_PLACEHOLDER, ' ')
             );
-
+    
             if (label) return `[${escapeMarkdownLinkText(label)}](${escapeMarkdownUrl(href)})`;
             // Nothing but an image: nest it properly rather than escaping our own
             // syntax, so the picture survives and the link still works.
             if (images.length > 0) return `[${images[0]}](${escapeMarkdownUrl(href)})`;
             return `[${escapeMarkdownLinkText(href)}](${escapeMarkdownUrl(href)})`;
         }
-
+    
         function processLinks(clone, format, replacements) {
             queryAll(clone, 'a[href]').forEach(link => {
                 if (link.closest('pre, code, code-block')) return;
-
+    
                 const href = String(link.href || link.getAttribute('href') || '').trim();
                 if (isUnsafeHref(href)) return;
-
+    
                 // HTML keeps its media as opaque placeholders, so nesting is
                 // already correct there — <a><img></a> needs no special handling.
                 const replacement = format === 'markdown'
                     ? markdownLink(link, href)
                     : addReplacement(replacements, `<a href="${sanitizeHtml(href)}">${sanitizeHtml(normalizeWhitespace(link.textContent) || href)}</a>`);
-
+    
                 link.replaceWith(createTextNode(link, replacement));
             });
         }
-
+    
         function tableCellText(cell) {
             // Escape only the structural pipe character; doubling backslashes here
             // garbled cells that legitimately contain them, such as paths or
@@ -1043,29 +1043,29 @@
             return normalizeWhitespace(getText(cell))
                 .replace(/\|/g, '\\|') || ' ';
         }
-
+    
         function tableToMarkdown(table) {
             const rows = queryAll(table, 'tr')
                 .map(row => Array.from(row.children)
                     .filter(cell => ['TH', 'TD'].includes(cell.tagName))
                     .map(tableCellText))
                 .filter(row => row.length > 0);
-
+    
             if (rows.length === 0) return normalizeWhitespace(getText(table));
-
+    
             const width = Math.max(...rows.map(row => row.length));
             const normalizedRows = rows.map(row => row.concat(Array(Math.max(0, width - row.length)).fill(' ')));
             const header = normalizedRows[0];
             const separator = header.map(() => '---');
             const body = normalizedRows.slice(1);
-
+    
             return [
                 `| ${header.join(' | ')} |`,
                 `| ${separator.join(' | ')} |`,
                 ...body.map(row => `| ${row.join(' | ')} |`)
             ].join('\n');
         }
-
+    
         function tableToHtml(table) {
             const rows = queryAll(table, 'tr')
                 .map(row => Array.from(row.children)
@@ -1075,15 +1075,15 @@
                         text: normalizeWhitespace(getText(cell))
                     })))
                 .filter(row => row.length > 0);
-
+    
             if (rows.length === 0) return sanitizeHtml(getText(table));
-
+    
             return `<table>${rows.map(row => {
                 const cells = row.map(cell => `<${cell.tag}>${sanitizeHtml(cell.text)}</${cell.tag}>`).join('');
                 return `<tr>${cells}</tr>`;
             }).join('')}</table>`;
         }
-
+    
         function processTables(clone, format, replacements) {
             topLevelElements(queryAll(clone, 'table')).forEach(table => {
                 const replacement = format === 'markdown'
@@ -1092,7 +1092,7 @@
                 table.replaceWith(createTextNode(table, replacement));
             });
         }
-
+    
         function cardSignal(element) {
             const pieces = [
                 element.tagName,
@@ -1102,18 +1102,18 @@
                 element.getAttribute('aria-label'),
                 element.getAttribute('role')
             ].filter(Boolean).join(' ').toLowerCase();
-
+    
             if (/\b(artifact|canvas-preview|generated-file|download-card|attachment|file-card)\b/.test(pieces)) {
                 return pieces.includes('artifact') || pieces.includes('canvas-preview') ? 'Artifact' : 'File';
             }
-
+    
             if (/(^|[\s_-])(attachment|file)([\s_-]|$)/.test(pieces)) {
                 return 'File';
             }
-
+    
             return '';
         }
-
+    
         function cardLabel(element) {
             const contentClone = element.cloneNode(true);
             queryAll(contentClone, 'button, [data-testid*="copy"], [data-test-id*="copy"], [aria-label*="Copy"], [aria-label*="copy"]').forEach(action => action.remove());
@@ -1125,21 +1125,21 @@
                 getText(contentClone),
                 getText(element)
             ].filter(Boolean).map(normalizeWhitespace);
-
+    
             const label = candidates.find(value => value && value.length <= 180) || '';
             return label
                 .replace(/\b(open|download|preview|file|attachment|artifact)\b/gi, ' ')
                 .replace(/\s+/g, ' ')
                 .trim();
         }
-
+    
         function cardHref(element) {
             const link = matches(element, 'a[href]') ? element : element.querySelector('a[href]');
             if (!link) return '';
             const href = String(link.getAttribute('href') || link.href || '').trim();
             return isUnsafeHref(href) ? '' : href;
         }
-
+    
         function processCards(clone, format, replacements) {
             const cards = topLevelElements(Array.from(clone.querySelectorAll('*')).filter(element => {
                 const kind = cardSignal(element);
@@ -1150,12 +1150,12 @@
                 // Image attachment cards need to keep their actual media node so it
                 // can be embedded. Plain file cards are collapsed below.
                 if (element.querySelector('img, canvas, video, audio')) return false;
-
+    
                 const text = normalizeWhitespace(getText(element));
                 const label = cardLabel(element);
                 return Boolean(label || text) && text.length <= 240;
             }));
-
+    
             cards.forEach(card => {
                 const kind = cardSignal(card);
                 const label = cardLabel(card);
@@ -1169,14 +1169,14 @@
                 card.replaceWith(createTextNode(card, replacement));
             });
         }
-
+    
         function serializeMarkdownChildren(element, context = {}) {
             return Array.from(element.childNodes).map((node, index) => serializeMarkdownNode(node, {
                 ...context,
                 index
             })).join('');
         }
-
+    
         function serializeMarkdownNode(node, context = {}) {
             if (node.nodeType === 3) {
                 const value = node.nodeValue || '';
@@ -1188,13 +1188,13 @@
                 }
                 return value.replace(/[ \t\r\n]+/g, ' ');
             }
-
+    
             if (node.nodeType !== 1) return '';
-
+    
             const tag = node.tagName.toLowerCase();
             if (['script', 'style', 'button', 'svg'].includes(tag)) return '';
             if (tag === 'br') return '\n';
-
+    
             // User prompts render inside white-space: pre-wrap containers where
             // every line break and indent is author input; extract them verbatim
             // instead of collapsing whitespace (issue #25). Protected behind a
@@ -1205,23 +1205,23 @@
                 const preserved = context.replacements ? addReplacement(context.replacements, text) : text;
                 return `\n\n${preserved}\n\n`;
             }
-
+    
             if (/^h[1-6]$/.test(tag)) {
                 const level = Number(tag.slice(1));
                 const content = serializeMarkdownChildren(node, context).trim();
                 return content ? `\n\n${'#'.repeat(level)} ${content}\n\n` : '';
             }
-
+    
             if (tag === 'p') {
                 const content = serializeMarkdownChildren(node, context).trim();
                 return content ? `\n\n${content}\n\n` : '';
             }
-
+    
             if (tag === 'blockquote') {
                 const content = serializeMarkdownChildren(node, context).trim();
                 return content ? `\n\n${content.split('\n').map(line => `> ${line.trim()}`).join('\n')}\n\n` : '';
             }
-
+    
             if (tag === 'ul' || tag === 'ol') {
                 const children = Array.from(node.children).filter(child => child.tagName && child.tagName.toLowerCase() === 'li');
                 return `\n${children.map((child, index) => serializeMarkdownNode(child, {
@@ -1230,7 +1230,7 @@
                     index
                 })).join('')}\n`;
             }
-
+    
             if (tag === 'li') {
                 const marker = context.listType === 'ol' ? `${(context.index || 0) + 1}. ` : '- ';
                 const content = serializeMarkdownChildren(node, context).trim();
@@ -1239,17 +1239,17 @@
                 const continuation = ' '.repeat(marker.length);
                 return content ? `${marker}${content.replace(/\n+/g, `\n${continuation}`)}\n` : '';
             }
-
+    
             if (['strong', 'b'].includes(tag)) {
                 const content = serializeMarkdownChildren(node, context).trim();
                 return content ? `**${content}**` : '';
             }
-
+    
             if (['em', 'i'].includes(tag)) {
                 const content = serializeMarkdownChildren(node, context).trim();
                 return content ? `*${content}*` : '';
             }
-
+    
             if (tag === 'code') {
                 // Backslash escapes are not processed inside markdown code spans,
                 // so the content must stay verbatim; doubling backslashes turned
@@ -1257,60 +1257,60 @@
                 // CommonMark way: a longer delimiter plus space padding.
                 const content = getCodeText(node).trim();
                 if (!content) return '';
-
+    
                 const backtickRuns = content.match(/`+/g) || [];
                 const longestRun = backtickRuns.reduce((max, run) => Math.max(max, run.length), 0);
                 const delimiter = '`'.repeat(longestRun + 1);
                 const pad = content.startsWith('`') || content.endsWith('`') ? ' ' : '';
                 return `${delimiter}${pad}${content}${pad}${delimiter}`;
             }
-
+    
             const content = serializeMarkdownChildren(node, context);
             if (['div', 'section', 'article', 'main', 'message-content', 'model-response', 'user-query', 'response-element'].includes(tag)) {
                 return content;
             }
-
+    
             return content;
         }
-
+    
         function serializeHtmlChildren(element, replacements) {
             return Array.from(element.childNodes).map(node => serializeHtmlNode(node, replacements)).join('');
         }
-
+    
         function serializeHtmlNode(node, replacements) {
             if (node.nodeType === 3) {
                 return sanitizeHtml(node.nodeValue || '');
             }
-
+    
             if (node.nodeType !== 1) return '';
-
+    
             const tag = node.tagName.toLowerCase();
             if (['script', 'style', 'button', 'svg'].includes(tag)) return '';
             if (tag === 'br') return '<br>';
-
+    
             const content = serializeHtmlChildren(node, replacements);
             const blockTags = new Set(['p', 'ul', 'ol', 'li', 'blockquote', 'strong', 'b', 'em', 'i']);
-
+    
             if (/^h[1-6]$/.test(tag)) {
                 return `<${tag}>${content}</${tag}>`;
             }
-
+    
             if (blockTags.has(tag)) {
                 const safeTag = tag === 'b' ? 'strong' : tag === 'i' ? 'em' : tag;
                 return `<${safeTag}>${content}</${safeTag}>`;
             }
-
+    
             if (tag === 'code') {
                 return `<code>${sanitizeHtml(getCodeText(node).trim())}</code>`;
             }
-
+    
             if (['div', 'section', 'article', 'main', 'span', 'message-content', 'model-response', 'user-query', 'response-element'].includes(tag)) {
                 return content;
             }
-
+    
             return content;
         }
-
+    
         // ChatGPT web-search citations carry a utm_source=chatgpt.com tracking
         // parameter and/or live inside citation-marked wrappers. Ordinary links in
         // conversation text match neither signal, so they stay inline-only.
@@ -1318,7 +1318,7 @@
             if (/[?&]utm_source=chatgpt\.com/i.test(href)) return true;
             return Boolean(link.closest?.('[class*="citation"], [data-testid*="citation"], [data-test-id*="citation"], [data-testid*="sources"], [data-test-id*="sources"]'));
         }
-
+    
         function citationLabel(link, href) {
             const label = normalizeWhitespace(
                 link.getAttribute?.('aria-label') ||
@@ -1329,14 +1329,14 @@
             // Numeric pills ("1", "2") and empty labels read poorly in a reference
             // list; fall back to the source hostname instead.
             if (label && !/^\[?\d{1,3}\]?$/.test(label)) return label;
-
+    
             try {
                 return new URL(href).hostname.replace(/^www\./, '') || href;
             } catch (error) {
                 return href;
             }
         }
-
+    
         // The 2026 ChatGPT transcript renders sources as buttons, not links: the
         // targets travel as JSON in data-assistant-sources-payload, one array per
         // pill (verified live 2026-09-25).
@@ -1354,7 +1354,7 @@
                 }))
                 .filter(item => /^https?:\/\//i.test(item.href) && !isUnsafeHref(item.href));
         }
-
+    
         // Collected before UI stripping and link flattening so citation pills that
         // render as buttons or inside removable chrome are still seen (issue #27).
         function collectCitations(clone) {
@@ -1365,7 +1365,7 @@
                 seenHrefs.add(href);
                 citations.push({ href, label });
             };
-
+    
             queryAll(clone, 'a[href], [data-assistant-sources-payload]').forEach(element => {
                 if (element.hasAttribute('data-assistant-sources-payload')) {
                     sourceReferenceItems(element).forEach(item => add(item.href, item.label || hostnameOf(item.href) || item.href));
@@ -1375,10 +1375,10 @@
                 if (isUnsafeHref(href) || !isCitationLink(element, href)) return;
                 add(href, citationLabel(element, href));
             });
-
+    
             return citations;
         }
-
+    
         // An inline source reads as a link to its first target, like the anchor
         // pills it replaced. The trailing "Sources" control only repeats what the
         // References list already holds. Serialized straight to escaped output,
@@ -1398,25 +1398,25 @@
                 element.replaceWith(createTextNode(element, replacement));
             });
         }
-
+    
         function renderReferences(citations, format) {
             if (!citations.length) return '';
-
+    
             if (format === 'markdown') {
                 const lines = citations.map((citation, index) =>
                     `${index + 1}. [${escapeMarkdownLinkText(citation.label)}](${escapeMarkdownUrl(citation.href)})`);
                 return `\n\n**References:**\n\n${lines.join('\n')}`;
             }
-
+    
             const items = citations.map(citation =>
                 `<li><a href="${sanitizeHtml(citation.href)}">${sanitizeHtml(citation.label)}</a></li>`).join('');
             return `\n<div class="references"><strong>References:</strong><ol>${items}</ol></div>`;
         }
-
+    
         function serializeMessageContent(element, format, options = {}) {
             const clone = element.cloneNode(true);
             const replacements = [];
-
+    
             annotatePreWrapElements(element, clone);
             const mediaSources = annotateMediaSources(element, clone, options.imageBudget || createImageBudget(options));
             const citations = collectCitations(clone);
@@ -1433,65 +1433,65 @@
             processMedia(clone, format, replacements, mediaSources);
             processLinks(clone, format, replacements);
             processTables(clone, format, replacements);
-
+    
             if (format === 'markdown') {
                 if (isVerbatimTextElement(clone)) {
                     return preWrapText(clone).trim();
                 }
-
+    
                 const markdown = cleanMarkdown(serializeMarkdownChildren(clone, { replacements }));
                 return (restoreReplacements(markdown, replacements) + renderReferences(citations, format)).trim();
             }
-
+    
             const html = serializeHtmlChildren(clone, replacements)
                 .replace(/\n{3,}/g, '\n\n')
                 .trim();
             return restoreReplacements(html, replacements) + renderReferences(citations, format);
         }
-
+    
         function detectProvider(doc) {
             const url = doc.defaultView?.location?.href || '';
             if (/gemini\.google\.com/i.test(url) || doc.querySelector('user-query, model-response')) return 'gemini';
             return 'chatgpt';
         }
-
+    
         function providerFor(providerName, doc) {
             const id = providerName || detectProvider(doc);
             return PROVIDERS[id] || PROVIDERS.chatgpt;
         }
-
+    
         function meaningfulScore(element) {
             const richCount = richContentCount(element);
             return normalizeWhitespace(element.textContent).length + richCount * 200;
         }
-
+    
         function richContentCount(element) {
             const structured = queryAll(element, 'pre, code-block, table, img, canvas, video, audio, annotation, script[type^="math/tex"]').length;
             const cards = Array.from(element?.querySelectorAll?.('*') || []).filter(candidate => Boolean(cardSignal(candidate))).length;
             return structured + cards;
         }
-
+    
         function isValidMessage(element, provider) {
             // Our own progress UI is in the page while the sweep runs. It lives
             // outside the conversation container and carries no message markers, so
             // it should never match — this is belt and braces, because a UI element
             // captured as a message would end up in the reader's export.
             if (element?.closest?.('[data-chat-exporter-ui]')) return false;
-
+    
             const scope = messageScope(element, provider);
             const text = normalizeWhitespace(scope?.textContent);
             const richCount = richContentCount(scope);
-
+    
             if (!text && richCount === 0) return false;
             if (text.length > 200000) return false;
             if (matches(element, 'nav, aside, header, footer, form, menu')) return false;
             if (element.querySelector('textarea, input[type="text"], [contenteditable="true"]') &&
                 !matches(element, '[data-message-author-role], [data-message-role], [data-chatgpt-search-unit-key], [data-chatgpt-search-message-ids]')) return false;
             if (getClassName(element).match(/\b(typing|loading|spinner)\b/i)) return false;
-
+    
             return true;
         }
-
+    
         function findMessages(doc, provider) {
             for (const selector of provider.messageSelectors) {
                 const messages = topLevelElements(queryAll(doc, selector)).filter(element => isValidMessage(element, provider));
@@ -1500,13 +1500,13 @@
                     return messages;
                 }
             }
-
+    
             const container = doc.querySelector('[role="main"], main, [class*="conversation"], [class*="chat"]');
             if (!container) return [];
-
+    
             return topLevelElements(queryAll(container, ':scope > article, :scope > section, :scope > div')).filter(element => isValidMessage(element, provider));
         }
-
+    
         // The selector that currently matches at least one real message, or null.
         function resolveMessageSelector(doc, provider) {
             for (const selector of provider.messageSelectors) {
@@ -1514,7 +1514,7 @@
             }
             return null;
         }
-
+    
         // Every element the message selector matches, including turns the provider
         // has mounted but not filled in yet — isValidMessage hides those, and a
         // sweep needs to know they exist so it can wait for them. The selector is
@@ -1523,24 +1523,24 @@
         function findMessageCandidates(doc, selector) {
             return selector ? topLevelElements(queryAll(doc, selector)) : [];
         }
-
+    
         function selectContentRoot(messageElement, provider) {
             const scope = messageScope(messageElement, provider);
             const roots = Array.from(new Set([messageElement, scope].filter(Boolean)));
             const candidates = [...roots];
-
+    
             provider.contentSelectors.forEach(selector => {
                 roots.forEach(root => {
                     if (matches(root, selector)) candidates.push(root);
                     candidates.push(...queryAll(root, selector));
                 });
             });
-
+    
             return Array.from(new Set(candidates))
                 .filter(Boolean)
                 .sort((a, b) => meaningfulScore(b) - meaningfulScore(a))[0] || messageElement;
         }
-
+    
         // The role a signed-in transcript unit renders: from its key, or, for a
         // generated image (which has no key), from the "ChatGPT said:" label that
         // is its sibling.
@@ -1554,15 +1554,15 @@
             }
             return '';
         }
-
+    
         function identifySender(element, index, provider) {
             const tag = element.tagName.toLowerCase();
             if (tag === 'user-query') return { sender: 'You', reliable: true };
             if (tag === 'model-response') return { sender: provider.assistantName, reliable: true };
-
+    
             const unitRole = transcriptUnitRole(element);
             if (unitRole) return { sender: unitRole === 'user' ? 'You' : provider.assistantName, reliable: true };
-
+    
             const roleSelector = '[data-message-author-role], [data-message-role], [data-author], [data-sender]';
             const roleCarrier = matches(element, roleSelector) ? element : element.querySelector?.(roleSelector);
             const role = roleCarrier?.getAttribute('data-message-author-role') || roleCarrier?.getAttribute('data-message-role') ||
@@ -1574,29 +1574,29 @@
                     return { sender: provider.assistantName, reliable: true };
                 }
             }
-
+    
             const classAndAttrs = [
                 getClassName(element),
                 element.getAttribute('aria-label'),
                 element.getAttribute('data-testid'),
                 element.getAttribute('data-test-id')
             ].filter(Boolean).join(' ').toLowerCase();
-
+    
             if (classAndAttrs.match(/\b(user|human|query)\b/)) return { sender: 'You', reliable: false };
             if (classAndAttrs.match(/\b(assistant|model|response|chatgpt|gemini|bard)\b/)) return { sender: provider.assistantName, reliable: false };
-
+    
             const textStart = normalizeWhitespace(element.textContent).slice(0, 220).toLowerCase();
             if (/^(i understand|i can help|here's|i'll|let me|i'd be happy|certainly|of course|absolutely)/.test(textStart)) {
                 return { sender: provider.assistantName, reliable: false };
             }
-
+    
             if (/^(can you|please help|how do i|i need|i want|help me|could you|explain|what is)/.test(textStart)) {
                 return { sender: 'You', reliable: false };
             }
-
+    
             return { sender: index % 2 === 0 ? 'You' : provider.assistantName, reliable: false };
         }
-
+    
         function captureMessage(state, messageElement, provider, format) {
             const key = messageKey(messageElement, provider, state.container);
             if (state.seen.has(key)) return true;
@@ -1607,7 +1607,7 @@
             // Empty mounted turns stay eligible for a later capture.
             if (!normalizeWhitespace(content)) return false;
             state.seen.add(key);
-
+    
             const index = state.messages.length;
             const sender = identifySender(messageElement, index, provider);
             const timestamp = extractMessageTimestamp(messageElement, provider);
@@ -1626,7 +1626,7 @@
             state.lines = (state.lines || 0) + String(content).split('\n').length;
             return true;
         }
-
+    
         // Where a message sits in the whole conversation, not in the viewport: the
         // sweep visits messages in whatever order the virtualizer mounts them, so
         // capture order is not conversation order.
@@ -1636,7 +1636,7 @@
             const scrolled = container ? container.scrollTop : (getWindow(element.ownerDocument)?.scrollY || 0);
             return rect.top + scrolled;
         }
-
+    
         // A capture that starts at the top can still see turns the virtualizer left
         // mounted from the previous scroll position, which lands them in the export
         // ahead of the turns that actually precede them.
@@ -1645,7 +1645,7 @@
             messages.forEach((message, index) => {
                 message.index = index;
                 delete message.order;
-
+    
                 // Providers without role markers fall back to alternating senders,
                 // which was decided in capture order — redo it in reading order.
                 const previous = messages[index - 1];
@@ -1656,7 +1656,7 @@
             });
             return messages;
         }
-
+    
         function buildConversation(doc, provider, options, messages) {
             return {
                 version: ENGINE_VERSION,
@@ -1669,7 +1669,7 @@
                 messages
             };
         }
-
+    
         function chatGptConversationId(doc) {
             try {
                 const url = new URL(doc.defaultView?.location?.href || '');
@@ -1679,7 +1679,7 @@
                 return '';
             }
         }
-
+    
         // ChatGPT wraps its inline citation markers in private-use code points:
         // U+E200 "cite" U+E202 "turn1search0" U+E201. They are invisible machinery,
         // not text — rendering payload markdown without removing them puts
@@ -1690,11 +1690,11 @@
         // (CodeQL js/polynomial-redos).
         const PAYLOAD_CITATION_MARKER = /\uE200[^\uE200\uE201]*\uE201/g;
         const PAYLOAD_PRIVATE_USE = /[\uE200-\uE20F]/g;
-
+    
         function stripPayloadMarkers(value) {
             return String(value ?? '').replace(PAYLOAD_CITATION_MARKER, '').replace(PAYLOAD_PRIVATE_USE, '');
         }
-
+    
         function hostnameOf(href) {
             try {
                 return new URL(href).hostname.replace(/^www\./, '');
@@ -1702,14 +1702,14 @@
                 return '';
             }
         }
-
+    
         // metadata.content_references carries the real title and URL of each source
         // — strictly better than the DOM, where the same citation renders as a pill
         // labelled "W3C+1".
         function payloadCitations(message) {
             const references = message?.metadata?.content_references;
             if (!Array.isArray(references)) return [];
-
+    
             const seen = new Set();
             const citations = [];
             references.forEach(reference => {
@@ -1725,13 +1725,13 @@
             });
             return citations;
         }
-
+    
         // Each marker is replaced in place by the source it points at, so a citation
         // reads as a link rather than vanishing.
         function resolvePayloadCitations(text, message, format) {
             const references = message?.metadata?.content_references;
             let result = String(text ?? '');
-
+    
             if (Array.isArray(references)) {
                 references.forEach(reference => {
                     const marker = reference?.matched_text;
@@ -1742,14 +1742,14 @@
                     // glues every word in the answer together — including headings
                     // and code. Whitespace is content, never a citation marker.
                     if (typeof marker !== 'string' || !marker.trim() || !result.includes(marker)) return;
-
+    
                     const item = (Array.isArray(reference.items) ? reference.items : [])
                         .find(candidate => candidate?.url && !isUnsafeHref(String(candidate.url)));
                     if (!item) {
                         result = result.split(marker).join('');
                         return;
                     }
-
+    
                     const href = String(item.url);
                     const label = normalizeWhitespace(item.title) || hostnameOf(href) || href;
                     const link = format === 'markdown'
@@ -1758,10 +1758,447 @@
                     result = result.split(marker).join(link);
                 });
             }
-
+    
             return stripPayloadMarkers(result);
         }
-
+    
+        // ── GPT-6 generative-UI payloads (issue #47) ─────────────────────────────
+        //
+        // A GPT-6 reply is not always markdown. ChatGPT stores the model's widget
+        // source — a JSX-like component language, `{@body …}<box><radio-group>` —
+        // as the message part, and compiles it into the interactive controls the
+        // reader actually sees. The payload-first read is right for a markdown
+        // reply, where the part *is* the markdown the model produced; for a widget
+        // reply the part is the source of a rendering, so `{@body const [choice,
+        // setChoice] = DIL.useState("md")}` and `<radio-group direction="col"
+        // value={choice} onChange={setChoice}>` were written into the reader's file
+        // verbatim. The page rendered all of it correctly, and the export is read
+        // by people: Markdown cannot hold the interaction, so the aim is narrower —
+        // keep what the reader could read. The visible text of every control, the
+        // options in their order, links, and the reading order of the layout
+        // around them.
+        //
+        // Nothing here runs the source. Attributes, click handlers included, are
+        // consumed as text and dropped; no expression is evaluated. Code fences and
+        // inline code are returned untouched, so a message *about* `<button>` or
+        // `<radio-group>` still exports as the code it is, and a component this
+        // release does not know degrades to its visible text rather than to
+        // garbage. Only an assistant turn is converted: a prompt that pastes widget
+        // source is the reader's own text, and must still read back as typed.
+    
+        // Layout. A container only arranges what it holds, so the reader sees the
+        // children; a row reads as one line, a column as a sequence of blocks.
+        const GENUI_ROW_TAGS = new Set(['row', 'hstack', 'line', 'inline']);
+        const GENUI_BLOCK_TAGS = new Set(['box', 'col', 'column', 'vstack', 'card', 'grid', 'stack', 'panel', 'section', 'group', 'layout', 'list']);
+        // A group holds the choices the reader picked between.
+        const GENUI_GROUP_TAGS = new Set(['radio-group', 'checkbox-group', 'choice-group', 'segmented-control', 'toggle-group', 'option-group', 'select', 'dropdown', 'picker', 'tabs']);
+        const GENUI_OPTION_TAGS = new Set(['radio', 'checkbox', 'option', 'segment', 'toggle', 'tab']);
+        // Decorative and structural leaves.
+        const GENUI_ICON_TAGS = new Set(['icon', 'glyph']);
+        const GENUI_RULE_TAGS = new Set(['divider', 'separator', 'hr']);
+        const GENUI_TEXT_TAGS = new Set(['text', 'span', 'label', 'em', 'strong', 'b', 'i', 'code', 'small', 'caption', 'title']);
+        // Widgets that are a picture of data. Markdown has no way to hold one, and
+        // inventing a table from data this release cannot see would be worse than
+        // saying so.
+        const GENUI_UNREPRESENTABLE = new Set(['chart', 'graph', 'plot', 'sparkline', 'map', 'canvas', 'diagram', 'visualization', 'widget', 'iframe', 'embed', 'video', 'audio', 'carousel', 'gallery', 'avatar', 'progress', 'slider']);
+        // The gate. Converting is only worth its risk when the part really holds
+        // widget source, and these names are ones ordinary markdown and ordinary
+        // prose do not produce in angle brackets — `<button>`, `<link>`, `<text>`
+        // and `<cite>` are HTML-shaped and never switch it on by themselves.
+        const GENUI_GATE_TAGS = new Set(['box', 'row', 'col', 'column', 'vstack', 'hstack', 'card', 'grid', 'stack', 'radio-group', 'checkbox-group', 'segmented-control', 'toggle-group', 'option-group', 'picker']);
+        // A code span needs its closing run; a pathological run of backticks is not
+        // worth a quadratic scan.
+        const GENUI_INLINE_CODE_RUN_LIMIT = 512;
+    
+        // The state preamble `{@body …}` is machinery the reader never sees, and a
+        // brace inside one of its strings would fool a lazy regex; consume it
+        // brace-aware instead.
+        function genUiPreambleEnd(source, index) {
+            let depth = 0;
+            let quote = '';
+            for (let at = index; at < source.length; at++) {
+                const char = source[at];
+                if (quote) {
+                    if (char === '\\') { at++; continue; }
+                    if (char === quote) quote = '';
+                    continue;
+                }
+                if (char === '"' || char === "'") { quote = char; continue; }
+                if (char === '{') { depth++; continue; }
+                if (char === '}') {
+                    depth--;
+                    if (depth === 0) return at;
+                }
+            }
+            return -1;
+        }
+    
+        // Where an element's attribute list ends. A `>` inside `{…}` (an arrow
+        // function's `=>`) or inside a quoted string is not the end of the tag.
+        // Null means the construct never closes: the caller then leaves the rest of
+        // the part as literal text instead of guessing at a format it cannot read.
+        function genUiTagEnd(source, index) {
+            let depth = 0;
+            let quote = '';
+            for (let at = index; at < source.length; at++) {
+                const char = source[at];
+                if (quote) {
+                    if (char === '\\') { at++; continue; }
+                    if (char === quote) quote = '';
+                    continue;
+                }
+                if (char === '"' || char === "'") { quote = char; continue; }
+                if (char === '{') { depth++; continue; }
+                if (char === '}') { depth = Math.max(0, depth - 1); continue; }
+                if (char === '>' && depth === 0) return { end: at, selfClosing: source[at - 1] === '/' };
+            }
+            return null;
+        }
+    
+        // Only literal attribute values are read — a link's url and title, a
+        // citation's ref, an image's alt. `{…}` values are expressions: state,
+        // handlers, and whatever else the widget wanted at runtime.
+        function genUiAttributes(source, start, end) {
+            const attributes = new Map();
+            const pattern = /([a-zA-Z_][\w:-]*)\s*=\s*"([^"]*)"|([a-zA-Z_][\w:-]*)\s*=\s*'([^']*)'/g;
+            const region = source.slice(start, end);
+            let match;
+            let count = 0;
+            while ((match = pattern.exec(region)) !== null && count < 32) {
+                attributes.set((match[1] || match[3]).toLowerCase(), match[1] ? match[2] : match[4]);
+                count++;
+            }
+            return attributes;
+        }
+    
+        // An element never closes where a stopped reply left it, so an unclosed
+        // element is closed where the part ends — everything it did contain still
+        // renders, in order.
+        const GENUI_TAG_NAME = /^<(\/?)([a-zA-Z][\w.-]*)/;
+    
+        function parseGenUi(source) {
+            const root = { children: [] };
+            const stack = [root];
+            let text = '';
+            let cursor = 0;
+            const flush = () => {
+                if (!text) return;
+                stack[stack.length - 1].children.push({ type: 'text', value: text });
+                text = '';
+            };
+    
+            while (cursor < source.length) {
+                const char = source[cursor];
+    
+                if (char === '{' && source[cursor + 1] === '@') {
+                    const end = genUiPreambleEnd(source, cursor);
+                    if (end >= 0) {
+                        flush();
+                        cursor = end + 1;
+                        continue;
+                    }
+                }
+    
+                if (char === '<') {
+                    const name = GENUI_TAG_NAME.exec(source.slice(cursor, cursor + 80));
+                    if (name) {
+                        const closing = name[1] === '/';
+                        const tag = name[2].toLowerCase();
+                        let next = -1;
+                        let element = null;
+                        if (closing) {
+                            const end = source.indexOf('>', cursor + name[0].length);
+                            if (end >= 0) next = end + 1;
+                        } else {
+                            const end = genUiTagEnd(source, cursor + name[0].length);
+                            if (end) {
+                                element = {
+                                    type: 'element',
+                                    name: tag,
+                                    attributes: genUiAttributes(source, cursor + name[0].length, end.end),
+                                    selfClosing: end.selfClosing,
+                                    children: []
+                                };
+                                next = end.end + 1;
+                            }
+                        }
+    
+                        if (next >= 0) {
+                            flush();
+                            if (closing) {
+                                // Close the nearest matching element. Anything still
+                                // open inside it stays attached to it, so a part that
+                                // skips a closing tag loses nothing.
+                                for (let at = stack.length - 1; at > 0; at--) {
+                                    if (stack[at].name !== tag) continue;
+                                    while (stack.length - 1 > at) stack.pop();
+                                    stack.pop();
+                                    break;
+                                }
+                            } else {
+                                stack[stack.length - 1].children.push(element);
+                                if (!element.selfClosing) stack.push(element);
+                            }
+                            cursor = next;
+                            continue;
+                        }
+                    }
+                }
+    
+                text += char;
+                cursor++;
+            }
+    
+            flush();
+            return root.children;
+        }
+    
+        // Renders a child list and joins what it produced. Trimming each child
+        // first is what keeps a container's own indentation out of the result and
+        // what stops two containers from gluing their words together.
+        function joinGenUi(nodes, format, separator) {
+            return (nodes || [])
+                .map(node => String(renderGenUiNode(node, format)).trim())
+                .filter(Boolean)
+                .join(separator);
+        }
+    
+        function renderGenUiNodes(nodes, format) {
+            return (nodes || []).map(node => renderGenUiNode(node, format)).join('');
+        }
+    
+        function flattenGenUi(nodes, format) {
+            return renderGenUiNodes(nodes, format).replace(/\s+/g, ' ').trim();
+        }
+    
+        function renderGenUiLink(node, attributes, format) {
+            const href = String(attributes.get('url') || attributes.get('href') || '').trim();
+            const title = String(attributes.get('title') || attributes.get('label') || '').trim() ||
+                flattenGenUi(node.children, format);
+            if (!title) return '';
+            if (!href || isUnsafeHref(href)) return title;
+            return format === 'markdown'
+                ? `[${escapeMarkdownLinkText(title)}](${escapeMarkdownUrl(href)})`
+                : `${title} (${href})`;
+        }
+    
+        function renderGenUiImage(attributes, format) {
+            const src = String(attributes.get('src') || attributes.get('url') || '').trim();
+            const alt = String(attributes.get('alt') || attributes.get('label') || '').trim();
+            // A `data:` source is deliberately not embedded: the payload's own
+            // attachment path already knows which bytes are the stored file, and a
+            // widget's copy of an image is not necessarily that file.
+            if (src && !isUnsafeHref(src) && format === 'markdown') {
+                return `![${escapeMarkdownLinkText(alt || 'Image')}](${escapeMarkdownUrl(src)})`;
+            }
+            if (alt) return `[Image: ${alt}]`;
+            return src || alt ? '[Image]' : '';
+        }
+    
+        function renderGenUiNode(node, format) {
+            if (node.type === 'text') return node.value;
+    
+            const name = node.name;
+            const attributes = node.attributes || new Map();
+    
+            // Decorative: the label beside an icon carries the meaning.
+            if (GENUI_ICON_TAGS.has(name)) return '';
+    
+            if (GENUI_RULE_TAGS.has(name)) return '\n\n---\n\n';
+    
+            if (name === 'cite') {
+                const reference = String(attributes.get('ref') || attributes.get('id') || '').trim();
+                if (!reference) return '';
+                // Hand it to the citation machinery that already ships: a marker
+                // that resolves becomes its source link, and one that does not is
+                // stripped, exactly as the private-use form is.
+                return `\uE200cite\uE202${reference}\uE201`;
+            }
+    
+            if (name === 'img' || name === 'image' || name === 'picture') {
+                return renderGenUiImage(attributes, format);
+            }
+    
+            if (name === 'link' || name === 'a') {
+                return renderGenUiLink(node, attributes, format);
+            }
+    
+            if (name === 'button') {
+                // The reader saw an action; bold is what plain text has instead.
+                const label = flattenGenUi(node.children, format);
+                return label ? `**${label}**` : '';
+            }
+    
+            if (GENUI_OPTION_TAGS.has(name)) {
+                // Outside a group an option is a label, not a list item.
+                return flattenGenUi(node.children, format);
+            }
+    
+            if (GENUI_GROUP_TAGS.has(name)) {
+                const blocks = [];
+                node.children.forEach(child => {
+                    if (child.type === 'element' && GENUI_OPTION_TAGS.has(child.name)) {
+                        const label = flattenGenUi(child.children, format);
+                        if (label) blocks.push(`- ${label}`);
+                        return;
+                    }
+                    const rendered = String(renderGenUiNode(child, format)).trim();
+                    if (rendered) blocks.push(rendered);
+                });
+                return blocks.length ? `\n\n${blocks.join('\n')}\n\n` : '';
+            }
+    
+            if (GENUI_ROW_TAGS.has(name)) {
+                return joinGenUi(node.children, format, ' ');
+            }
+    
+            if (GENUI_BLOCK_TAGS.has(name)) {
+                return `\n\n${joinGenUi(node.children, format, '\n\n')}\n\n`;
+            }
+    
+            if (GENUI_TEXT_TAGS.has(name)) {
+                return renderGenUiNodes(node.children, format);
+            }
+    
+            // A component this release does not know keeps what it showed. Only when
+            // it showed nothing is there a choice to make, and then a picture of
+            // data gets said out loud rather than dropped in silence.
+            const content = joinGenUi(node.children, format, '\n\n');
+            if (content) return content;
+            if (GENUI_UNREPRESENTABLE.has(name)) return `\n\n[Chat Exporter: an unsupported "${name}" component was not converted]\n\n`;
+            return '';
+        }
+    
+        // A fenced block is the reader's own code. A fence the model left open runs
+        // to the end of the part, because everything after an unclosed fence is
+        // inside it.
+        function splitGenUiCodeSegments(source) {
+            const segments = [];
+            let text = '';
+            let cursor = 0;
+            const pushText = () => {
+                if (!text) return;
+                segments.push({ type: 'text', value: text });
+                text = '';
+            };
+    
+            while (cursor < source.length) {
+                const lineEnd = source.indexOf('\n', cursor);
+                const stop = lineEnd < 0 ? source.length : lineEnd + 1;
+                const fence = /^ {0,3}(`{3,}|~{3,})/.exec(source.slice(cursor, stop));
+                if (!fence) {
+                    text += source.slice(cursor, stop);
+                    cursor = stop;
+                    continue;
+                }
+    
+                pushText();
+                const fenceChar = fence[1][0];
+                const fenceLength = fence[1].length;
+                const isCloser = line => {
+                    const trimmed = line.trim();
+                    return trimmed.length >= fenceLength && trimmed.split('').every(char => char === fenceChar);
+                };
+                let at = stop;
+                while (at < source.length) {
+                    const nextEnd = source.indexOf('\n', at);
+                    const nextStop = nextEnd < 0 ? source.length : nextEnd + 1;
+                    const candidate = source.slice(at, nextStop);
+                    at = nextStop;
+                    if (isCloser(candidate)) break;
+                }
+                segments.push({ type: 'code', value: source.slice(cursor, at) });
+                cursor = at;
+            }
+    
+            pushText();
+            return segments;
+        }
+    
+        // A run of N backticks opens a code span closed by the next run of exactly
+        // N; an unpaired run is ordinary text.
+        function splitGenUiInlineCode(value) {
+            if (!value.includes('`')) return [{ type: 'text', value }];
+    
+            const runs = [];
+            let cursor = 0;
+            while (cursor < value.length) {
+                if (value[cursor] !== '`') { cursor++; continue; }
+                let run = 0;
+                while (value[cursor + run] === '`') run++;
+                runs.push({ at: cursor, run });
+                cursor += run;
+            }
+            if (runs.length > GENUI_INLINE_CODE_RUN_LIMIT) return [{ type: 'text', value }];
+    
+            const segments = [];
+            let text = '';
+            let at = 0;
+            let scan = 0;
+            while (scan < runs.length) {
+                const open = runs[scan];
+                let close = -1;
+                for (let next = scan + 1; next < runs.length; next++) {
+                    if (runs[next].run === open.run) { close = next; break; }
+                }
+                if (close < 0) {
+                    text += value.slice(at, open.at + open.run);
+                    at = open.at + open.run;
+                    scan++;
+                    continue;
+                }
+                text += value.slice(at, open.at);
+                if (text) {
+                    segments.push({ type: 'text', value: text });
+                    text = '';
+                }
+                const end = runs[close].at + runs[close].run;
+                segments.push({ type: 'code', value: value.slice(open.at, end) });
+                at = end;
+                scan = close + 1;
+            }
+            if (at < value.length) text += value.slice(at);
+            if (text) segments.push({ type: 'text', value: text });
+            return segments;
+        }
+    
+        // The gate reads only the part that is not code: a code fence full of
+        // component names is the reader's code, not evidence of a widget.
+        function looksLikeGenUi(value) {
+            if (value.includes('{@')) return true;
+            const pattern = /<(\/?)([a-zA-Z][\w.-]*)/g;
+            let match;
+            while ((match = pattern.exec(value)) !== null) {
+                if (GENUI_GATE_TAGS.has(match[2].toLowerCase())) return true;
+            }
+            return false;
+        }
+    
+        function trimGenUiText(value) {
+            return value.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+        }
+    
+        // The entry point: a payload part in, a static rendering out. Ordinary
+        // markdown never reaches the parser — without widget source in it the part
+        // is returned exactly as it arrived, which is what keeps every existing
+        // export byte-identical.
+        function renderGenUiPayload(value, format) {
+            const source = String(value ?? '');
+            if (!source.includes('{@') && !/<[a-zA-Z/]/.test(source)) return source;
+    
+            const fenced = splitGenUiCodeSegments(source);
+            const prose = fenced.map(segment => segment.type === 'text' ? segment.value : '').join('');
+            if (!looksLikeGenUi(prose)) return source;
+    
+            return fenced.map(segment => {
+                if (segment.type === 'code') return segment.value;
+                return splitGenUiInlineCode(segment.value).map(inner => {
+                    if (inner.type === 'code') return inner.value;
+                    return trimGenUiText(renderGenUiNodes(parseGenUi(inner.value), format));
+                }).join('');
+            }).join('').trim();
+        }
+    
         function payloadContentText(content) {
             if (!content || !Array.isArray(content.parts)) return '';
             return content.parts.map(part => {
@@ -1776,7 +2213,7 @@
                 return '';
             }).filter(Boolean).join('\n\n').trim();
         }
-
+    
         function activePayloadMessages(payload) {
             const mapping = payload?.mapping;
             if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) return [];
@@ -1796,21 +2233,21 @@
             }
             return entries.reverse().filter(entry => entry.message);
         }
-
+    
         // ChatGPT keeps a reply that was stopped, failed or abandoned in its
         // record for good — as in_progress, or finished_partial_completion — and
         // only finished_successfully means a reply ran to its end.
         const STREAMING_STATUS = /^(?:in_progress|pending|waiting)$/;
-
+    
         function payloadStatus(entry) {
             return String(payloadRenderableMessage(entry?.message)?.status || '');
         }
-
+    
         function isInterruptedPayloadMessage(entry) {
             const status = payloadStatus(entry);
             return Boolean(status) && status !== 'finished_successfully' && entry?.message?.author?.role !== 'user';
         }
-
+    
         // Only the end of a conversation can still be being written. An
         // interrupted reply earlier on is part of the record, not a gap in the
         // export — a real 93-message export was flagged incomplete for a reply
@@ -1826,10 +2263,10 @@
             const streaming = entry => STREAMING_STATUS.test(payloadStatus(entry));
             return answers.length > 0 ? streaming(answers[answers.length - 1]) : tail.some(streaming);
         }
-
+    
         const INTERRUPTED_NOTE = 'This response was not finished in ChatGPT; it ends here.';
         const UNSAVED_REPLY_NOTE = 'No reply: this response was interrupted in ChatGPT before any text was saved.';
-
+    
         // Replies ChatGPT never finished, found between two prompts. One with no
         // saved text rendered nothing, so the export read as two prompts in a
         // row; each is keyed by the prompt it answered.
@@ -1853,7 +2290,7 @@
             });
             return found;
         }
-
+    
         // A reply cut off inside a code block leaves its fence open, and every
         // later message in the export would render as code. Close it where the
         // reply ends, as ChatGPT's own renderer does.
@@ -1871,7 +2308,7 @@
             });
             return open ? `${markdown}\n${open}` : markdown;
         }
-
+    
         // Regenerating an answer, or editing a prompt, leaves the previous version
         // in the mapping as a sibling branch. activePayloadMessages walks only the
         // branch currently on screen, so those older versions are invisible to the
@@ -1881,10 +2318,10 @@
         function payloadVariantMessages(payload, activeEntries) {
             const mapping = payload?.mapping;
             if (!mapping || typeof mapping !== 'object') return [];
-
+    
             const onActiveChain = new Set(activeEntries.map(entry => entry.nodeId));
             const variants = [];
-
+    
             activeEntries.forEach(entry => {
                 const parentId = entry.node?.parent;
                 const children = parentId && Object.prototype.hasOwnProperty.call(mapping, parentId) ? mapping[parentId]?.children : null;
@@ -1907,24 +2344,24 @@
                     }
                 });
             });
-
+    
             return variants.filter(entry => isMainPayloadMessage(entry));
         }
-
+    
         // Every payload pass asks each message for its report several times, and a
         // report can be a large JSON string; parse it once per message object.
         const embeddedReports = new WeakMap();
-
+    
         function payloadEmbeddedReport(message) {
             if (!message || typeof message !== 'object') return null;
             if (!embeddedReports.has(message)) embeddedReports.set(message, readEmbeddedReport(message));
             return embeddedReports.get(message);
         }
-
+    
         function readEmbeddedReport(message) {
             const metadata = message?.metadata;
             if (!metadata || typeof metadata !== 'object') return null;
-
+    
             const objectValue = value => {
                 if (value && typeof value === 'object') return value;
                 if (typeof value !== 'string' || !value.trim()) return null;
@@ -1935,7 +2372,7 @@
                     return null;
                 }
             };
-
+    
             // App-backed tool results are persisted under chatgpt_sdk. In current
             // Deep Research conversations widget_state is a JSON string, even though
             // the Apps SDK presents its parsed value to the iframe as widgetState.
@@ -1943,7 +2380,7 @@
             const widgetState = objectValue(sdk?.widget_state ?? sdk?.widgetState);
             const sdkToolMetadata = objectValue(
                 sdk?.tool_response_metadata ?? sdk?.toolResponseMetadata);
-
+    
             // The current Deep Research app receives this object as its
             // toolResponseMetadata and renders report_message inside a
             // cross-origin internal://deep-research iframe.
@@ -1962,9 +2399,9 @@
             }
             return null;
         }
-
+    
         const renderableMessages = new WeakMap();
-
+    
         function payloadRenderableMessage(message) {
             const report = payloadEmbeddedReport(message);
             if (!report) return message;
@@ -1986,7 +2423,7 @@
             renderableMessages.set(message, rendered);
             return rendered;
         }
-
+    
         function isDirectDeepResearchResult(message) {
             const author = String(message?.author?.name || '').toLowerCase();
             const metadata = message?.metadata;
@@ -1994,7 +2431,7 @@
                 String(metadata?.async_task_type || '').toLowerCase() === 'research' ||
                 Boolean(metadata?.deep_research_version);
             if (!markedResearch) return false;
-
+    
             const contentType = String(message?.content?.content_type || '').toLowerCase();
             const text = payloadContentText(message?.content);
             // Some connector runs persist the report directly in the tool message
@@ -2003,13 +2440,13 @@
             return ['text', 'multimodal_text'].includes(contentType) &&
                 text.length > 1000 && /^\s*#{1,3}\s+\S/m.test(text);
         }
-
+    
         function isAsyncPayloadResult(message) {
             return message?.metadata?.is_async_task_result_message === true ||
                 Boolean(payloadEmbeddedReport(message)) ||
                 isDirectDeepResearchResult(message);
         }
-
+    
         // A tool reply the reader sees is one that carries an image: a generated
         // picture, or a chart from code execution. ChatGPT stores both as `tool`
         // records, which is why image-only answers vanished from exports that read
@@ -2021,7 +2458,7 @@
             return message?.author?.role === 'tool' && !payloadContentText(message.content) &&
                 payloadAttachmentDescriptors(message).some(descriptor => descriptor.kind === 'image');
         }
-
+    
         // `media` selects what an export rendered from the stored conversation
         // shows: tool images become assistant content, and an assistant record
         // with nothing in it (the empty reply stored after an image) is not an
@@ -2045,13 +2482,13 @@
             // it is the only page-context route to the cross-origin report text.
             if (message.metadata?.is_visually_hidden_from_conversation && !asyncResult) return false;
             if (asyncResult || toolMedia) return true;
-
+    
             const contentType = String(rendered?.content?.content_type || '').toLowerCase();
             if (['thoughts', 'reasoning_recap', 'code', 'execution_output', 'tool_result'].includes(contentType)) return false;
             return !media || role === 'user' ||
                 Boolean(payloadContentText(rendered?.content)) || payloadAttachmentDescriptors(rendered).length > 0;
         }
-
+    
         // A record that shows nothing in any export — the empty reply stored
         // after a generated image, a reply interrupted before any text was saved —
         // is not a message the export can be missing.
@@ -2060,7 +2497,7 @@
             return isAsyncPayloadResult(entry.message) || Boolean(payloadContentText(message?.content)) ||
                 payloadAttachmentDescriptors(message).length > 0;
         }
-
+    
         // Images a page capture embedded. A linked image is not counted: ChatGPT
         // serves uploads from signed URLs that expire, so the stored copy is still
         // the only one that lasts.
@@ -2068,13 +2505,13 @@
             const pattern = format === 'markdown' ? /!\[[^\]]*\]\(data:image\//g : /<img class="exported-media" src="data:image\//g;
             return (String(content || '').match(pattern) || []).length;
         }
-
+    
         function payloadMessageRole(message, media = false) {
             return isAsyncPayloadResult(message) || (media && isToolMediaMessage(message))
                 ? 'assistant'
                 : message?.author?.role;
         }
-
+    
         // Reasoning models can store progress updates as ordinary assistant/text
         // messages in the payload even though the UI renders them inside one
         // "Worked for…" disclosure. Content type alone cannot distinguish those
@@ -2092,7 +2529,7 @@
                 return payloadMessageRole(eligible[index + 1]?.message, media) !== 'assistant';
             });
         }
-
+    
         // What a page sweep can match by id: the main messages, plus each visible
         // generated image, which the signed-in page renders as a unit of its own
         // listing the tool record's id (verified live 2026-09-27). The reply
@@ -2103,7 +2540,7 @@
             return entries.filter(entry => main.has(entry) ||
                 (isToolMediaMessage(entry.message) && isMainPayloadMessage(entry, true)));
         }
-
+    
         function payloadMessageMatches(conversation, entries) {
             const mainEntries = pagePayloadMessages(entries);
             const byId = new Map(mainEntries.map(entry => [String(entry.message.id || entry.nodeId), entry]));
@@ -2114,12 +2551,12 @@
             // 2026-09-27), and recovering the others added them a second time.
             const represented = new Set();
             const positionalFallbackIsSafe = mainEntries.length === conversation.messages.length;
-
+    
             conversation.messages.forEach(message => {
                 const listed = providerIds(message.providerMessageId).map(id => byId.get(id)).filter(Boolean);
                 listed.forEach(candidate => represented.add(candidate));
                 let entry = listed.find(candidate => !used.has(candidate)) || null;
-
+    
                 if (!entry && positionalFallbackIsSafe) {
                     entry = mainEntries.find(candidate => {
                         if (used.has(candidate)) return false;
@@ -2127,41 +2564,41 @@
                         return role === message.senderType;
                     }) || null;
                 }
-
+    
                 if (!entry) return;
                 used.add(entry);
                 represented.add(entry);
                 matches.set(message, entry);
             });
-
+    
             return { matches, represented };
         }
-
+    
         function payloadReasoningRecaps(entries, media = false) {
             const recaps = new Map();
             const mainEntries = new Set(mainPayloadMessages(entries, media));
             let pending = [];
-
+    
             const appendPending = value => {
                 const text = stripPayloadMarkers(value).trim();
                 if (text && !pending.includes(text)) pending.push(text);
             };
-
+    
             entries.forEach(entry => {
                 const message = entry.message;
                 const role = payloadMessageRole(message, media);
                 const contentType = String(message?.content?.content_type || '').toLowerCase();
-
+    
                 if (role === 'assistant' && contentType === 'reasoning_recap') {
                     appendPending(payloadContentText(message.content));
                     return;
                 }
-
+    
                 if (role === 'user') {
                     pending = [];
                     return;
                 }
-
+    
                 // ChatGPT stores the updates shown in its "Worked for…"
                 // disclosure as ordinary assistant/text records immediately before
                 // the visible answer. They are not separate conversation turns,
@@ -2170,16 +2607,16 @@
                     appendPending(payloadContentText(message.content));
                     return;
                 }
-
+    
                 if (role === 'assistant' && mainEntries.has(entry) && pending.length > 0) {
                     recaps.set(String(message.id || entry.nodeId), pending.join('\n\n'));
                     pending = [];
                 }
             });
-
+    
             return recaps;
         }
-
+    
         function payloadAttachmentDescriptors(message) {
             const descriptors = new Map();
             const add = descriptor => {
@@ -2195,7 +2632,7 @@
                 }
                 descriptors.set(key, descriptor);
             };
-
+    
             (Array.isArray(message?.metadata?.attachments) ? message.metadata.attachments : []).forEach(attachment => {
                 const fileId = attachment?.id || attachment?.file_id || '';
                 const mimeType = String(attachment?.mime_type || attachment?.content_type || '');
@@ -2206,7 +2643,7 @@
                     mimeType
                 });
             });
-
+    
             // Pointers name a file as file-service://file-… or, for newer uploads
             // and every generated image, sediment://file_…. Read the id after the
             // scheme: searching the whole pointer took "file-service" for an id
@@ -2215,7 +2652,7 @@
             const pointerFileId = pointer => String(pointer || '')
                 .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').match(/^file[-_][a-z0-9_-]+/i)?.[0] || '';
             const generatedName = message?.author?.role === 'tool' ? 'Generated image' : '';
-
+    
             (Array.isArray(message?.content?.parts) ? message.content.parts : []).forEach(part => {
                 if (!part || typeof part !== 'object') return;
                 const fileId = String(part.file_id || pointerFileId(part.asset_pointer));
@@ -2228,14 +2665,14 @@
                     mimeType: /^image\//i.test(mimeType) ? mimeType : (isImage ? 'image/png' : mimeType)
                 });
             });
-
+    
             // A chart from code execution travels in the tool record's metadata.
             const outputs = message?.metadata?.aggregate_result?.messages;
             (Array.isArray(outputs) ? outputs : []).forEach(output => {
                 const fileId = output?.message_type === 'image' ? pointerFileId(output.image_url) : '';
                 if (fileId) add({ kind: 'image', fileId, name: 'Code output', mimeType: 'image/png' });
             });
-
+    
             const sandboxPattern = /sandbox:(\/mnt\/data\/[^\s)\]"'<>]+)/g;
             for (const match of payloadContentText(message?.content).matchAll(sandboxPattern)) {
                 // Sentence punctuation after a link is not part of the path. Trim
@@ -2248,15 +2685,15 @@
                 const name = sandboxPath.split('/').filter(Boolean).pop() || 'Generated file';
                 add({ kind: 'sandbox', sandboxPath, name });
             }
-
+    
             return Array.from(descriptors.values());
         }
-
+    
         async function fetchWithTimeout(doc, input, init = {}, timeout = METADATA_FETCH_TIMEOUT, consume = readJsonBody) {
             const win = getWindow(doc);
             const fetcher = win?.fetch?.bind(win);
             if (typeof fetcher !== 'function' || !Number.isFinite(timeout) || timeout <= 0) return null;
-
+    
             const AbortControllerCtor = win?.AbortController || globalThis.AbortController;
             const controller = typeof AbortControllerCtor === 'function' ? new AbortControllerCtor() : null;
             const setTimer = win?.setTimeout?.bind(win) || setTimeout;
@@ -2270,7 +2707,7 @@
                     resolve(null);
                 }, timeout);
             });
-
+    
             try {
                 // Race the entire operation, including the body. Abort alone is
                 // insufficient for a stalled/non-compliant fetch implementation.
@@ -2296,13 +2733,13 @@
                 clearTimer(timer);
             }
         }
-
+    
         function metadataRequestTimeout(doc, options) {
             const configured = options.metadataFetchTimeout ?? METADATA_FETCH_TIMEOUT;
             if (!options.metadataDeadline) return configured;
             return Math.max(0, Math.min(configured, options.metadataDeadline - now(getWindow(doc))));
         }
-
+    
         // An image download moves bytes, not a small JSON answer, so it gets a
         // longer per-request timeout than metadata unless one was set explicitly.
         function attachmentRequestTimeout(doc, options) {
@@ -2311,7 +2748,7 @@
                 metadataFetchTimeout: options.attachmentFetchTimeout ?? options.metadataFetchTimeout ?? ATTACHMENT_FETCH_TIMEOUT
             });
         }
-
+    
         // Explicit budgets win; otherwise attachments get the metadata budget plus
         // a share per image, capped.
         function attachmentDeadline(doc, options, images, outerDeadline = Infinity) {
@@ -2319,7 +2756,7 @@
                 Math.min(ATTACHMENT_MAX_DURATION, METADATA_MAX_DURATION + images * ATTACHMENT_TIME_PER_IMAGE);
             return Math.min(outerDeadline, now(getWindow(doc)) + budget);
         }
-
+    
         async function readJsonBody(response) {
             if (!response) return null;
             try {
@@ -2328,7 +2765,7 @@
                 return null;
             }
         }
-
+    
         // Cookies alone are not enough for chatgpt.com's private API: a cookie-only
         // read of a conversation the reader owns comes back as 404
         // "conversation_inaccessible" — the same status a deleted conversation
@@ -2345,7 +2782,7 @@
                 accountIds: null
             };
         }
-
+    
         function chatGptAuthHeaders(auth) {
             const headers = {};
             if (auth?.token) headers.Authorization = `Bearer ${auth.token}`;
@@ -2355,42 +2792,42 @@
             if (auth?.accountId) headers['ChatGPT-Account-Id'] = auth.accountId;
             return headers;
         }
-
+    
         async function readChatGptToken(doc, options, refresh = false) {
             const auth = options.chatGptAuth;
             if (!auth) return '';
             if (!refresh && (auth.token || auth.sessionRead)) return auth.token;
-
+    
             const timeout = metadataRequestTimeout(doc, options);
             if (timeout <= 0) return auth.token;
-
+    
             auth.sessionRead = true;
             const response = await fetchWithTimeout(doc, CHATGPT_SESSION_ENDPOINT, {}, timeout);
             // An unreachable session endpoint means "unknown", not "signed out" —
             // a cookie-only attempt is still worth making in that case.
             if (!response?.ok) return auth.token;
-
+    
             const session = response.body;
             const token = typeof session?.accessToken === 'string' ? session.accessToken : '';
             auth.signedOut = !token;
             if (token) auth.token = token;
             return auth.token;
         }
-
+    
         async function readChatGptAccountIds(doc, options) {
             const auth = options.chatGptAuth;
             if (!auth) return [];
             if (auth.accountIds) return auth.accountIds;
             auth.accountIds = [];
-
+    
             const timeout = metadataRequestTimeout(doc, options);
             if (timeout <= 0) return auth.accountIds;
-
+    
             const response = await fetchWithTimeout(doc, CHATGPT_ACCOUNTS_ENDPOINT, {
                 headers: chatGptAuthHeaders({ token: auth.token })
             }, timeout);
             if (!response?.ok) return auth.accountIds;
-
+    
             const payload = response.body;
             const accounts = payload?.accounts && typeof payload.accounts === 'object' ? payload.accounts : {};
             const ids = new Set();
@@ -2401,37 +2838,37 @@
             auth.accountIds = Array.from(ids);
             return auth.accountIds;
         }
-
+    
         function isChatGptAuthFailure(response, body) {
             if (!response) return false;
             if (response.status === 401 || response.status === 403) return true;
             if (response.status !== 404) return false;
-
+    
             const detail = body?.detail;
             const code = String(detail?.code || body?.error_code || '').toLowerCase();
             if (CHATGPT_AUTH_ERROR_CODES.has(code)) return true;
-
+    
             const message = String(typeof detail === 'string' ? detail : detail?.message || body?.message || '');
             return /log ?in|sign ?in|unauthori[sz]ed|not authenticated/i.test(message);
         }
-
+    
         async function attemptChatGptJson(doc, options, endpoint) {
             const timeout = metadataRequestTimeout(doc, endpoint.startsWith('/backend-api/conversation/')
                 ? { ...options, metadataFetchTimeout: options.conversationFetchTimeout ?? options.metadataFetchTimeout ?? CONVERSATION_FETCH_TIMEOUT }
                 : options);
             if (timeout <= 0) return { reason: 'timeout' };
-
+    
             const response = await fetchWithTimeout(doc, endpoint, {
                 headers: chatGptAuthHeaders(options.chatGptAuth)
             }, timeout);
             if (!response) return { reason: 'network' };
-
+    
             const body = response.body;
             if (response.ok) return { reason: 'ok', body };
             if (isChatGptAuthFailure(response, body)) return { reason: 'auth' };
             return { reason: `status:${response.status}` };
         }
-
+    
         // Escalates only as far as it has to: the token already in hand, then a
         // fresh one in case the session rolled over mid-export, then each workspace
         // the reader belongs to. `attempt` makes one request and classifies it.
@@ -2444,38 +2881,38 @@
             // No session means the request can only 404. Skipping it keeps a
             // confusing error out of the reader's console.
             if (auth.signedOut && !auth.token) return { reason: 'signed-out' };
-
+    
             let result = await attempt(doc, options, endpoint);
             if (result.reason !== 'auth') return result;
-
+    
             const stale = auth.token;
             const refreshed = await readChatGptToken(doc, options, true);
             if (refreshed && refreshed !== stale) {
                 result = await attempt(doc, options, endpoint);
                 if (result.reason !== 'auth') return result;
             }
-
+    
             for (const accountId of await readChatGptAccountIds(doc, options)) {
                 if (accountId === auth.accountId) continue;
                 auth.accountId = accountId;
                 result = await attempt(doc, options, endpoint);
                 if (result.reason !== 'auth') return result;
             }
-
+    
             // Leaving the last losing account id in place would misdirect every
             // later request in this pass.
             auth.accountId = '';
             return result;
         }
-
+    
         function fetchChatGptJson(doc, options, endpoint) {
             return fetchChatGptWith(doc, options, endpoint, attemptChatGptJson);
         }
-
+    
         async function attemptChatGptText(doc, options, endpoint) {
             const timeout = metadataRequestTimeout(doc, options);
             if (timeout <= 0) return { reason: 'timeout' };
-
+    
             const response = await fetchWithTimeout(doc, endpoint, {
                 headers: {
                     ...chatGptAuthHeaders(options.chatGptAuth),
@@ -2484,16 +2921,16 @@
             }, timeout, response => response.ok ? response.text() : readJsonBody(response));
             if (!response) return { reason: 'network' };
             if (response.ok) return { reason: 'ok', body: response.body };
-
+    
             const body = response.body;
             if (isChatGptAuthFailure(response, body)) return { reason: 'auth' };
             return { reason: `status:${response.status}` };
         }
-
+    
         function fetchChatGptText(doc, options, endpoint) {
             return fetchChatGptWith(doc, options, endpoint, attemptChatGptText);
         }
-
+    
         function deepResearchTaskId(message) {
             const metadata = message?.metadata;
             const taskId = metadata?.async_task_id ?? metadata?.asyncTaskId;
@@ -2503,7 +2940,7 @@
                 ? taskId
                 : '';
         }
-
+    
         function deepResearchFinalMessage(stream) {
             let finalMessage = null;
             String(stream || '').split(/\r?\n/).forEach(line => {
@@ -2520,19 +2957,19 @@
             });
             return finalMessage;
         }
-
+    
         function normalizeDeepResearchFinalMessage(value, taskMessage, taskId) {
             let report = value?.message && typeof value.message === 'object' ? value.message : value;
             if (typeof report === 'string') {
                 report = { content: { content_type: 'text', parts: [report] } };
             }
             if (!report || typeof report !== 'object') return null;
-
+    
             const content = report.content || (typeof report.text === 'string'
                 ? { content_type: 'text', parts: [report.text] }
                 : null);
             if (!payloadContentText(content)) return null;
-
+    
             return {
                 ...report,
                 id: report.id || `${taskMessage?.id || taskId}:deep-research-result`,
@@ -2548,11 +2985,11 @@
                 }
             };
         }
-
+    
         async function hydrateDeepResearchEntries(entries, doc, options) {
             const conversationId = chatGptConversationId(doc);
             if (!conversationId || !Array.isArray(entries) || entries.length === 0) return entries;
-
+    
             const additions = new Map();
             const attemptedTasks = new Set();
             let unresolvedReports = 0;
@@ -2561,13 +2998,13 @@
                 const taskId = deepResearchTaskId(entry.message);
                 if (!taskId || isAsyncPayloadResult(entry.message) || attemptedTasks.has(taskId)) continue;
                 attemptedTasks.add(taskId);
-
+    
                 const alreadyPresent = entries.some(candidate =>
                     candidate !== entry &&
                     isAsyncPayloadResult(candidate.message) &&
                     deepResearchTaskId(candidate.message) === taskId);
                 if (alreadyPresent) continue;
-
+    
                 const endpoint = `/backend-api/tasks/${encodeURIComponent(taskId)}/stream?` +
                     `parent_conversation_id=${encodeURIComponent(conversationId)}` +
                     `&message_id=${encodeURIComponent(entry.message?.id || entry.nodeId)}`;
@@ -2577,7 +3014,7 @@
                     console.warn(`[Chat Exporter] A Deep Research report could not be read (${result.reason}).`);
                     continue;
                 }
-
+    
                 const message = normalizeDeepResearchFinalMessage(
                     deepResearchFinalMessage(result.body), entry.message, taskId);
                 if (!message) {
@@ -2585,7 +3022,7 @@
                     console.warn('[Chat Exporter] A Deep Research task returned no completed report.');
                     continue;
                 }
-
+    
                 let insertion = entries.findIndex((candidate, candidateIndex) =>
                     candidateIndex > index && candidate.message?.author?.role === 'user');
                 if (insertion < 0) insertion = entries.length;
@@ -2599,13 +3036,13 @@
                 additions.set(insertion, at);
                 console.log('[Chat Exporter] Recovered a Deep Research report from its completed task record.');
             }
-
+    
             const hydrated = [];
             for (let index = 0; index <= entries.length; index++) {
                 hydrated.push(...(additions.get(index) || []));
                 if (index < entries.length) hydrated.push(entries[index]);
             }
-
+    
             // The frame is titled internal://deep-research today; its source names
             // the app too, so either one is enough to know a report is on screen.
             const hasDeepResearchFrame = queryAll(doc,
@@ -2630,7 +3067,7 @@
             hydrated.unresolvedReports = unresolvedReports;
             return hydrated;
         }
-
+    
         function chatGptMetadataNote(reason) {
             if (reason === 'signed-out') {
                 return 'this tab has no signed-in ChatGPT session';
@@ -2643,39 +3080,39 @@
             }
             return `ChatGPT answered ${String(reason).replace(/^status:/, 'HTTP ')} — a temporary chat, a shared link or a deleted conversation has no stored copy to read`;
         }
-
+    
         async function fetchChatGptPayload(doc, options) {
             if (options.chatGptMetadata === false) return null;
             const conversationId = chatGptConversationId(doc);
             if (!conversationId) return null;
-
+    
             const endpoint = `/backend-api/conversation/${encodeURIComponent(conversationId)}`;
             const result = await fetchChatGptJson(doc, options, endpoint);
             if (result.reason === 'ok') return result.body;
-
+    
             // This request may be the primary Markdown source. Failure says
             // nothing about whether a later DOM fallback is complete.
             console.info(`[Chat Exporter] The stored conversation could not be read: ${chatGptMetadataNote(result.reason)}. Completeness must be checked against the page.`);
             return null;
         }
-
+    
         function imageMimeType(value) {
             const mime = String(value || '').split(';')[0].trim().toLowerCase();
             return /^image\/(?:png|jpe?g|gif|webp|avif|bmp)$/.test(mime) ? mime : '';
         }
-
+    
         function bytesToDataUrl(bytes, mimeType, doc) {
             const win = getWindow(doc);
             const encode = win?.btoa?.bind(win) || (typeof btoa === 'function' ? btoa : null);
             if (!encode) return '';
-
+    
             let binary = '';
             for (let offset = 0; offset < bytes.length; offset += 0x8000) {
                 binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
             }
             return `data:${mimeType};base64,${encode(binary)}`;
         }
-
+    
         function isSameOrigin(doc, url) {
             const location = getWindow(doc)?.location;
             if (!location?.href) return false;
@@ -2685,7 +3122,7 @@
                 return false;
             }
         }
-
+    
         async function readImageBody(response, maxBytes) {
             if (!response.ok) return null;
             const contentType = String(response.headers?.get?.('content-type') || '');
@@ -2695,7 +3132,7 @@
                 await response.body?.cancel?.();
                 return null;
             }
-
+    
             // Count bytes as they arrive; checking only after arrayBuffer() allowed
             // chunked or misleadingly sized responses to exhaust browser memory.
             if (response.body?.getReader) {
@@ -2727,7 +3164,7 @@
             const bytes = new Uint8Array(await response.arrayBuffer());
             return bytes.byteLength <= maxBytes ? bytes : null;
         }
-
+    
         async function fetchEmbeddedImage(doc, descriptor, options) {
             if (!descriptor.fileId) return null;
             let timeout = attachmentRequestTimeout(doc, options);
@@ -2740,7 +3177,7 @@
                 headers: chatGptAuthHeaders(options.chatGptAuth)
             }, timeout, response => readImageBody(response, maxBytes));
             if (!response?.ok) return null;
-
+    
             let contentType = String(response.headers?.get?.('content-type') || '');
             if (/application\/json/i.test(contentType)) {
                 const metadata = response.body;
@@ -2749,7 +3186,7 @@
                 if (metadata?.status === 'error') return null;
                 const downloadUrl = metadata?.download_url || metadata?.downloadUrl || metadata?.url;
                 if (!downloadUrl || !isSafeRemoteImageSource(downloadUrl) || new URL(downloadUrl).protocol !== 'https:') return null;
-
+    
                 // The link points at a signed CDN URL. Sending the bearer token
                 // there would hand the reader's ChatGPT credentials to a
                 // third-party host, so only a same-origin hop stays authenticated.
@@ -2762,20 +3199,20 @@
                 if (!response?.ok) return null;
                 contentType = String(response.headers?.get?.('content-type') || '');
             }
-
+    
             const mimeType = contentType && !/^application\/octet-stream(?:;|$)/i.test(contentType)
                 ? imageMimeType(contentType) : imageMimeType(descriptor.mimeType);
             if (!mimeType) return null;
             const declaredSize = Number(response.headers?.get?.('content-length') || 0);
             if (declaredSize > maxBytes) return null;
-
+    
             const bytes = response.body;
             if (!(bytes instanceof Uint8Array)) return null;
             if (bytes.byteLength === 0 || bytes.byteLength > maxBytes) return null;
             const dataUrl = bytesToDataUrl(bytes, mimeType, doc);
             return dataUrl ? { dataUrl, size: bytes.byteLength } : null;
         }
-
+    
         // Embeds the images a sweep deferred (see mediaSource): the blob's own
         // bytes, then a canvas drawing, then a labelled placeholder. Only tokens
         // that reached the export are read, so dropped media spends no budget.
@@ -2822,23 +3259,27 @@
                 message.content = content;
             });
         }
-
+    
         // Renders a payload message the DOM never showed us. Its parts are the
         // markdown the model actually produced, which is exactly what a markdown
         // export wants; HTML exports escape it and keep the paragraph breaks.
         function payloadMessageToExport(entry, assistantName, format, doc, options = {}) {
             const message = payloadRenderableMessage(entry.message);
-            const text = resolvePayloadCitations(payloadContentText(message.content), message, format);
+            const isUser = payloadMessageRole(message) === 'user';
+            const raw = payloadContentText(message.content);
+            // A widget reply's part is the source of a rendering, not markdown
+            // (issue #47). A prompt is the reader's own text and is never rewritten.
+            const converted = isUser ? raw : renderGenUiPayload(raw, format);
+            const text = resolvePayloadCitations(converted, message, format);
             // No text is not the same as no message: an image-only turn carries its
             // content in attachments, which the caller appends.
             const allowEmpty = options.allowEmpty === true;
             if (!text && !allowEmpty) return null;
-
-            const isUser = payloadMessageRole(message) === 'user';
+    
             const content = !text ? '' : (format === 'markdown'
                 ? closeOpenFence(text)
                 : text.split(/\n{2,}/).map(block => `<p>${sanitizeHtml(block).replace(/\n/g, '<br>')}</p>`).join(''));
-
+    
             const exported = {
                 sender: isUser ? 'You' : assistantName,
                 senderType: isUser ? 'user' : 'assistant',
@@ -2849,7 +3290,7 @@
                 recovered: true,
                 content
             };
-
+    
             // The payload carries create_time, so a recovered message has no reason
             // to be the only one in the file without a timestamp.
             const iso = timestampIso(message.create_time);
@@ -2859,7 +3300,7 @@
             }
             return exported;
         }
-
+    
         // Inserts recovered messages at their true position without reordering what
         // the DOM gave us: each one lands after the last captured message that
         // precedes it in the conversation. Recovery is skipped entirely when no
@@ -2872,12 +3313,12 @@
                 if (indexOfEntry.has(entry)) positionOf.set(message, indexOfEntry.get(entry));
             });
             if (positionOf.size === 0) return { recovered: 0, reordered: 0 };
-
+    
             // Missing means "not in the export", not "never on screen": a turn the
             // sweep saw but could never read is just as absent. Duplicate DOM
             // representations of one id match one entry, so they recover nothing.
             const missing = mainEntries.filter(entry => !represented.has(entry));
-
+    
             let recovered = 0;
             missing.forEach(entry => {
                 const native = payloadRenderableMessage(entry.message);
@@ -2887,7 +3328,7 @@
                 if (!message) return;
                 message.content += renderReferences(payloadCitations(native), format);
                 message.providerMessageId = String(entry.message.id || entry.nodeId);
-
+    
                 const target = indexOfEntry.get(entry);
                 let insertAt = conversation.messages.length;
                 for (let index = 0; index < conversation.messages.length; index++) {
@@ -2903,7 +3344,7 @@
                 represented.add(entry);
                 recovered++;
             });
-
+    
             // The sweep orders messages by scroll offset, measured at whatever
             // moment each one was captured. A virtualizer that changes heights
             // between those moments can make two neighbours compare wrongly — a
@@ -2918,30 +3359,30 @@
                 reordered = conversation.messages.reduce(
                     (count, message, index) => count + (before[index] === message ? 0 : 1), 0);
             }
-
+    
             conversation.messages.forEach((message, index) => { message.index = index; });
             return { recovered, reordered };
         }
-
+    
         function appendPayloadVariants(conversation, payload, entries, matches, format, doc) {
             const variants = payloadVariantMessages(payload, entries);
             if (variants.length === 0) return 0;
-
+    
             const positionOfEntry = new Map();
             matches.forEach((entry, message) => positionOfEntry.set(entry, message));
-
+    
             let added = 0;
             variants.forEach(variant => {
                 const message = payloadMessageToExport(variant, conversation.providerLabel, format, doc);
                 if (!message) return;
-
+    
                 message.variant = true;
                 message.recovered = false;
                 const note = 'Earlier version (replaced by a regeneration or edit)';
                 message.content = format === 'markdown'
                     ? `*${note}*\n\n${message.content}`
                     : `<p><em>${sanitizeHtml(note)}</em></p>${message.content}`;
-
+    
                 // Sit next to the turn that replaced this one where we can find it,
                 // otherwise at the end rather than at an arbitrary position.
                 const superseding = positionOfEntry.get(variant.supersededBy);
@@ -2953,26 +3394,26 @@
                 }
                 added++;
             });
-
+    
             conversation.messages.forEach((message, index) => { message.index = index; });
             return added;
         }
-
+    
         function appendMessageEnrichment(message, markdown, html, needle) {
             if (needle && message.content.includes(needle)) return;
             message.content = `${message.content}${message.content ? '\n\n' : ''}${markdown !== null ? markdown : html}`.trim();
         }
-
+    
         function prependReasoning(message, recap, format) {
             if (!recap || message.content.includes(recap)) return;
-
+    
             const body = sanitizeHtml(recap).replace(/\n/g, '<br>\n');
             const markup = format === 'markdown'
                 ? `<small><strong>Reasoning / progress:</strong><br>\n${body}</small>`
                 : `<small class="reasoning-recap"><strong>Reasoning / progress:</strong><br>${body}</small>`;
             message.content = `${markup}${message.content ? '\n\n' : ''}${message.content}`.trim();
         }
-
+    
         // ─── Payload-first rendering ────────────────────────────────────────────
         // The payload is the markdown the model produced; the DOM is a rendering of
         // it. Reading the source directly avoids every artifact that comes from
@@ -2991,7 +3432,7 @@
             // they are content.
             const mainEntries = mainPayloadMessages(entries, true);
             if (mainEntries.length === 0) return null;
-
+    
             const recaps = payloadReasoningRecaps(entries, true);
             const messages = [];
             const imageBudget = options.imageBudget;
@@ -3006,11 +3447,11 @@
             const unsavedReplies = interruptedWithoutReply(entries, mainEntries);
             const imageOptions = { ...options, metadataDeadline: attachmentDeadline(doc, options, images, options.outerDeadline) };
             let imagesRead = 0;
-
+    
             for (const { entry, message, descriptors } of rendered) {
                 for (const descriptor of descriptors) {
                     const name = descriptor.name || (descriptor.kind === 'image' ? 'Image attachment' : 'File attachment');
-
+    
                     if (descriptor.kind === 'sandbox') {
                         const href = `sandbox:${descriptor.sandboxPath}`;
                         appendMessageEnrichment(message, `[File: ${escapeMarkdownLinkText(name)}](${escapeMarkdownUrl(href)})`, null, descriptor.sandboxPath);
@@ -3020,7 +3461,7 @@
                         appendMessageEnrichment(message, `[File: ${name}]`, null, name);
                         continue;
                     }
-
+    
                     let embedded = null;
                     if (attachmentRequestTimeout(doc, imageOptions) > 0 && imageBudget.remaining > 0) {
                         embedded = await fetchEmbeddedImage(doc, descriptor, { ...imageOptions, maxEmbeddedImageBytes: Math.min(imageBudget.perImage, imageBudget.remaining) });
@@ -3043,25 +3484,25 @@
                         appendMessageEnrichment(message, `[Image: ${name}]`, null, needle);
                     }
                 }
-
+    
                 const recap = recaps.get(String(entry.message.id || entry.nodeId));
                 if (options.includeReasoning !== false) prependReasoning(message, recap, format);
-
+    
                 const citations = payloadCitations(payloadRenderableMessage(entry.message));
                 if (citations.length > 0) {
                     message.content = `${message.content}${renderReferences(citations, format)}`.trim();
                 }
-
+    
                 if (message.senderType === 'assistant' && isInterruptedPayloadMessage(entry)) {
                     message.content = `${message.content}\n\n*${INTERRUPTED_NOTE}*`.trim();
                 }
-
+    
                 // A turn with neither text nor media has nothing to export.
                 if (!normalizeWhitespace(message.content)) continue;
                 message.index = messages.length;
                 messages.push(message);
                 exportedEntries.set(message, entry);
-
+    
                 const unsaved = unsavedReplies.get(entry);
                 if (unsaved) {
                     const standIn = payloadMessageToExport(unsaved, provider.assistantName, format, doc, { allowEmpty: true });
@@ -3070,9 +3511,9 @@
                     messages.push(standIn);
                 }
             }
-
+    
             if (messages.length === 0) return null;
-
+    
             const conversation = buildConversation(doc, provider, options, messages);
             conversation.source = 'payload';
             conversation.expectedMessages = mainEntries.filter(isRenderablePayloadEntry).length;
@@ -3085,7 +3526,7 @@
             conversation.unfinishedMessages = hasUnfinishedPayloadMessages(entries);
             conversation.complete = conversation.unreachedMessages === 0 && conversation.unresolvedReports === 0 && !conversation.unfinishedMessages;
             conversation.metadataStatus = 'enriched';
-
+    
             if (options.includeVariants === true) {
                 // Paired by identity: an entry that rendered nothing would shift
                 // every index-based pairing after it.
@@ -3098,13 +3539,13 @@
                     console.info(`[Chat Exporter] This conversation has ${available} earlier version(s) of regenerated or edited turns. They are not in the export; pass includeVariants: true to include them.`);
                 }
             }
-
+    
             return conversation;
         }
-
+    
         async function enrichChatGptConversation(conversation, doc, format, options) {
             if (conversation.provider !== 'chatgpt') return conversation;
-
+    
             const win = getWindow(doc);
             const outerDeadline = options.metadataDeadline ?? Infinity;
             // One auth state for the whole pass: the conversation read discovers
@@ -3130,7 +3571,7 @@
                 conversation.metadataStatus = 'unavailable';
                 return conversation;
             }
-
+    
             const activeEntries = activePayloadMessages(payload);
             if (activeEntries.length === 0) {
                 conversation.metadataStatus = 'invalid';
@@ -3143,7 +3584,7 @@
             const { matches, represented } = payloadMessageMatches(conversation, entries);
             const recaps = payloadReasoningRecaps(entries);
             const imageBudget = options.imageBudget;
-
+    
             // Compare identities, not counts: duplicate DOM representations must
             // not obscure whether each payload turn actually reached the export.
             const mainEntries = pagePayloadMessages(entries);
@@ -3153,7 +3594,7 @@
             if (fromSweep) {
                 conversation.unreachedMessages = expectedEntries.filter(entry => !represented.has(entry)).length;
             }
-
+    
             // A virtualizer can end a sweep anywhere, and a message the sweep never
             // reached is simply absent from the DOM — there is nothing left to
             // re-read. The payload holds its text, so rather than report a hole,
@@ -3175,7 +3616,7 @@
                     console.info(`[Chat Exporter] This conversation has ${available} earlier version(s) of regenerated or edited turns. They are not in the export; pass includeVariants: true to include them.`);
                 }
             }
-
+    
             if (options.recoverMissing !== false && fromSweep) {
                 const aligned = alignWithPayload(conversation, mainEntries, matches, represented, format, doc);
                 conversation.recoveredMessages = aligned.recovered;
@@ -3187,7 +3628,7 @@
                     console.log(`[Chat Exporter] ${aligned.reordered} message(s) were put back into conversation order using ChatGPT's own record.`);
                 }
             }
-
+    
             // A reply interrupted before any text was saved shows nothing on the
             // page, so the export read as two prompts in a row. Say so where the
             // reply belongs, as the Markdown export does — unless the page shows a
@@ -3204,12 +3645,12 @@
                 });
                 conversation.messages.forEach((message, index) => { message.index = index; });
             }
-
+    
             const images = Array.from(matches.values()).reduce((count, entry) =>
                 count + payloadAttachmentDescriptors(payloadRenderableMessage(entry.message))
                     .filter(descriptor => descriptor.kind === 'image').length, 0);
             const imageOptions = { ...enrichmentOptions, metadataDeadline: attachmentDeadline(doc, options, images, outerDeadline) };
-
+    
             for (const [message, entry] of matches.entries()) {
                 const nativeMessage = payloadRenderableMessage(entry.message);
                 if (!message.timestamp) {
@@ -3219,17 +3660,17 @@
                         message.timestamp = formatMessageTimestamp(iso, doc);
                     }
                 }
-
+    
                 const descriptors = payloadAttachmentDescriptors(nativeMessage);
                 if (descriptors.length > 0) message.attachments = descriptors;
                 // The page already shows an upload's image in its turn; the stored
                 // copy is added only for images the page did not embed, or the
                 // export carried each upload twice.
                 let shownOnPage = message.source ? 0 : embeddedPageImageCount(message.content, format);
-
+    
                 for (const descriptor of descriptors) {
                     const name = descriptor.name || (descriptor.kind === 'image' ? 'Image attachment' : 'File attachment');
-
+    
                     if (descriptor.kind === 'image') {
                         if (shownOnPage > 0) {
                             shownOnPage--;
@@ -3251,7 +3692,7 @@
                         }
                         continue;
                     }
-
+    
                     if (descriptor.kind === 'sandbox') {
                         const href = `sandbox:${descriptor.sandboxPath}`;
                         const markdown = `[File: ${escapeMarkdownLinkText(name)}](${escapeMarkdownUrl(href)})`;
@@ -3259,51 +3700,51 @@
                         appendMessageEnrichment(message, format === 'markdown' ? markdown : null, html, descriptor.sandboxPath);
                         continue;
                     }
-
+    
                     const label = `[File: ${name}]`;
                     const html = `<span class="card-placeholder">${sanitizeHtml(label)}</span>`;
                     appendMessageEnrichment(message, format === 'markdown' ? label : null, html, name);
                 }
-
+    
                 if (message.senderType === 'assistant' && isInterruptedPayloadMessage(entry)) {
                     appendMessageEnrichment(message, format === 'markdown' ? `*${INTERRUPTED_NOTE}*` : null,
                         `<p><em>${sanitizeHtml(INTERRUPTED_NOTE)}</em></p>`, INTERRUPTED_NOTE);
                 }
-
+    
                 const nativeId = String(nativeMessage.id || entry.nodeId);
                 const recap = recaps.get(nativeId);
                 if (options.includeReasoning !== false) prependReasoning(message, recap, format);
             }
-
+    
             conversation.metadataStatus = 'enriched';
             return conversation;
         }
-
+    
         function extractConversation(options = {}) {
             const doc = resolveDocument(options.document);
             const provider = providerFor(options.provider, doc);
             const format = options.format || 'markdown';
             const state = { seen: new Set(), messages: [], container: null, imageBudget: createImageBudget(options) };
-
+    
             findMessages(doc, provider).forEach(messageElement => captureMessage(state, messageElement, provider, format));
-
+    
             // A single pass reads the DOM in document order already; drop the
             // ordering key so the message shape stays the same.
             state.messages.forEach(message => {
                 delete message.order;
                 delete message.providerMessageId;
             });
-
+    
             return buildConversation(doc, provider, options, state.messages);
         }
-
+    
         // ─── Virtualized (lazy-loaded) conversations ─────────────────────────────
         // ChatGPT windows long conversations: messages scrolled out of view are
         // removed from the DOM entirely, so a single findMessages pass exports only
         // the visible fragment (issues #28, #29). The async path below sweeps the
         // scroll container from top to bottom, capturing and serializing each
         // message while its DOM nodes exist.
-
+    
         // Where a scroller's top and bottom are. ChatGPT's signed-in transcript
         // scrolls a flex-direction: column-reverse container: it opens on the
         // newest message, scrollTop 0 is the *bottom*, and older history sits at
@@ -3321,7 +3762,7 @@
             }
             return reversed ? { top: -travel, bottom: 0, travel, reversed } : { top: 0, bottom: travel, travel, reversed };
         }
-
+    
         // How much of the conversation a sweep has covered: from the top going
         // down, from the newest message going up.
         function sweepPercent(scroller, upward = false) {
@@ -3329,12 +3770,12 @@
             const covered = upward ? range.bottom - scroller.scrollTop : scroller.scrollTop - range.top;
             return Math.min(99, Math.max(0, Math.round((covered / Math.max(1, range.travel)) * 100)));
         }
-
+    
         function findScrollContainer(doc, provider) {
             const win = getWindow(doc);
             const probe = findMessages(doc, provider)[0];
             let node = probe ? probe.parentElement : null;
-
+    
             while (node && node !== doc.body && node !== doc.documentElement) {
                 if (node.scrollHeight > node.clientHeight + 10) {
                     let overflowY = '';
@@ -3347,11 +3788,11 @@
                 }
                 node = node.parentElement;
             }
-
+    
             const root = doc.scrollingElement || doc.documentElement;
             return root && root.scrollHeight > root.clientHeight + 10 ? root : null;
         }
-
+    
         // Wait for the provider to finish mounting whatever the scroll revealed,
         // instead of sleeping a fixed guess. Resolves as soon as the container has
         // been quiet for `quiet` ms, and never waits longer than the old fixed
@@ -3362,11 +3803,11 @@
             const setTimer = win?.setTimeout?.bind(win) || setTimeout;
             const clearTimer = win?.clearTimeout?.bind(win) || clearTimeout;
             const ObserverCtor = win?.MutationObserver || (typeof MutationObserver !== 'undefined' ? MutationObserver : null);
-
+    
             if (typeof ObserverCtor !== 'function' || !container || typeof container.isConnected !== 'boolean') {
                 return new Promise(resolve => setTimer(resolve, maxWait));
             }
-
+    
             return new Promise(resolve => {
                 let quietTimer = null;
                 let settled = false;
@@ -3374,7 +3815,7 @@
                     clearTimer(quietTimer);
                     quietTimer = setTimer(finish, quiet);
                 });
-
+    
                 function finish() {
                     if (settled) return;
                     settled = true;
@@ -3387,7 +3828,7 @@
                     }
                     resolve();
                 }
-
+    
                 const ceiling = setTimer(finish, maxWait);
                 try {
                     observer.observe(container, { childList: true, subtree: true, characterData: true });
@@ -3400,7 +3841,7 @@
                 quietTimer = setTimer(finish, quiet);
             });
         }
-
+    
         // An answer still being written would be exported half-finished. Rather
         // than hunt for a "stop generating" button — a test id that changes with
         // every redesign — watch whether the newest message is still growing.
@@ -3410,11 +3851,11 @@
                 const last = messages[messages.length - 1];
                 return last ? normalizeWhitespace(last.textContent).length : 0;
             };
-
+    
             let previous = sample();
             await wait(STREAM_SETTLE_INTERVAL);
             if (sample() === previous) return true;
-
+    
             console.log('[Chat Exporter] The answer is still being written — waiting for it to finish before exporting.');
             let stable = 0;
             while (stable < 2 && !outOfTime()) {
@@ -3424,7 +3865,7 @@
             }
             return stable >= 2;
         }
-
+    
         // Content is not identity: repeated prompts and replies are real turns.
         // Stable provider/turn ids collapse duplicate representations. Without an
         // id, use scroller position when measurable; otherwise retain distinct
@@ -3440,7 +3881,7 @@
             }
             return scope || element;
         }
-
+    
         // Markdown from ChatGPT reads the payload first; everything else, and every
         // failure, falls through to the DOM sweep below unchanged.
         function canUsePayloadSource(doc, provider, format, options) {
@@ -3451,19 +3892,19 @@
             // A shared link or temporary chat has no stored conversation to read.
             return Boolean(chatGptConversationId(doc));
         }
-
+    
         async function extractConversationFull(options = {}) {
             options = { ...options, imageBudget: { ...createImageBudget(options), deferred: new Map() } };
             const doc = resolveDocument(options.document);
             const provider = providerFor(options.provider, doc);
             const format = options.format || 'markdown';
-
+    
             if (canUsePayloadSource(doc, provider, format, options)) {
                 const emit = event => emitSafely(options, event);
                 try {
                     emit({ phase: 'start', provider: provider.id, messages: 0, lines: 0 });
                     emit({ phase: 'payload', messages: 0, lines: 0, percent: 10 });
-
+    
                     const win = getWindow(doc);
                     const payloadOptions = {
                         ...options,
@@ -3516,11 +3957,11 @@
             const historyWait = options.historyWait ?? HISTORY_WAIT;
             const win = getWindow(doc);
             const wait = ms => new Promise(resolve => (win?.setTimeout || setTimeout)(resolve, ms));
-
+    
             const container = options.scroll === false ? null : findScrollContainer(doc, provider);
-
+    
             const emitProgress = event => emitSafely(options, event);
-
+    
             const state = { seen: new Set(), messages: [], container, lines: 0, imageBudget: options.imageBudget };
             const seenKeys = new Set();
             // Turns that were on screen but had nothing to serialize yet. They are
@@ -3550,14 +3991,14 @@
                 });
                 return waiting;
             };
-
+    
             // An export must not be able to hang the page: every phase runs against
             // one wall-clock budget, however slow the provider is.
             // Extended, not consumed, while the tab is hidden — see awaitVisible.
             let deadline = now(win) + (options.maxDuration ?? DEFAULT_MAX_DURATION);
             const outOfTime = () => now(win) >= deadline;
             let hiddenBudget = options.maxHiddenWait ?? MAX_HIDDEN_WAIT;
-
+    
             // A hidden tab gets its timers throttled and its off-screen rendering
             // suspended, so the sweep crawls and the provider may never mount the
             // turns being scrolled to. Waiting beats exporting a fragment.
@@ -3569,19 +4010,19 @@
             const awaitVisible = async () => {
                 if (!doc.hidden) return true;
                 if (hiddenBudget <= 0) return false;
-
+    
                 console.warn('[Chat Exporter] This tab is in the background — bring it to the front to continue. The export clock is paused while it waits.');
                 emitProgress(describe('hidden'));
                 const startedHidden = now(win);
                 while (doc.hidden && now(win) - startedHidden < hiddenBudget) {
                     await wait(200);
                 }
-
+    
                 const waited = now(win) - startedHidden;
                 hiddenBudget -= waited;
                 // Time spent waiting on a person is not time spent exporting.
                 deadline += waited;
-
+    
                 if (doc.hidden) {
                     console.warn(`[Chat Exporter] Still in the background after ${Math.round(waited / 1000)}s — exporting only what is currently on the page.`);
                     return false;
@@ -3590,7 +4031,7 @@
                 emitProgress(describe('resumed'));
                 return true;
             };
-
+    
             // Minutes of silence during a long sweep are indistinguishable from a
             // hang, which is how a working export gets abandoned.
             let lastProgress = now(win);
@@ -3599,7 +4040,7 @@
                 lastProgress = now(win);
                 console.log(`[Chat Exporter] Sweeping… ${sweepPercent(scroller, upward)}% · ${state.messages.length} messages captured so far.`);
             };
-
+    
             // Wait for the newest answer to stop growing before anything is read,
             // whether or not there is a container to sweep.
             const describe = phase => {
@@ -3612,14 +4053,14 @@
                     lastPreview: last ? normalizeWhitespace(String(last.content).replace(/<[^>]+>/g, ' ')).slice(0, 90) : ''
                 };
             };
-
+    
             emitProgress({ ...describe('start'), provider: provider.id });
-
+    
             if (options.awaitStreaming !== false) emitProgress(describe('streaming'));
             const settled = options.awaitStreaming === false
                 ? true
                 : await awaitStreamingSettled(doc, provider, wait, outOfTime);
-
+    
             // Replaces a container that client-side navigation swapped out from
             // under the sweep; writes to a detached node go nowhere.
             const reattach = scroller => {
@@ -3628,7 +4069,7 @@
                 if (replacement) state.container = replacement;
                 return replacement;
             };
-
+    
             const sweepDownward = async scroller => {
                 // Pin to the top until the container stops growing so providers
                 // that lazily prepend older history finish loading it. Two stable
@@ -3648,9 +4089,9 @@
                     stableHeights = scroller.scrollHeight === previousHeight ? stableHeights + 1 : 0;
                     previousHeight = scroller.scrollHeight;
                 }
-
+    
                 capture();
-
+    
                 // Sweep down in overlapping steps, capturing whatever the
                 // virtualizer renders at each stop. Progress is judged by messages
                 // captured and by reaching the bottom — never by scrollTop alone,
@@ -3664,12 +4105,12 @@
                     const current = reattach(scroller);
                     if (!current) break;
                     scroller = current;
-
+    
                     const beforeTop = scroller.scrollTop;
                     const beforeCount = state.messages.length;
                     scroller.scrollTop = beforeTop + Math.max(scroller.clientHeight * 0.75, 200);
                     await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
-
+    
                     // Turns mount before their text renders. Give the ones that were
                     // not ready a moment and look again here, while they are still on
                     // screen — once the sweep moves on they are gone, and providers
@@ -3679,10 +4120,10 @@
                         await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
                         capture();
                     }
-
+    
                     reportProgress(scroller);
                     emitProgress({ ...describe('sweep'), percent: sweepPercent(scroller) });
-
+    
                     if (scroller.scrollTop > beforeTop || state.messages.length > beforeCount) {
                         stalls = 0;
                         continue;
@@ -3690,7 +4131,7 @@
                     if (scroller.scrollTop >= scrollRange(scroller).bottom - BOTTOM_TOLERANCE) break;
                     if (++stalls >= MAX_SCROLL_STALLS) break;
                 }
-
+    
                 // However the sweep ended — bottom reached, stalled, or out of
                 // steps — finish at the bottom. A stall can end the loop
                 // anywhere, and the final capture used to run at whatever
@@ -3706,7 +4147,7 @@
                 }
                 return scroller;
             };
-
+    
             // A column-reverse transcript (signed-in ChatGPT) opens on its newest
             // message and loads older history only while the view is held at the
             // top, in batches that arrived 1-6 s apart on a real conversation
@@ -3730,12 +4171,12 @@
                 }
                 return scroller.scrollHeight !== height;
             };
-
+    
             const sweepUpward = async scroller => {
                 scroller.scrollTop = scrollRange(scroller).bottom;
                 await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
                 capture();
-
+    
                 let stalls = 0;
                 let guard = 0;
                 while (guard++ < maxScrollSteps && !outOfTime()) {
@@ -3743,7 +4184,7 @@
                     const current = reattach(scroller);
                     if (!current) break;
                     scroller = current;
-
+    
                     const beforeTop = scroller.scrollTop;
                     const beforeCount = state.messages.length;
                     scroller.scrollTop = beforeTop - Math.max(scroller.clientHeight * 0.75, 200);
@@ -3752,13 +4193,13 @@
                         await awaitRenderSettled(doc, scroller, scrollDelay, renderQuiet);
                         capture();
                     }
-
+    
                     reportProgress(scroller, true);
                     // Coverage of what has loaded so far: it reads lower after a
                     // batch of older history lands, rather than sitting at 99%
                     // while half the conversation is still to come.
                     emitProgress({ ...describe('sweep'), percent: sweepPercent(scroller, true) });
-
+    
                     if (scroller.scrollTop < beforeTop || state.messages.length > beforeCount) {
                         stalls = 0;
                         continue;
@@ -3774,14 +4215,14 @@
                 }
                 return scroller;
             };
-
+    
             if (container) {
                 const originalTop = container.scrollTop;
                 let scroller = container;
-
+    
                 try {
                     await awaitVisible();
-
+    
                     if (scrollRange(scroller).reversed) {
                         scroller = await sweepUpward(scroller);
                     } else {
@@ -3799,7 +4240,7 @@
             } else {
                 capture();
             }
-
+    
             // The sweep's deadline bounds the sweep. Reading the stored conversation
             // afterwards has budgets of its own: it is what can still complete an
             // export whose sweep ran out of time (issue #41).
@@ -3816,7 +4257,7 @@
                 // private endpoint must never prevent the conversation export.
                 console.warn('[Chat Exporter] Per-message metadata could not be added:', error);
             }
-
+    
             // Turns that were on screen but never became readable, less those the
             // stored conversation has since filled in. Saying so beats handing
             // over a short file that looks complete.
@@ -3857,7 +4298,7 @@
             }
             return conversation;
         }
-
+    
         // The tab title, minus whatever the provider stamps on it.
         function documentTitleFor(doc, provider) {
             const rawTitle = String(doc.title || '');
@@ -3865,7 +4306,7 @@
                 provider.documentTitleSuffix ? rawTitle.replace(provider.documentTitleSuffix, '') : rawTitle
             );
         }
-
+    
         // First selector in the cascade that yields a non-generic title, if any.
         function selectorTitleFor(doc, provider) {
             for (const selector of provider.titleSelectors) {
@@ -3874,22 +4315,22 @@
             }
             return null;
         }
-
+    
         function extractConversationTitle(doc, provider) {
             const docTitle = documentTitleFor(doc, provider);
             const usableDocTitle = docTitle && !provider.genericTitlePattern.test(docTitle) ? docTitle : '';
-
+    
             // A guessed selector cannot outrank a tab title the provider is known to
             // keep accurate. Gemini's cascade matched its model picker and titled a
             // conversation "Flash-Lite"; the tab said what it actually was.
             if (provider.preferDocumentTitle && usableDocTitle) return usableDocTitle;
-
+    
             const selectorTitle = selectorTitleFor(doc, provider);
             if (selectorTitle) return selectorTitle.title;
-
+    
             return usableDocTitle || provider.defaultTitle;
         }
-
+    
         // ─── Selector health check ───────────────────────────────────────────────
         // Provider markup drifts silently: an export keeps succeeding on a fallback
         // selector until one day nothing matches and the failure reaches a user as
@@ -3897,18 +4338,18 @@
         // this reports what each selector in the shipped cascade actually matches.
         // It is generated into selector-doctor.js from this same source, which is
         // what stops the check itself from drifting away from the exporters.
-
+    
         function describeSelector(doc, provider, selector) {
             const matched = topLevelElements(queryAll(doc, selector));
             const valid = matched.filter(element => isValidMessage(element, provider)).length;
             return { selector, matched: matched.length, valid };
         }
-
+    
         async function probeChatGptApi(doc, options) {
             if (providerFor(options.provider, doc).id !== 'chatgpt') return null;
             const conversationId = chatGptConversationId(doc);
             if (!conversationId) return { conversationId: '', reason: 'no-conversation-id' };
-
+    
             const probeOptions = {
                 ...options,
                 metadataDeadline: now(getWindow(doc)) + (options.metadataMaxDuration ?? METADATA_MAX_DURATION),
@@ -3929,7 +4370,7 @@
                     : 0
             };
         }
-
+    
         // A long conversation can need more wall clock than the sweep is allowed,
         // and the only symptom is a short file with a warning after the fact. The
         // page itself says how far it has to scroll, so the cost is knowable up
@@ -3958,17 +4399,17 @@
                 fitsBudget: bestMs * 2 <= budget
             };
         }
-
+    
         async function diagnose(options = {}) {
             const doc = resolveDocument(options.document);
             const provider = providerFor(options.provider, doc);
             const container = findScrollContainer(doc, provider);
             const messages = findMessages(doc, provider);
-
+    
             const selectorTitle = selectorTitleFor(doc, provider);
             const documentTitle = documentTitleFor(doc, provider);
             const resolvedTitle = extractConversationTitle(doc, provider);
-
+    
             const report = {
                 version: ENGINE_VERSION,
                 provider: provider.id,
@@ -3998,9 +4439,9 @@
                 messagesFound: messages.length,
                 domTimestamps: queryAll(doc, MESSAGE_TIMESTAMP_SELECTOR).length
             };
-
+    
             report.api = await probeChatGptApi(doc, options);
-
+    
             // A cascade that only matches on its last entry still works, and is
             // exactly what a silent drift looks like one release before it breaks.
             const winner = report.messageSelectors.findIndex(entry => entry.valid > 0);
@@ -4024,7 +4465,7 @@
                     ? `This conversation needs about ${report.sweep.steps} scroll steps — ${report.sweep.estimatedSeconds}s at best, ${report.sweep.worstCaseSeconds}s if turns mount slowly — against a ${report.sweep.budgetSeconds}s budget. Export with a larger maxDuration, e.g. ChatExporterEngine.exportConversationFull({ provider: '${provider.id}', format: 'markdown', maxDuration: ${Math.max(120, Math.ceil(report.sweep.worstCaseSeconds * 1.5 / 30) * 30)}000 }).`
                     : '',
             ].filter(Boolean);
-
+    
             // Context, not problems. Mixing the two is how a warning list stops
             // being read at all.
             report.notes = [
@@ -4035,10 +4476,10 @@
                     ? `About ${report.sweep.steps} scroll steps, ~${report.sweep.estimatedSeconds}s of a ${report.sweep.budgetSeconds}s budget.`
                     : ''
             ].filter(Boolean);
-
+    
             return report;
         }
-
+    
         function renderMarkdown(conversation) {
             const source = conversation.sourceUrl
                 ? `**Source:** [${conversation.sourceLabel}](${conversation.sourceUrl})\n`
@@ -4052,15 +4493,15 @@
             if (conversation.complete === false) {
                 lines.push(`> ${incompleteNotice(conversation)}\n`);
             }
-
+    
             conversation.messages.forEach(message => {
                 const timestamp = message.timestamp ? ` · ${message.timestamp}` : '';
                 lines.push(`### **${message.sender}**${timestamp}\n`, message.content, '\n---\n');
             });
-
+    
             return `${lines.join('\n').trim()}\n`;
         }
-
+    
         function incompleteNotice(conversation) {
             return 'Chat Exporter: this export may be incomplete.' +
                 (conversation.unresolvedReports ? ` ${conversation.unresolvedReports} Deep Research report(s) could not be recovered.` : '') +
@@ -4068,7 +4509,7 @@
                 (conversation.unfinishedMessages ? ' A response was unfinished in the stored conversation.' : '') +
                 ' Compare it with the original conversation before relying on it.';
         }
-
+    
         function renderHtmlDocument(conversation, options = {}) {
             const isPdf = options.format === 'pdf';
             const source = sanitizeHtml(conversation.sourceUrl);
@@ -4086,7 +4527,7 @@
                 <div class="content">${message.content}</div>
             </div>`;
             }).join('');
-
+    
             const pdfInstructions = isPdf ? `
         <div class="instructions no-print">
             <h3>Convert to PDF</h3>
@@ -4098,7 +4539,7 @@
             </ol>
             <p><em>This instruction box will not appear in the PDF.</em></p>
         </div>` : '';
-
+    
             return `<!DOCTYPE html>
     <html>
     <head>
@@ -4229,14 +4670,14 @@
     </body>
     </html>`;
         }
-
+    
         function render(conversation, format) {
             if (format === 'markdown') return renderMarkdown(conversation);
             if (format === 'pdf') return renderHtmlDocument(conversation, { format: 'pdf' });
             if (format === 'html') return renderHtmlDocument(conversation, { format: 'html' });
             throw new Error(`Unsupported export format: ${format}`);
         }
-
+    
         // The conversation title has already been through the provider's cascade
         // and suffix cleanup; reading doc.title again here reintroduced whatever
         // the provider stamps on the tab.
@@ -4245,22 +4686,22 @@
                 .replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '')
                 .slice(0, 120)
                 .replace(/[. ]+$/, '');
-
+    
             if (format === 'markdown') {
                 return safeTitle ? `${safeTitle} (${conversation.date}).md` : `${conversation.providerLabel}_Conversation_${conversation.date}.md`;
             }
-
+    
             if (format === 'pdf') {
                 return safeTitle ? `${safeTitle} (${conversation.date}) - PrintToPDF.html` : `${conversation.providerLabel}_Conversation_${conversation.date}_PrintToPDF.html`;
             }
-
+    
             return safeTitle ? `${safeTitle} (${conversation.date}).html` : `${conversation.providerLabel}_Conversation_${conversation.date}.html`;
         }
-
+    
         function mimeFor(format) {
             return format === 'markdown' ? 'text/markdown' : 'text/html';
         }
-
+    
         // Parse just an inline image destination, advancing past each label once.
         // A regex over complete image expressions can rescan megabytes after every
         // malformed opening bracket. Payloads and labels are scanned linearly here.
@@ -4305,7 +4746,7 @@
             if (content[cursor] !== ')') return { next: cursor };
             return { start, end, next: cursor + 1 };
         }
-
+    
         // Keep Markdown readable and portable: image bytes belong beside the text,
         // not in a multi-megabyte data URL. Only rewrite image syntax outside code.
         function bundleMarkdownImages(content, doc) {
@@ -4314,7 +4755,7 @@
             const win = doc ? getWindow(doc) : null;
             const decode = win?.atob?.bind(win) || (typeof atob === 'function' ? atob : null);
             if (!decode) return { content, images };
-
+    
             const tokens = /^([ \t>]*)(`{3,}|~{3,})([^\n]*)(?:\n|$)|(`+)|(!\[)|<(\/?)(small|pre|code)\b[^<>\n]*>/gmi;
             const html = [];
             const parts = [];
@@ -4387,7 +4828,7 @@
             parts.push(content.slice(written));
             return { content: parts.join(''), images };
         }
-
+    
         let crcTable;
         function crc32(bytes) {
             if (!crcTable) {
@@ -4402,7 +4843,7 @@
             for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ crcTable[(crc ^ bytes[i]) & 0xff];
             return (crc ^ 0xffffffff) >>> 0;
         }
-
+    
         // Stored ZIP entries need no third-party library or remote code. Raster
         // images are already compressed. Return Blob parts to avoid copying the
         // entire image collection into another contiguous buffer.
@@ -4434,7 +4875,7 @@
                 header.setUint16(26, name.length, true);
                 local.set(name, 30);
                 parts.push(local, data);
-
+    
                 const central = new Uint8Array(46 + name.length);
                 const entry = new DataView(central.buffer);
                 entry.setUint32(0, 0x02014b50, true);
@@ -4462,7 +4903,7 @@
             footer.setUint32(16, offset, true);
             return [...parts, ...directory, end];
         }
-
+    
         function downloadFile(doc, content, filename, mimeType) {
             const win = getWindow(doc);
             const BlobCtor = win?.Blob || Blob;
@@ -4470,13 +4911,13 @@
             const blob = new BlobCtor(Array.isArray(content) ? content : [content], { type: mimeType });
             const url = urlApi.createObjectURL(blob);
             const anchor = doc.createElement('a');
-
+    
             anchor.href = url;
             anchor.download = filename;
             doc.body.appendChild(anchor);
             anchor.click();
             doc.body.removeChild(anchor);
-
+    
             // Revoking synchronously can abort the download in Firefox-based
             // browsers; give the browser a moment to grab the blob first.
             const revoke = () => urlApi.revokeObjectURL(url);
@@ -4486,7 +4927,7 @@
                 revoke();
             }
         }
-
+    
         function finishExport(doc, conversation, format, options) {
             if (conversation.messages.length === 0) {
                 const message = 'No messages found. The page structure may have changed.';
@@ -4495,7 +4936,7 @@
                 console.warn(`[Chat Exporter] ${message}`);
                 return { conversation, content: '' };
             }
-
+    
             let content = render(conversation, format);
             let filename = options.filename || filenameFor(conversation, format);
             let downloadContent = content;
@@ -4519,12 +4960,12 @@
                     mimeType = 'application/zip';
                 }
             }
-
+    
             if (options.download !== false) {
                 downloadFile(doc, downloadContent, filename, mimeType);
                 console.log(`[Chat Exporter] Exported ${conversation.messages.length} messages to ${filename}`);
             }
-
+    
             // A short file that looks whole is worse than a warning: say so, once,
             // where the reader will see it.
             if (conversation.complete === false && options.notify !== false) {
@@ -4539,10 +4980,10 @@
                     (conversation.unreachedMessages ? ' with a larger maxDuration' : '') + '.';
                 if (typeof win?.alert === 'function') win.alert(message);
             }
-
+    
             return { conversation, content, filename, files };
         }
-
+    
         function exportConversation(options = {}) {
             const doc = resolveDocument(options.document);
             const format = options.format || 'markdown';
@@ -4551,10 +4992,10 @@
                 document: doc,
                 format
             });
-
+    
             return finishExport(doc, conversation, format, options);
         }
-
+    
         async function exportConversationFull(options = {}) {
             const doc = resolveDocument(options.document);
             const format = options.format || 'markdown';
@@ -4563,10 +5004,10 @@
                 document: doc,
                 format
             });
-
+    
             return finishExport(doc, conversation, format, options);
         }
-
+    
         return {
             version: ENGINE_VERSION,
             providers: PROVIDERS,
@@ -4583,6 +5024,7 @@
             },
             internals: {
                 serializeMessageContent,
+                renderGenUiPayload,
                 extractCodeBlock,
                 tableToMarkdown,
                 tableToHtml,
@@ -4597,17 +5039,17 @@
 
     (function initChatExporterProgress(root, factory) {
         const progress = factory();
-
+    
         if (root) {
             root.ChatExporterProgress = progress;
         }
-
+    
         if (typeof module !== 'undefined' && module.exports) {
             module.exports = progress;
         }
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterProgress() {
         'use strict';
-
+    
         // A card pinned over the conversation while a sweep runs, so a long export
         // shows its work instead of looking like a frozen tab.
         //
@@ -4624,10 +5066,10 @@
         //     so the engine can exclude it, sits outside the conversation
         //     container, and is position: fixed so it cannot change the container's
         //     scroll height mid-sweep.
-
+    
         const CONTAINER_ID = 'chat-exporter-progress';
         const LINGER_AFTER_DONE = 2600;
-
+    
         const PHASE_LABEL = {
             start: 'Preparing export…',
             payload: 'Downloading conversation… large chats can take up to a minute',
@@ -4641,7 +5083,7 @@
             metadata: 'Adding timestamps, attachments and any missed messages…',
             done: 'Export complete'
         };
-
+    
         function styleOf(element, styles) {
             Object.keys(styles).forEach(property => {
                 try {
@@ -4651,19 +5093,19 @@
                 }
             });
         }
-
+    
         function element(doc, tag, styles, text) {
             const node = doc.createElement(tag);
             if (styles) styleOf(node, styles);
             if (text !== undefined) node.textContent = text;
             return node;
         }
-
+    
         function formatCount(value) {
             const number = Number(value) || 0;
             return number >= 1000 ? `${Math.floor(number / 1000)},${String(number % 1000).padStart(3, '0')}` : String(number);
         }
-
+    
         function build(doc) {
             const card = element(doc, 'div', {
                 position: 'fixed',
@@ -4687,18 +5129,18 @@
             // Announced politely rather than stealing focus from the page.
             card.setAttribute('role', 'status');
             card.setAttribute('aria-live', 'polite');
-
+    
             const title = element(doc, 'div', {
                 fontWeight: '600',
                 letterSpacing: '0.01em',
                 marginBottom: '8px'
             }, 'Chat Exporter');
-
+    
             const status = element(doc, 'div', {
                 color: '#d4d4d8',
                 marginBottom: '10px'
             }, PHASE_LABEL.start);
-
+    
             const track = element(doc, 'div', {
                 height: '5px',
                 borderRadius: '999px',
@@ -4713,13 +5155,13 @@
                 transition: 'width 200ms ease'
             });
             track.appendChild(bar);
-
+    
             const stats = element(doc, 'div', {
                 marginTop: '10px',
                 color: '#a1a1aa',
                 fontVariantNumeric: 'tabular-nums'
             }, '0 messages');
-
+    
             const preview = element(doc, 'div', {
                 marginTop: '6px',
                 color: '#71717a',
@@ -4727,20 +5169,20 @@
                 overflow: 'hidden',
                 textOverflow: 'ellipsis'
             }, '');
-
+    
             card.appendChild(title);
             card.appendChild(status);
             card.appendChild(track);
             card.appendChild(stats);
             card.appendChild(preview);
-
+    
             return { card, status, bar, stats, preview };
         }
-
+    
         function create(doc, options = {}) {
             const noop = { onProgress() {}, destroy() {} };
             if (!doc || typeof doc.createElement !== 'function' || !doc.body) return noop;
-
+    
             let parts = null;
             try {
                 doc.getElementById(CONTAINER_ID)?.remove();
@@ -4750,11 +5192,11 @@
                 console.warn('[Chat Exporter] Progress display unavailable; the export continues.', error);
                 return noop;
             }
-
+    
             const win = doc.defaultView;
             const setTimer = win?.setTimeout?.bind(win) || setTimeout;
             let removed = false;
-
+    
             const destroy = () => {
                 if (removed) return;
                 removed = true;
@@ -4764,13 +5206,13 @@
                     // Already detached.
                 }
             };
-
+    
             const onProgress = event => {
                 if (removed || !event) return;
                 try {
                     const phase = String(event.phase || '');
                     parts.status.textContent = PHASE_LABEL[phase] || PHASE_LABEL.sweep;
-
+    
                     if (typeof event.percent === 'number') {
                         parts.bar.style.width = `${Math.max(0, Math.min(100, event.percent))}%`;
                     }
@@ -4779,22 +5221,22 @@
                     } else if (phase !== 'done') {
                         parts.bar.style.background = '#22c55e';
                     }
-
+    
                     const pieces = [`${formatCount(event.messages)} message${event.messages === 1 ? '' : 's'}`];
                     if (event.lines) pieces.push(`${formatCount(event.lines)} lines`);
                     if (phase === 'done' && event.expectedMessages) {
                         pieces[0] = `${formatCount(event.messages)} of ${formatCount(event.expectedMessages)} messages`;
                     }
                     parts.stats.textContent = pieces.join(' · ');
-
+    
                     if (event.lastPreview) {
                         parts.preview.textContent = event.lastSender
                             ? `${event.lastSender}: ${event.lastPreview}`
                             : event.lastPreview;
                     }
-
+    
                     if (phase !== 'done') return;
-
+    
                     // Say plainly when the file is short: a green bar over an
                     // incomplete export is worse than no bar at all.
                     if (event.complete === false) {
@@ -4812,7 +5254,7 @@
                                 `Export complete — ${formatCount(event.recoveredMessages)} recovered from ChatGPT's record`;
                         }
                     }
-
+    
                     if (options.linger === false) {
                         destroy();
                         return;
@@ -4830,10 +5272,10 @@
                     destroy();
                 }
             };
-
+    
             return { onProgress, destroy };
         }
-
+    
         return { create, CONTAINER_ID };
     });
 

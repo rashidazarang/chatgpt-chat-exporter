@@ -3421,3 +3421,276 @@ test('full extraction without a scrollable container matches single-pass output'
 
     assert.deepEqual(full.messages.map(m => m.content), single.messages.map(m => m.content));
 });
+
+// ── GPT-6 generative-UI payloads (issue #47) ────────────────────────────────
+// A GPT-6 reply can be component source instead of markdown: ChatGPT stores the
+// widget's source and compiles it into the controls the reader sees, so a
+// payload-first read wrote `{@body const [choice,setChoice] = …}` and
+// `<radio-group …>` into the reader's file. Markdown cannot hold the
+// interaction, so the export keeps what the reader could read. The fixture is
+// synthetic — the issue's screenshots supplied the component shapes, never the
+// conversation.
+
+function genUiFixture() {
+    return JSON.parse(readFixture('chatgpt-genui-payload.json'));
+}
+
+// One turn per entry, in order; `body` is that turn's payload part.
+function payloadWithWidgetParts(parts) {
+    const payload = payloadWithMessages(parts.map((unused, index) => `w${index + 1}`));
+    parts.forEach((part, index) => {
+        const message = payload.mapping[`node-w${index + 1}`].message;
+        message.author.role = part.role;
+        message.content = { content_type: 'text', parts: [part.body] };
+        if (part.references) message.metadata.content_references = part.references;
+    });
+    return payload;
+}
+
+async function extractWidgetPayload(parts, url) {
+    const dom = payloadDom(url || 'https://chatgpt.com/c/widget-conversation');
+    dom.window.fetch = chatGptBackendStub({ payload: payloadWithWidgetParts(parts) }).fetch;
+    return engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+}
+
+// A file meant to be read holds no component source.
+function assertNoComponentSource(value) {
+    assert.doesNotMatch(value, /\{@/, 'the widget state preamble is dropped');
+    assert.doesNotMatch(value, /<\/?[a-zA-Z][\w.-]*(\s[^<>]*)?\/?>/, 'no element markup is left');
+    assert.doesNotMatch(value, /onClick=|onChange=|useState\(/, 'no handler or state source is left');
+}
+
+test('a markdown reply is exported exactly as the payload holds it (issue #47)', async () => {
+    // The payload path is the one the fix touches, so every ordinary shape it
+    // already handled is pinned here byte for byte.
+    const bodies = [
+        'Plain prose with **bold**, *italic*, a list\n\n1. first\n2. second\n\nand a [link](https://example.com).',
+        '| Tool | Metric |\n| --- | --- |\n| Harness | task completion |\n| Policy | success rate |',
+        'The inline form is $\\Delta J$ and the block form is\n\n$$\\Delta J = J_{after} - J_{before}$$',
+        '```javascript\nconst exportWidget = value => value + 1;\n```',
+        '```python\ndef delta(after, before):\n    return after - before\n```',
+        '![Roast curve](https://example.com/curve.png)',
+        '# Heading\n\n> Quote\n\n`inline code`',
+        // Nothing here is widget source, so nothing here may be rewritten.
+        'If a < b and b > c, then a < c.',
+        'Wrap the card in a <div> and the label in a <span>.',
+        'The `<button>` tag is the one you want, and `<radio-group>` too.'
+    ];
+
+    for (const body of bodies) {
+        const conversation = await extractWidgetPayload([
+            { role: 'user', body: 'Please keep the formatting.' },
+            { role: 'assistant', body }
+        ]);
+        assert.equal(conversation.messages[1].content, body, `unchanged: ${body.split('\n')[0]}`);
+    }
+});
+
+test('GPT-6 interactive controls export as the options the reader saw (issue #47)', async () => {
+    const fixture = genUiFixture();
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: 'Which cup size should I order?' },
+        { role: 'assistant', body: fixture.selection }
+    ]);
+    const answer = conversation.messages[1].content;
+
+    assertNoComponentSource(answer);
+    assert.deepEqual(answer.match(/^- .+$/gm), [
+        '- Small — one espresso shot',
+        '- Medium — two shots and steamed milk',
+        '- Large — two shots, milk and a second cup'
+    ], 'every option, in the order it was offered');
+    assert.match(answer, /^\*\*继续操作\*\*$/m, 'the action keeps the text its button showed');
+    assert.doesNotMatch(answer, /Order the small one/,
+        'the click handler\'s own arguments are not the message');
+});
+
+test('layout containers keep their body text and never repeat it (issue #47)', async () => {
+    const fixture = genUiFixture();
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: 'Show me the roast log file.' },
+        { role: 'assistant', body: fixture.layoutCard }
+    ]);
+    const answer = conversation.messages[1].content;
+
+    assertNoComponentSource(answer);
+    assert.match(answer, /^---$/m, 'the divider is a rule, not a component');
+    for (const phrase of ['Roast log 2026.md', 'Markdown 文件内容示例', 'Batch 114', 'The first crack landed early.']) {
+        assert.equal(answer.split(phrase).length - 1, 1, `"${phrase}" appears exactly once`);
+    }
+});
+
+test('nested interactive components neither repeat nor lose text (issue #47)', async () => {
+    const fixture = genUiFixture();
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: 'How should I order?' },
+        { role: 'assistant', body: fixture.nestedGroups }
+    ]);
+    const answer = conversation.messages[1].content;
+
+    assertNoComponentSource(answer);
+    assert.deepEqual(answer.match(/^- .+$/gm), ['- 在店里喝', '- 打包带走', '- 小杯', '- 大杯'],
+        'each group contributes its own options, once, in order');
+    for (const label of ['出杯方式', '在店里喝', '打包带走', '小杯', '大杯', '确认下单']) {
+        assert.equal(answer.split(label).length - 1, 1, `"${label}" appears exactly once`);
+    }
+    assert.match(answer, /^\*\*确认下单\*\*$/m);
+});
+
+test('component names inside code are the reader\'s code, not a component (issue #47)', async () => {
+    const fixture = genUiFixture();
+
+    // A reply that is only code keeps every character, markers and all.
+    const codeOnly = await extractWidgetPayload([
+        { role: 'user', body: 'Why does this markup not render?' },
+        { role: 'assistant', body: fixture.codeAboutComponents }
+    ]);
+    assert.equal(codeOnly.messages[1].content, fixture.codeAboutComponents);
+
+    const inlineOnly = await extractWidgetPayload([
+        { role: 'user', body: 'Which tag should I use?' },
+        { role: 'assistant', body: fixture.inlineCodeAboutComponents }
+    ]);
+    assert.equal(inlineOnly.messages[1].content, fixture.inlineCodeAboutComponents);
+
+    // And in a reply that also holds a real widget, the code is left alone
+    // while the widget beside it still converts. This is the case a global
+    // strip of angle brackets would break.
+    const both = await extractWidgetPayload([
+        { role: 'user', body: 'Show me the tag, then the picker.' },
+        { role: 'assistant', body: `${fixture.codeAboutComponents}\n\n${fixture.selection}` }
+    ]);
+    const answer = both.messages[1].content;
+    assert.ok(answer.includes(fixture.codeAboutComponents), 'the fenced block survives untouched');
+    assert.match(answer, /^- Small — one espresso shot$/m, 'and the widget converts beside it');
+});
+
+test('a component this release does not know degrades instead of leaking source (issue #47)', async () => {
+    const fixture = genUiFixture();
+
+    const withText = await extractWidgetPayload([
+        { role: 'user', body: 'How was it rated?' },
+        { role: 'assistant', body: fixture.unknownWithText }
+    ]);
+    assert.equal(withText.messages[1].content, '4 of 5 beans',
+        'an unknown component with text keeps what it showed');
+
+    const empty = await extractWidgetPayload([
+        { role: 'user', body: 'Show me the curve.' },
+        { role: 'assistant', body: fixture.unknownEmpty }
+    ]);
+    const answer = empty.messages[1].content;
+    assertNoComponentSource(answer);
+    assert.match(answer, /The roast curve is below\./);
+    assert.match(answer, /\[Chat Exporter: an unsupported "chart" component was not converted\]/,
+        'a picture of data is named rather than dropped or faked');
+});
+
+test('plain and widget replies keep their order in one conversation (issue #47)', async () => {
+    const fixture = genUiFixture();
+    const parts = [
+        { role: 'user', body: 'First: summarise the roast.' },
+        { role: 'assistant', body: 'Batch 114 finished at 11:40.' },
+        { role: 'user', body: 'Second: which tag is it?' },
+        { role: 'assistant', body: fixture.codeAboutComponents },
+        { role: 'user', body: 'Third: which cup size?' },
+        { role: 'assistant', body: fixture.selection },
+        { role: 'user', body: 'Fourth: show the file card.' },
+        { role: 'assistant', body: fixture.layoutCard },
+        { role: 'user', body: 'Fifth: plain again.' },
+        { role: 'assistant', body: 'Plain answer, unchanged.' }
+    ];
+    const conversation = await extractWidgetPayload(parts);
+
+    assert.equal(conversation.complete, true);
+    assert.deepEqual(conversation.messages.map(message => message.senderType),
+        ['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+    assert.deepEqual(conversation.messages.map(message => message.index), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+    const [text, code, widget, card, plain] = [1, 3, 5, 7, 9].map(index => conversation.messages[index].content);
+    assert.equal(text, 'Batch 114 finished at 11:40.');
+    assert.equal(code, fixture.codeAboutComponents);
+    assert.match(widget, /^- Small — one espresso shot$/m);
+    assert.match(card, /Roast log 2026\.md/);
+    assert.equal(plain, 'Plain answer, unchanged.');
+});
+
+test('attachment images and citations still resolve beside a widget reply (issue #47)', async () => {
+    const fixture = genUiFixture();
+    const payload = payloadWithMessages(['i1', 'i2', 'i3', 'i4']);
+    payload.mapping['node-i1'].message.content = {
+        content_type: 'multimodal_text',
+        parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'file-service://file-shot' }]
+    };
+    payload.mapping['node-i1'].message.metadata.attachments = [
+        { id: 'file-shot', name: 'screenshot.png', mime_type: 'image/png' }
+    ];
+    payload.mapping['node-i4'].message.content = { content_type: 'text', parts: [fixture.selection] };
+    payload.mapping['node-i4'].message.metadata.content_references = [{
+        matched_text: fixture.citeReference.matchedText,
+        type: 'grouped_webpages',
+        items: fixture.citeReference.items
+    }];
+    payload.mapping['node-i4'].message.content.parts = [`${fixture.selection}\n\n${fixture.citeRow}`];
+
+    const dom = payloadDom('https://chatgpt.com/c/widget-with-media');
+    dom.window.fetch = async (input, init) => {
+        if (String(input).includes('/backend-api/files/download/')) {
+            return { ok: true, status: 200,
+                headers: { get: name => (String(name).toLowerCase() === 'content-type' ? 'image/png' : null) },
+                arrayBuffer: async () => Uint8Array.from([137, 80, 78, 71]).buffer };
+        }
+        return chatGptBackendStub({ payload }).fetch(input, init);
+    };
+
+    const conversation = await engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format: 'markdown', awaitStreaming: false
+    });
+
+    assert.equal(conversation.messages.length, 4);
+    assert.match(conversation.messages[0].content, /!\[screenshot\.png\]\(data:image\/png;base64,/,
+        'the upload is still embedded');
+    const answer = conversation.messages[3].content;
+    assertNoComponentSource(answer);
+    assert.ok(!/[\uE200-\uE20F]/.test(answer), 'no private-use marker survives');
+    assert.match(answer, /^- Medium — two shots and steamed milk$/m, 'the widget still converts');
+    assert.match(answer, /\[Roast notes\]\(https:\/\/example\.com\/roast-notes\)/,
+        'the widget\'s own citation becomes the source it points at');
+    assert.match(answer, /\*\*References:\*\*/);
+});
+
+test('a prompt that pastes component source is the reader\'s text, not a widget', async () => {
+    // Only an assistant turn is compiled by ChatGPT, so only an assistant turn
+    // is converted. A prompt must still read back as it was typed.
+    const pasted = '<radio-group value={choice}>\n  <radio value="a">A</radio>\n</radio-group>';
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: `Can you fix this?\n\n${pasted}` },
+        { role: 'assistant', body: 'Yes — the group needs a value.' }
+    ]);
+
+    assert.equal(conversation.messages[0].source, 'payload');
+    assert.match(conversation.messages[0].content, /<radio-group value=\{choice\}>/,
+        'a prompt is never rewritten');
+    assert.equal(conversation.messages[1].content, 'Yes — the group needs a value.');
+});
+
+test('a widget part that never closes still renders everything it held (issue #47)', async () => {
+    // A stopped reply leaves the source open mid-document; the reader still saw
+    // the options above the cut.
+    const fixture = genUiFixture();
+    const truncated = fixture.selection.slice(0, fixture.selection.indexOf('</radio-group>'));
+    const conversation = await extractWidgetPayload([
+        { role: 'user', body: 'Which size?' },
+        { role: 'assistant', body: truncated }
+    ]);
+    const answer = conversation.messages[1].content;
+
+    assertNoComponentSource(answer);
+    assert.deepEqual(answer.match(/^- .+$/gm), [
+        '- Small — one espresso shot',
+        '- Medium — two shots and steamed milk',
+        '- Large — two shots, milk and a second cup'
+    ]);
+});
