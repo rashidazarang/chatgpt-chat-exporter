@@ -4952,6 +4952,7 @@
             let fence = null;
             let inlineEnd = -1;
             let htmlStart = -1;
+            let htmlScan = -1;
             let written = 0;
             const escaped = offset => {
                 let slashes = 0;
@@ -4975,7 +4976,7 @@
                             // it must not keep suppressing media for the whole file.
                             const at = html.lastIndexOf(name);
                             if (at >= 0) html.length = at;
-                            if (!html.length) htmlStart = -1;
+                            if (!html.length) { htmlStart = -1; htmlScan = -1; }
                         }
                     }
                     continue;
@@ -4988,10 +4989,17 @@
                     // strand every later image as an inline data URL in the reader's
                     // file instead of a local image beside it (issue #47 P3).
                     const recap = html.includes('small');
-                    const ended = recap && htmlStart >= 0 && /\n[ \t]*\n/.test(content.slice(htmlStart, offset));
-                    if (!ended) continue;
+                    const from = Math.max(htmlStart, htmlScan);
+                    const ended = recap && htmlStart >= 0 && /\n[ \t]*\n/.test(content.slice(from, offset));
+                    // Each character is tested for the blank line at most once, so a
+                    // recap that never closes cannot turn the scan quadratic.
+                    if (!ended) {
+                        if (recap) htmlScan = offset;
+                        continue;
+                    }
                     html.length = 0;
                     htmlStart = -1;
+                    htmlScan = -1;
                     fence = null;
                     inlineEnd = -1;
                 }
