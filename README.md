@@ -442,6 +442,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/EXPORTER_GUIDE.md](docs/EXPORTE
 
 ---
 
+## 👤 Author
+
+Built by [Rashid Azarang](https://rashidazarang.com), Senior AI Engineer in Mexico. Available for contract work on AI agents, LLM evaluation and MCP servers: [rashidazarang.com/contact](https://rashidazarang.com/contact).
+
 ## 📜 License
 
 [MIT](LICENSE)
