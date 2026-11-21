@@ -24,7 +24,7 @@ No install, no server, no account: everything runs locally in your browser.
 - 📄 Exports to **Markdown**, **HTML**, or **printable PDF**
 - 🆕 **Google Gemini** conversation export support
 - 🔒 **Private by default**: exports show the provider label without embedding your exact conversation URL
-- 🧩 Integrates with ChatGPT's native conversation and Share menus — and falls back to a floating **Export** button when your account has no Share control (e.g. enterprise policies)
+- 🧩 Integrates with ChatGPT's native conversation and Share menus — and adds a matching header **Share** button when the native control is missing, including in temporary chats
 - 🚀 Works directly from the browser console — or install as a userscript
 - 🛡️ One shared, tested extraction engine powers every exporter, with multiple selector fallbacks to survive UI changes
 
@@ -56,7 +56,7 @@ No install, no server, no account: everything runs locally in your browser.
 3. Open a ChatGPT conversation, then either:
    - Open the conversation's **•••** menu and choose **Export to Markdown** or **Export to PDF**.
    - Click the header **Share** button and choose **Share…**, **Copy link**, **Export to Markdown**, or **Export to PDF**.
-   - If your account has no Share control at all (sharing disabled by an enterprise policy, for example), a floating **Export** button appears in the bottom-right corner with the same options.
+   - If the native Share button is missing (in a temporary chat or when sharing is disabled), a matching **Share** button appears in the conversation header with **Export to Markdown** and **Export to PDF**. It disappears when ChatGPT supplies its own Share button.
 
 ### Method 2: Browser Console
 
@@ -399,7 +399,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/EXPORTER_GUIDE.md](docs/EXPORTE
 - **Long conversation exports only a fragment, or turns come out in the wrong order** — update to v1.2.0 or later. ChatGPT Markdown first downloads the stored conversation, allowing up to 60 seconds per request; watch the progress card. If it falls back to scrolling, keep the tab visible. Advanced callers can set `conversationFetchTimeout` and `conversationMaxDuration` on `ChatExporterEngine.exportConversationFull(...)`; optional enrichment uses `metadataFetchTimeout` / `metadataMaxDuration`. An incomplete file carries a warning inside the export.
 - **`GET https://chatgpt.com/backend-api/conversation/… 404 (Not Found)` in the console** — fixed in **v0.9.3**; update your copy of the exporter. ChatGPT reports a request that lacks the app's bearer token as a 404 rather than a 401, and versions before v0.9.3 only retried with the token after a 401, so the retry never ran. The export itself was never affected — only the optional per-turn metadata (timestamps, attachment names, reasoning recaps) was lost. If v0.9.3 still can't read it, the console now says why: signed out, refused, or a conversation with no stored copy (a temporary chat, a shared link, or a deleted conversation).
 - **An image is shown as a link or placeholder instead of embedded data** — the exporter embeds safe raster images up to 20 MB each (50 MB total). If ChatGPT's authenticated file endpoint or the browser canvas cannot provide the bytes, the export keeps the HTTPS source or an explicit image placeholder rather than dropping the turn.
-- **Export actions don't appear** — confirm the userscript is enabled for `chatgpt.com`, reload the page, and open a conversation's **•••** or header **Share** menu. On accounts with no Share control (v0.8.1+), look for the floating **Export** button in the bottom-right corner instead; you can also force it on from the console with `ChatExporter.showLauncher()`, or export directly with `ChatExporter.markdown()` / `ChatExporter.pdf()`.
+- **Export actions don't appear** — confirm the userscript is enabled for `chatgpt.com`, reload the page, and open a conversation's **•••** or header **Share** menu. When the native Share control is missing, look for the matching **Share** button in the conversation header after the chat has messages. You can also export directly with `ChatExporter.markdown()` / `ChatExporter.pdf()`.
 - **Downloads blocked in the console** — some browsers require you to allow downloads/popups triggered from DevTools; the userscript method avoids this.
 
 ---

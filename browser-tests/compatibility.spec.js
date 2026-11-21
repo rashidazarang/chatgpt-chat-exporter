@@ -56,6 +56,20 @@ async function downloadedText(download) {
     return fs.readFile(await download.path(), 'utf8');
 }
 
+for (const script of ['chatgpt-markdown-exporter.user.js', 'chatgpt-pdf-exporter.user.js']) {
+    test(`${script}: temporary Save chat header receives Share without an inner div`, async ({ page }) => {
+        const errors = await mount(page, {
+            script, strict: true,
+            extra: '<header><div data-app-shell-main-titlebar><div data-app-shell-header-obstacle><div class="pointer-events-auto" id="temp-actions"><span class="contents"><button aria-label="Save chat" disabled>Save chat</button></span></div></div></div></header>'
+        });
+        const share = page.locator('#temp-actions > #chat-exporter-share-button');
+        await expect(share).toBeVisible();
+        await share.click();
+        await expect(page.locator('#chat-exporter-share-menu [role="menuitem"]')).toHaveText(['Export to Markdown', 'Export to PDF']);
+        expect(errors).toEqual([]);
+    });
+}
+
 for (const provider of ['chatgpt', 'gemini']) {
     for (const format of ['markdown', 'html', 'pdf']) {
         test(`${provider} ${format}: real download preserves rich content, images, math and repeated turns`, async ({ page }) => {
@@ -135,16 +149,16 @@ for (const [id, script] of runners) {
 for (const script of ['chatgpt-markdown-exporter.user.js', 'chatgpt-pdf-exporter.user.js']) {
     for (const label of ['Export to Markdown', 'Export to PDF']) {
         test(`${script}: ${label} without Share under strict CSP and Trusted Types`, async ({ page, browserName }) => {
-            const errors = await mount(page, { script, strict: true });
+            const errors = await mount(page, { script, strict: true, extra: '<header><div id="conversation-header-actions"></div></header>' });
             if (browserName === 'chromium') {
                 expect(await page.evaluate(() => {
                     try { new DOMParser().parseFromString('<svg/>', 'image/svg+xml'); return false; }
                     catch (error) { return error instanceof TypeError; }
                 })).toBe(true);
             }
-            await expect(page.locator('#chat-exporter-launcher svg')).toBeVisible();
-            await page.locator('#chat-exporter-launcher').click();
-            await expect(page.locator('#chat-exporter-share-menu svg')).toHaveCount(3);
+            await expect(page.locator('#chat-exporter-share-button svg')).toBeVisible();
+            await page.locator('#chat-exporter-share-button').click();
+            await expect(page.locator('#chat-exporter-share-menu svg')).toHaveCount(2);
             const downloading = page.waitForEvent('download');
             await page.getByRole('menuitem', { name: label, exact: true }).click();
             expect(await downloadedText(await downloading)).toContain('Synthetic prompt');
@@ -288,10 +302,10 @@ test('signed-in ChatGPT: a sweep reads a column-reverse transcript from its olde
     expect(errors).toEqual([]);
 });
 
-test('chatgpt 2026 transcript: the userscript launcher exports it under strict CSP', async ({ page }) => {
-    const errors = await mount(page, { html: await transcript2026(), script: 'chatgpt-markdown-exporter.user.js', strict: true });
-    await expect(page.locator('#chat-exporter-launcher')).toBeVisible();
-    await page.locator('#chat-exporter-launcher').click();
+test('chatgpt 2026 transcript: the userscript header Share button exports it under strict CSP', async ({ page }) => {
+    const errors = await mount(page, { html: await transcript2026(), script: 'chatgpt-markdown-exporter.user.js', strict: true, extra: '<header><div id="conversation-header-actions"></div></header>' });
+    await expect(page.locator('#chat-exporter-share-button')).toBeVisible();
+    await page.locator('#chat-exporter-share-button').click();
     const downloading = page.waitForEvent('download');
     await page.getByRole('menuitem', { name: 'Export to Markdown', exact: true }).click();
     const text = await downloadedText(await downloading);
