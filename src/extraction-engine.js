@@ -1824,37 +1824,51 @@
     // a button's text, links, citations, code — and drop the machinery.
     // Nothing is evaluated: attributes are read as text, expressions skipped.
 
-    const DIL_LAYOUT = new Set(['box', 'col', 'column', 'stack', 'grid', 'card', 'form', 'appblock', 'asyncimagegroup']);
+    // Names are matched case-sensitively. The source spells layouts and
+    // controls in lower case and its own components in PascalCase, so
+    // `Option<Card>` or `List<Row>` in prose is never one of them.
+    const DIL_LAYOUT = new Set(['box', 'stack', 'grid', 'card', 'form', 'AppBlock', 'AsyncImageGroup']);
     const DIL_OPTIONS = new Set(['radio', 'checkbox', 'option', 'segment', 'tab']);
-    const DIL_GROUPS = new Set(['select', 'tabs']);
-    const DIL_COMPONENTS = new Set([...DIL_LAYOUT, ...DIL_OPTIONS, ...DIL_GROUPS, 'row', 'text', 'title', 'icon',
-        'divider', 'separator', 'button', 'slider', 'link', 'cite', 'codeblock', 'image', 'asyncimage', 'entity']);
-    // Names that are evidence of interface source on their own. `<button>`,
-    // `<form>`, `<text>`, `<title>`, `<option>`, `<link>` and `<cite>` are
-    // HTML-shaped, so a message written *about* them is not converted on their
-    // account.
-    const DIL_EVIDENCE = new Set([...DIL_LAYOUT, 'row', 'radio', 'checkbox', 'segment', 'icon', 'divider',
-        'slider', 'codeblock', 'asyncimage', 'entity']);
-    DIL_EVIDENCE.delete('form');
-    const DIL_PASCAL_EVIDENCE = new Set(['link', 'cite', 'image']);
-    // A custom element name — `radio-group`, `segmented-control` — which no
-    // HTML tag Markdown carries has. One-letter parts keep `$x<a-b$` maths out.
-    const DIL_CUSTOM_NAME = /^[a-z]{2,}(?:-[a-z]{2,})+$/;
-    // How far one tag, statement or binding may run. Bounded so that a stray
-    // `<box` or `{` with no end cannot make the scan quadratic.
-    const DIL_TAG_LIMIT = 8192;
-    const DIL_STATEMENT_LIMIT = 65536;
-    const DIL_BINDING_LIMIT = 4096;
+    const DIL_GROUPS = new Set(['radio-group', 'checkbox-group', 'toggle-group', 'segmented-control', 'select', 'tabs']);
+    // Elements that hold nothing. One written without `/>` must not swallow
+    // the text after it.
+    const DIL_VOID = new Set(['icon', 'divider', 'separator', 'slider', 'Cite', 'Image', 'AsyncImage']);
+    const DIL_COMPONENTS = new Set([...DIL_LAYOUT, ...DIL_OPTIONS, ...DIL_GROUPS, ...DIL_VOID,
+        'row', 'text', 'title', 'button', 'Link', 'CodeBlock', 'Entity']);
+    // Evidence that a part is interface source, which is what licenses
+    // converting it at all. A lower-case tag counts only with an expression
+    // attribute (`gap={3}`, `onChange={setChoice}`), which HTML never has, or
+    // as `<icon name="…">`; a component counts only with an attribute
+    // (`<Cite ref="…"/>`, `<Link url="…"/>`). A bare `<row>` or `<Link>` in a
+    // sentence is someone's prose.
+    const DIL_PASCAL = new Set(['Link', 'Cite', 'CodeBlock', 'Image', 'AsyncImage', 'AsyncImageGroup', 'Entity', 'AppBlock']);
+    const DIL_LOWER_EVIDENCE = new Set(['box', 'row', 'stack', 'grid', 'card', 'icon', 'divider', 'slider',
+        'radio', 'checkbox', 'segment', 'radio-group', 'checkbox-group', 'toggle-group', 'segmented-control']);
+    // How far one tag, statement or binding may run, and how deep elements
+    // nest. Bounded so that malformed input cannot make the scan quadratic or
+    // the rendering recurse past the stack.
+    const DIL_TAG_LIMIT = 4096;
+    const DIL_STATEMENT_LIMIT = 4096;
+    const DIL_BINDING_LIMIT = 256;
+    const DIL_MAX_DEPTH = 64;
 
     function isDilComponent(name) {
-        return DIL_COMPONENTS.has(name.toLowerCase()) || DIL_CUSTOM_NAME.test(name);
+        return DIL_COMPONENTS.has(name);
     }
 
-    function isDilEvidence(name) {
-        const lower = name.toLowerCase();
-        return DIL_EVIDENCE.has(lower) || DIL_CUSTOM_NAME.test(name) ||
-            (DIL_PASCAL_EVIDENCE.has(lower) && /^[A-Z]/.test(name)) || name === 'CodeBlock';
+    function isDilEvidenceName(name) {
+        return DIL_PASCAL.has(name) || DIL_LOWER_EVIDENCE.has(name);
     }
+
+    function isDilEvidence(name, region) {
+        if (DIL_PASCAL.has(name)) return /[A-Za-z]/.test(region);
+        if (!DIL_LOWER_EVIDENCE.has(name)) return false;
+        return /[\w-]\s*=\s*\{/.test(region) || (name === 'icon' && /\bname\s*=\s*["']/.test(region));
+    }
+
+    // `{@body …}` opens a line of state. Svelte's `{@html}`, `{@const}` and
+    // JSDoc's `{@link}` are other things, and stay.
+    const DIL_STATEMENT = /^[ \t]*\{@body\b/;
 
     // Where a quoted, braced construct ends: the index after its closing
     // character, or -1. Quotes include backticks, so a template literal in a
@@ -2011,10 +2025,26 @@
             const char = source[at];
 
             if (at === 0 || source[at - 1] === '\n') {
-                const fence = /^[ \t]*(`{3,}|~{3,})/.exec(source.slice(at, at + 256));
+                const line = source.slice(at, at + 256);
+                const fence = /^[ \t]*(`{3,}|~{3,})/.exec(line);
                 if (fence) {
                     const end = dilFenceEnd(source, at, fence[1]);
                     text += source.slice(at, end);
+                    at = end;
+                    continue;
+                }
+                // `{@body …}` sets up state; the reader never sees it. A
+                // statement cut off mid-stream ends with its line.
+                const statement = DIL_STATEMENT.exec(line);
+                if (statement) {
+                    const open = at + statement[0].length - '{@body'.length;
+                    let end = dilScanEnd(source, open, DIL_STATEMENT_LIMIT, '}');
+                    if (end < 0) {
+                        const lineEnd = source.indexOf('\n', open);
+                        end = lineEnd < 0 ? source.length : lineEnd;
+                    }
+                    evidence = true;
+                    flush();
                     at = end;
                     continue;
                 }
@@ -2031,25 +2061,12 @@
 
             if (char === '{') {
                 const next = source[at + 1] || '';
-                // `{@body …}` sets up state; the reader never sees it. A
-                // statement cut off mid-stream ends with its line.
-                if (next === '@' && /[a-z]/.test(source[at + 2] || '')) {
-                    let end = dilScanEnd(source, at, DIL_STATEMENT_LIMIT, '}');
-                    if (end < 0) {
-                        const lineEnd = source.indexOf('\n', at);
-                        end = lineEnd < 0 ? source.length : lineEnd;
-                    }
-                    evidence = true;
-                    flush();
-                    at = end;
-                    continue;
-                }
                 // `{#if …}`, `{:else}`, `{/each}`: only the keyword goes. Every
                 // branch's text stays, since which one showed is runtime state.
+                // Not evidence on its own: Svelte writes the same blocks.
                 if (/^\{(?:#(?:if|each|key|await)\s|:(?:else|then|catch)\b|\/(?:if|each|key|await)\s*\})/.test(source.slice(at, at + 12))) {
                     const end = dilScanEnd(source, at, DIL_BINDING_LIMIT, '}');
                     if (end > 0) {
-                        evidence = true;
                         flush();
                         at = end;
                         continue;
@@ -2065,46 +2082,42 @@
             }
 
             if (char === '<') {
-                const tag = /^<(\/?)([A-Za-z][\w-]*)/.exec(source.slice(at, at + 64));
-                if (tag && isDilComponent(tag[2])) {
-                    const name = tag[2].toLowerCase();
-                    if (tag[1]) {
-                        const end = source.indexOf('>', at);
-                        let open = stack.length - 1;
-                        while (open > 0 && stack[open].name !== name) open--;
-                        if (end > 0 && open > 0) {
-                            flush();
-                            stack.length = open;
-                            at = end + 1;
+                const closing = /^<\/([A-Za-z][\w-]*)\s*>/.exec(source.slice(at, at + 64));
+                if (closing && isDilComponent(closing[1])) {
+                    // Close the nearest open element of that name; anything
+                    // still open inside it closes with it. A closing tag with
+                    // nothing to close is machinery too, and goes.
+                    let open = stack.length - 1;
+                    while (open > 0 && stack[open].name !== closing[1]) open--;
+                    flush();
+                    if (open > 0) stack.length = open;
+                    at += closing[0].length;
+                    continue;
+                }
+                const tag = /^<([A-Za-z][\w-]*)/.exec(source.slice(at, at + 64));
+                if (tag && isDilComponent(tag[1])) {
+                    const name = tag[1];
+                    const end = dilScanEnd(source, at + tag[0].length, DIL_TAG_LIMIT, '>');
+                    if (end > 0) {
+                        const region = source.slice(at + tag[0].length, end - 1);
+                        flush();
+                        if (isDilEvidence(name, region)) evidence = true;
+                        const element = { name, attributes: dilAttributes(region), children: [] };
+                        top().children.push(element);
+                        at = end;
+                        if (/\/\s*$/.test(region) || DIL_VOID.has(name)) continue;
+                        if (name === 'CodeBlock') {
+                            // A code block's body is the reader's code, kept
+                            // byte for byte up to its own closing tag.
+                            const close = /<\/CodeBlock\s*>/g;
+                            close.lastIndex = at;
+                            const found = close.exec(source);
+                            element.children.push({ raw: source.slice(at, found ? found.index : source.length) });
+                            at = found ? found.index + found[0].length : source.length;
                             continue;
                         }
-                    } else {
-                        const end = dilScanEnd(source, at + tag[0].length, DIL_TAG_LIMIT, '>');
-                        if (end > 0) {
-                            flush();
-                            if (isDilEvidence(tag[2])) evidence = true;
-                            const selfClosing = source[end - 2] === '/';
-                            const element = {
-                                name,
-                                attributes: dilAttributes(source.slice(at + tag[0].length, end - 1)),
-                                children: []
-                            };
-                            top().children.push(element);
-                            at = end;
-                            if (selfClosing) continue;
-                            if (name === 'codeblock') {
-                                // A code block's body is the reader's code, kept
-                                // byte for byte up to its own closing tag.
-                                const close = /<\/codeblock\s*>/gi;
-                                close.lastIndex = at;
-                                const found = close.exec(source);
-                                element.children.push({ raw: source.slice(at, found ? found.index : source.length) });
-                                at = found ? found.index + found[0].length : source.length;
-                                continue;
-                            }
-                            stack.push(element);
-                            continue;
-                        }
+                        if (stack.length < DIL_MAX_DEPTH) stack.push(element);
+                        continue;
                     }
                 }
             }
@@ -2141,7 +2154,10 @@
         let code = raw.replace(/^[ \t]*\n/, '').replace(/\s+$/, '');
         if (code.trim()) {
             const lines = code.split('\n');
-            const indent = Math.min(...lines.filter(line => line.trim()).map(line => /^[ \t]*/.exec(line)[0].length));
+            let indent = Infinity;
+            lines.forEach(line => {
+                if (line.trim()) indent = Math.min(indent, /^[ \t]*/.exec(line)[0].length);
+            });
             code = lines.map(line => line.slice(Math.min(indent, /^[ \t]*/.exec(line)[0].length))).join('\n');
         } else {
             code = String(node.attributes.get('code') ?? node.attributes.get('content') ?? '').replace(/\s+$/, '');
@@ -2170,17 +2186,17 @@
             return label ? `\n\n${label}\n\n` : '';
         }
         if (name === 'divider' || name === 'separator') return '\n\n---\n\n';
-        if (name === 'codeblock') return renderDilCode(node);
+        if (name === 'CodeBlock') return renderDilCode(node);
 
-        if (name === 'cite') {
+        if (name === 'Cite') {
             // Handed to the citation machinery that already ships: a marker
             // with a matching content_reference becomes its source link, any
             // other is stripped.
             const reference = String(attributes.get('ref') || '').trim();
-            return /^[\w-]{1,200}$/.test(reference) ? `cite${reference}` : '';
+            return /^[\w-]{1,200}$/.test(reference) ? `\uE200cite\uE202${reference}\uE201` : '';
         }
 
-        if (name === 'link') {
+        if (name === 'Link') {
             const href = String(attributes.get('url') || attributes.get('href') || '').trim();
             const label = literal() || inline() || href;
             if (!label) return '';
@@ -2189,7 +2205,7 @@
                 : label;
         }
 
-        if (name === 'image' || name === 'asyncimage') {
+        if (name === 'Image' || name === 'AsyncImage') {
             const label = String(attributes.get('alt') || attributes.get('query') || attributes.get('title') || '').trim();
             return label ? `[Image: ${label}]` : '';
         }
@@ -2209,14 +2225,17 @@
             return label ? `\n\n- ${label}\n\n` : '';
         }
 
-        if (DIL_GROUPS.has(name) || name === 'segmented-control' || (DIL_CUSTOM_NAME.test(name) && name.endsWith('-group'))) {
+        if (DIL_GROUPS.has(name)) {
             // Options are one list, offered in order.
             const lines = node.children.map(child => dilDedent(renderDilNode(child)).trim()).filter(Boolean);
             return lines.length ? `\n\n${lines.join('\n')}\n\n` : '';
         }
 
         if (name === 'row') {
-            const line = node.children.map(child => renderDilNode(child).replace(/\s+/g, ' ').trim()).filter(Boolean).join(' ');
+            // A row reads as one line, unless what it holds has lines of its
+            // own — code, a list — that joining would destroy.
+            const parts = node.children.map(child => dilDedent(renderDilNode(child)).trim()).filter(Boolean);
+            const line = parts.some(part => part.includes('\n')) ? parts.join('\n\n') : parts.join(' ');
             return line ? `\n\n${line}\n\n` : '';
         }
 
@@ -2258,11 +2277,11 @@
     // Cheap first look: could this part hold interface source at all? Code is
     // not excluded here; parseDil, which skips it, has the final word.
     function mayHoldDilSource(source) {
-        if (/\{@[a-z]|\{#(?:if|each|key|await)\s/.test(source)) return true;
+        if (/(?:^|\n)[ \t]*\{@body\b/.test(source)) return true;
         const tags = /<([A-Za-z][\w-]*)/g;
         let match;
         while ((match = tags.exec(source)) !== null) {
-            if (isDilEvidence(match[1])) return true;
+            if (isDilEvidenceName(match[1])) return true;
         }
         return false;
     }
@@ -3332,8 +3351,11 @@
         const isUser = payloadMessageRole(message) === 'user';
         const source = payloadContentText(message.content);
         // An interface reply with no stored fallback is converted from its
-        // source (issue #47). A prompt is the reader's own text, never rewritten.
-        const readable = isUser || fallbackMessages.has(message) ? source : renderDilSource(source);
+        // source (issue #47). A prompt is the reader's own text, and a Deep
+        // Research report is a document; neither is ever rewritten.
+        const isInterfaceCandidate = !isUser && !fallbackMessages.has(message) &&
+            entry.message?.author?.role === 'assistant' && !isAsyncPayloadResult(entry.message);
+        const readable = isInterfaceCandidate ? renderDilSource(source) : source;
         const text = resolvePayloadCitations(readable, message, format);
         // No text is not the same as no message: an image-only turn carries its
         // content in attachments, which the caller appends.

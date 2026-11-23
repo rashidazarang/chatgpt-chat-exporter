@@ -1713,10 +1713,10 @@ test('an interface reply exports the Markdown fallback ChatGPT stores beside it 
             code: 'compiled program',
             constants: { 0: 'Roast notes' },
             fallbackMarkdown: 'Found an open-source project: [Roast notes](https://example.com/roast-notes)\n\n' +
-                'It keeps headings, tables and code.citeturn4210search0'
+                'It keeps headings, tables and code.\uE200cite\uE202turn4210search0\uE201'
         },
         content_references: [{
-            matched_text: 'citeturn4210search0',
+            matched_text: '\uE200cite\uE202turn4210search0\uE201',
             items: [{ title: 'Roast notes', url: 'https://example.com/roast-notes' }]
         }]
     });
@@ -1728,7 +1728,7 @@ test('an interface reply exports the Markdown fallback ChatGPT stores beside it 
     assert.match(body, /^Found an open-source project: \[Roast notes\]\(https:\/\/example\.com\/roast-notes\)/);
     assert.match(body, /tables and code\. \(\[Roast notes\]\(https:\/\/example\.com\/roast-notes\)\)/,
         'the fallback\'s citation resolves like any other');
-    assert.ok(!/[-]/.test(body));
+    assert.ok(!/[\uE200-\uE20F]/.test(body));
 });
 
 test('an interface reply without a fallback is converted from its source, not written out (issue #47)', async () => {
@@ -1746,7 +1746,7 @@ test('an interface reply without a fallback is converted from its source, not wr
 test('a converted link row and citation read as links (issue #47)', async () => {
     const conversation = await exportPayload(dilPayload(DIL_LINK_SOURCE, {
         content_references: [{
-            matched_text: 'citeturn4210search0',
+            matched_text: '\uE200cite\uE202turn4210search0\uE201',
             items: [{ title: 'Roast notes', url: 'https://example.com/roast-notes' }]
         }]
     }));
@@ -1755,7 +1755,7 @@ test('a converted link row and citation read as links (issue #47)', async () => 
     assertNoDilSource(body);
     assert.match(body, /^\[Roast notes\]\(https:\/\/example\.com\/roast-notes\)$/m);
     assert.match(body, /tables and code\. \(\[Roast notes\]\(https:\/\/example\.com\/roast-notes\)\)/);
-    assert.ok(!/[-]/.test(body));
+    assert.ok(!/[\uE200-\uE20F]/.test(body));
 });
 
 test('a prompt that pastes interface source is the reader\'s own text', async () => {
@@ -1777,7 +1777,15 @@ test('ordinary Markdown never reaches the interface converter', () => {
         'A hard break  \nthen <br> and x<sup>2</sup> and <details><summary>More</summary>text</details>.',
         'Maths: $J_{after} - \\frac{a}{b}$ and a {placeholder} and obj.call({ key: value }).',
         'Compare a <b and c>d, or List<String> in prose, or <link rel="x"> and <cite>Title</cite>.',
-        'An HTML form: <form><button type="submit">Send</button></form>'
+        'An HTML form: <form><button type="submit">Send</button></form>',
+        // Shapes an independent review found the first gate rewriting.
+        'Declare the field as Option<Card> and pass it on, or List<Row> and Vec<Icon>.',
+        'Svelte uses {#if cond} blocks and {#each items as item} loops.',
+        'See {@link Foo} for details.\n{@html content}\n{@const total = a + b}',
+        'Use <mat-card> for the container and <annotation-xml> in MathML.',
+        'Keep $t<end-time$ and $x>0$ true.',
+        'Set the width with <col span="2"> in your table.',
+        'Use <row> for lists and <Link> from React Router, then <divider> nothing.'
     ];
     samples.forEach(sample => assert.equal(render(sample), sample, `changed: ${sample}`));
 });
@@ -1844,7 +1852,7 @@ test('interface code blocks keep their code byte for byte (issue #47)', () => {
 
 test('a template literal in a handler does not end its tag early (issue #47)', () => {
     const body = engine.internals.renderDilSource(
-        '<box><button onClick={() => GenUI.issueNewTurn(`Order ${size} > now`)}>Order</button></box>');
+        '<box gap={2}><button onClick={() => GenUI.issueNewTurn(`Order ${size} > now`)}>Order</button></box>');
     assert.equal(body, '**Order**');
 });
 
@@ -1855,11 +1863,44 @@ test('interface source cut off mid-stream still exports what it showed (issue #4
     assert.equal(render('Before\n{@body const [a,setA] = DIL.useState("x"\n<box><text>After</text></box>'), 'Before\n\nAfter');
 });
 
+test('JSX in prose is not interface source', () => {
+    // React writes the same handler shape; without a layout or a `{@body}`
+    // line there is nothing to say this is an interface.
+    const jsx = 'Then render <button onClick={() => setOpen(true)}>Open</button> in the header.';
+    assert.equal(engine.internals.renderDilSource(jsx), jsx);
+});
+
+test('interface elements never swallow what follows them (issue #47)', () => {
+    const render = engine.internals.renderDilSource;
+    assert.equal(render('<box gap={2}>\n<divider color="subtle">\nHello world\n</box>\nAfter'),
+        '---\n\nHello world\n\nAfter', 'a divider written without "/>" holds nothing');
+    assert.equal(render('<box gap={2}>Use <row> for lists.\n\n```js\nlet a = 1;\n```\n\nDone.'),
+        'Use\n\nfor lists.\n\n```js\nlet a = 1;\n```\n\nDone.', 'an unclosed row does not flatten the code after it');
+});
+
+test('a Deep Research report is never run through the interface converter', async () => {
+    const report = '# Interface languages\n\nA layout is written as <box gap={3}> around its children.\n\n{@body is how state is declared}';
+    const payload = dilPayload(report, { is_async_task_result_message: true });
+
+    const conversation = await exportPayload(payload);
+
+    assert.ok(conversation.messages[1].content.includes('<box gap={3}>'), conversation.messages[1].content);
+    assert.ok(conversation.messages[1].content.includes('{@body is how state is declared}'));
+});
+
 test('interface conversion stays linear on hostile input', () => {
-    const hostile = '<box>' + '{a.b'.repeat(20000) + '<row '.repeat(20000) + '`'.repeat(3) + 'x`'.repeat(20000);
-    const started = Date.now();
-    engine.internals.renderDilSource(hostile);
-    assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+    const render = engine.internals.renderDilSource;
+    const hostile = [
+        '<box gap={1}>' + '{a.b'.repeat(20000) + '<row '.repeat(20000) + '`'.repeat(3) + 'x`'.repeat(20000),
+        '{@body\n'.repeat(25000),
+        '<box gap={1}>' + '<box>'.repeat(5000),
+        '<box gap={1}><CodeBlock>' + 'x\n'.repeat(200000) + '</CodeBlock></box>'
+    ];
+    hostile.forEach((input, index) => {
+        const started = Date.now();
+        render(input);
+        assert.ok(Date.now() - started < 3000, `input ${index} took ${Date.now() - started} ms`);
+    });
 });
 
 test('an image-only turn survives the payload path', async () => {
