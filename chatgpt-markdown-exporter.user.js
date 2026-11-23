@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - Markdown
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      1.2.4
+// @version      1.2.5
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @homepageURL  https://github.com/rashidazarang/chatgpt-chat-exporter
@@ -32,7 +32,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '1.2.4';
+        const ENGINE_VERSION = '1.2.5';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -4863,13 +4863,9 @@
         'use strict';
 
         const MENU_ID = 'chat-exporter-share-menu';
-        const LAUNCHER_ID = 'chat-exporter-launcher';
+        const SHARE_BUTTON_ID = 'chat-exporter-share-button';
         const NATIVE_ITEM_ATTRIBUTE = 'data-chat-exporter-item';
         const INSTALL_FLAG = '__CHAT_EXPORTER_UI_INSTALLED__';
-
-        // Milliseconds to let ChatGPT finish rendering its header before deciding
-        // that no native share control exists and mounting our own launcher.
-        const DEFAULT_LAUNCHER_DELAY = 1500;
 
         // Milliseconds between share-control scans while the page mutates.
         const DEFAULT_SYNC_INTERVAL = 400;
@@ -4895,11 +4891,6 @@
                 ['path', { d: 'M6 2h9l5 5v15H6z' }],
                 ['path', { d: 'M14 2v6h6' }],
                 ['path', { d: 'M9 16h6M9 12h3' }]
-            ],
-            download: [
-                ['path', { d: 'M12 3v12' }],
-                ['path', { d: 'm7 11 5 5 5-5' }],
-                ['path', { d: 'M4 20h16' }]
             ]
         };
 
@@ -4928,7 +4919,13 @@
         }
 
         function closeShareMenu(doc) {
-            doc.getElementById(MENU_ID)?.remove();
+            const menu = doc.getElementById(MENU_ID);
+            const anchor = menu && doc.getElementById(menu.getAttribute('data-export-anchor'));
+            if (anchor?.id === SHARE_BUTTON_ID) {
+                anchor.setAttribute('aria-expanded', 'false');
+                anchor.setAttribute('data-state', 'closed');
+            }
+            menu?.remove();
         }
 
         function createMenuItem(doc, label, icon, action) {
@@ -4969,6 +4966,7 @@
             menu.id = MENU_ID;
             menu.setAttribute('role', 'menu');
             menu.setAttribute('aria-label', 'Conversation export options');
+            if (anchor.id) menu.setAttribute('data-export-anchor', anchor.id);
             menu.style.cssText = [
                 'position:fixed', 'z-index:100000', 'min-width:210px', 'padding:6px',
                 'border:1px solid var(--border-light, rgba(127,127,127,.22))',
@@ -4987,7 +4985,8 @@
                 }));
             }
 
-            menu.append(
+            // Temporary chats have no reusable conversation URL to copy.
+            if (options.includeCopyLink !== false) menu.appendChild(
                 createMenuItem(doc, 'Copy link', ICONS.link, async item => {
                     try {
                         await actions.copyLink();
@@ -4997,7 +4996,9 @@
                         console.error('[Chat Exporter] Could not copy the conversation link.', error);
                         item.querySelector('span').textContent = 'Copy failed';
                     }
-                }),
+                })
+            );
+            menu.append(
                 createMenuItem(doc, 'Export to Markdown', ICONS.markdown, () => {
                     closeShareMenu(doc);
                     actions.exportMarkdown();
@@ -5170,11 +5171,12 @@
             const button = element?.closest?.('button, [role="button"]');
             if (!button) return null;
             if (button.closest('[role="menu"], [data-radix-menu-content]')) return null;
-            if (button.closest(`#${MENU_ID}, #${LAUNCHER_ID}`)) return null;
+            if (button.closest(`#${MENU_ID}, #${SHARE_BUTTON_ID}`)) return null;
+            if (button.closest('nav, aside, [role="navigation"]')) return null;
             if (button.closest(TURN_CONTAINER)) return null;
 
             if (testId(button).includes('share')) return button;
-            return normalizeText(button) === 'Share' ? button : null;
+            return button.getAttribute('aria-label') === 'Share' || normalizeText(button) === 'Share' ? button : null;
         }
 
         function findHeaderShareButton(doc) {
@@ -5186,67 +5188,101 @@
             return null;
         }
 
-        function createLauncher(doc, actions) {
-            const launcher = doc.createElement('button');
-            launcher.id = LAUNCHER_ID;
-            launcher.type = 'button';
-            launcher.setAttribute('aria-haspopup', 'menu');
-            launcher.title = 'Export this conversation';
-            launcher.style.cssText = [
-                'position:fixed', 'bottom:20px', 'right:20px', 'z-index:99999',
-                'display:flex', 'align-items:center', 'gap:8px',
-                'padding:10px 14px', 'border:0', 'border-radius:999px',
-                'background:#10a37f', 'color:#fff', 'cursor:pointer',
-                'font-family:ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-                'font-size:14px', 'font-weight:600',
-                'box-shadow:0 2px 8px rgba(0,0,0,.25)'
-            ].join(';');
+        // Captured from ChatGPT's native Share button on 2026-10-08. Reuse the
+        // page's stylesheet and SVG sprite, including hover, focus and theme rules.
+        // This also works when the first page opened is a temporary chat, so there
+        // has not yet been a real Share button to clone.
+        const NATIVE_SHARE_CLASS = 'no-drag cursor-interaction items-center select-none disabled:cursor-default aria-disabled:cursor-default focus:outline-hidden disabled:opacity-40 aria-disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0 whitespace-nowrap flex border gap-1.5 rounded-lg text-(--color-text-toolbar-action) not-disabled:not-aria-disabled:hover:bg-primary-ghost-hover data-[state=open]:bg-primary-ghost-hover border-transparent button-toolbar py-0 text-sm leading-[18px]';
 
-            const glyph = renderIcon(doc, ICONS.download);
-            if (glyph) launcher.appendChild(glyph);
-            const label = doc.createElement('span');
-            label.textContent = 'Export';
-            launcher.appendChild(label);
+        function createHeaderShareButton(doc, template) {
+            const button = template ? template.cloneNode(true) : doc.createElement('button');
+            stripIdentity(button);
+            button.id = SHARE_BUTTON_ID;
+            button.type = 'button';
+            button.disabled = false;
+            button.removeAttribute('aria-disabled');
+            button.setAttribute('aria-haspopup', 'menu');
+            button.setAttribute('aria-expanded', 'false');
+            button.setAttribute('data-state', 'closed');
 
-            launcher.addEventListener('click', event => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (doc.getElementById(MENU_ID)) {
-                    closeShareMenu(doc);
-                    return;
+            if (!template) {
+                button.className = NATIVE_SHARE_CLASS;
+                button.setAttribute('aria-label', 'Share');
+                const namespace = 'http://www.w3.org/2000/svg';
+                const svg = doc.createElementNS(namespace, 'svg');
+                for (const [key, value] of Object.entries({ 'aria-hidden': 'true', height: '16', viewBox: '0 0 16 16', width: '16', xmlns: namespace })) {
+                    svg.setAttribute(key, value);
                 }
-                openShareMenu(doc, launcher, actions, { includeNativeShare: false });
-            });
-            return launcher;
+                const sprite = doc.querySelector('svg use[href*=".svg#"]')?.getAttribute('href');
+                if (sprite) {
+                    const use = doc.createElementNS(namespace, 'use');
+                    use.setAttribute('href', `${sprite.split('#')[0]}#arrow-up-open-base-light-16`);
+                    use.setAttribute('fill', 'currentColor');
+                    svg.appendChild(use);
+                } else {
+                    // Older layouts can inline their icons instead of using a sprite.
+                    const path = doc.createElementNS(namespace, 'path');
+                    path.setAttribute('d', 'M8 10.5V1.5m0 0L4.5 5M8 1.5 11.5 5M3 9v4.5h10V9');
+                    path.setAttribute('fill', 'none');
+                    path.setAttribute('stroke', 'currentColor');
+                    path.setAttribute('stroke-width', '1.5');
+                    path.setAttribute('stroke-linecap', 'round');
+                    path.setAttribute('stroke-linejoin', 'round');
+                    svg.appendChild(path);
+                }
+                button.append(svg, doc.createTextNode('Share'));
+            }
+            return button;
         }
 
-        // Writing an unchanged style value still queues a mutation record, which
-        // would feed our own observer back into this function forever.
-        function setLauncherVisible(launcher, visible) {
-            const display = visible ? 'flex' : 'none';
-            if (launcher.style.display !== display) launcher.style.display = display;
+        function findHeaderActions(doc) {
+            // ChatGPT can retain an empty old titlebar during navigation. Only use
+            // an action group with actual controls, never that empty duplicate.
+            const actionSelector = '[data-app-shell-main-titlebar] [data-app-shell-header-obstacle] .pointer-events-auto';
+            // Some temporary chats wrap Save chat in a span directly inside the
+            // action container. Prefer the inner group when present, then the
+            // container itself, rather than requiring a particular wrapper tag.
+            const groups = [
+                ...doc.querySelectorAll(`${actionSelector} > div, #conversation-header-actions`),
+                ...doc.querySelectorAll(actionSelector)
+            ];
+            for (const group of groups) {
+                if (isVisible(group) && (group.id === 'conversation-header-actions' || group.querySelector('button, [role="button"]'))) return group;
+            }
+            // Older conversation headers put Share next to their More menu.
+            for (const button of doc.querySelectorAll('header button, [role="banner"] button')) {
+                if (!isVisible(button) || button.closest('nav, aside, [data-quick-chat-drag-handle]')) continue;
+                if (testId(button).includes('conversation-options') || button.getAttribute('aria-label') === 'More') {
+                    return button.parentElement;
+                }
+            }
+            return null;
         }
 
-        // Native menu integration depends on a ChatGPT affordance that enterprise
-        // policies can remove entirely. The launcher is the guaranteed entry point:
-        // it appears whenever no share control is on the page (issue #31).
-        function syncLauncher(doc, actions, state) {
-            const launcher = doc.getElementById(LAUNCHER_ID);
-            if (!state.forced && (findHeaderShareButton(doc) || !state.hasConversation())) {
-                if (launcher) setLauncherVisible(launcher, false);
-                return launcher;
-            }
-            if (!doc.body) return null;
-            if (launcher) {
-                setLauncherVisible(launcher, true);
-                return launcher;
-            }
-            if (state.launcherDelay > 0 && doc.defaultView.Date.now() - state.startedAt < state.launcherDelay) {
+        function removeHeaderShareButton(doc) {
+            const menu = doc.getElementById(MENU_ID);
+            if (menu?.getAttribute('data-export-anchor') === SHARE_BUTTON_ID) closeShareMenu(doc);
+            doc.getElementById(SHARE_BUTTON_ID)?.remove();
+        }
+
+        function syncHeaderShareButton(doc, state) {
+            const nativeShare = findHeaderShareButton(doc);
+            if (nativeShare) state.shareTemplate = nativeShare.cloneNode(true);
+            if (nativeShare || !state.hasConversation()) {
+                removeHeaderShareButton(doc);
                 return null;
             }
-            const mounted = createLauncher(doc, actions);
-            doc.body.appendChild(mounted);
-            return mounted;
+            const actions = findHeaderActions(doc);
+            if (!actions) {
+                removeHeaderShareButton(doc);
+                return null;
+            }
+            const existing = doc.getElementById(SHARE_BUTTON_ID);
+            if (existing?.parentElement === actions) return existing;
+            removeHeaderShareButton(doc);
+            const button = createHeaderShareButton(doc, state.shareTemplate);
+            actions.insertBefore(button, actions.firstChild);
+            return button;
         }
 
         function install(options = {}) {
@@ -5262,9 +5298,8 @@
             let bypassNativeShare = false;
             let lastShareButton = null;
 
-            // The launcher already says "Exporting…", but a sweep takes seconds and
-            // a label alone does not show it is still working. The card is optional:
-            // a build without one exports exactly as before.
+            // The optional progress card shows the export's progress without
+            // changing the native Share button's label.
             const runExport = format => {
                 const card = options.progress ? options.progress.create(doc) : null;
                 return Promise.resolve()
@@ -5279,27 +5314,15 @@
                     });
             };
 
-            // A full export scrolls the whole conversation, which takes seconds.
-            // Say so on the launcher, and don't let a second click start a second
-            // sweep fighting the first one for the scroll position.
+            // A second export must not fight the first for the scroll position.
             let exportInFlight = false;
-            // The busy *state* still guards against a second sweep fighting the
-            // first for the scroll position — that is the part that matters. The
-            // label only speaks when there is no progress card saying it better.
-            const setBusy = busy => {
-                exportInFlight = busy;
-                const label = doc.getElementById(LAUNCHER_ID)?.querySelector('span');
-                if (!label) return;
-                const cardVisible = Boolean(options.progress && doc.getElementById('chat-exporter-progress'));
-                label.textContent = busy && !cardVisible ? 'Exporting…' : 'Export';
-            };
             const exportSafely = format => {
                 if (exportInFlight) return Promise.resolve();
-                setBusy(true);
+                exportInFlight = true;
                 return Promise.resolve()
                     .then(() => runExport(format))
                     .catch(error => console.error('[Chat Exporter] Export failed.', error))
-                    .then(() => setBusy(false), () => setBusy(false));
+                    .finally(() => { exportInFlight = false; });
             };
             const actions = {
                 copyLink: options.copyLink || (() => doc.defaultView.navigator.clipboard.writeText(doc.defaultView.location.href)),
@@ -5312,8 +5335,7 @@
                 })
             };
 
-            // Nothing to export on the landing page or a brand-new chat, so the
-            // launcher stays out of the way until the conversation has messages.
+            // Add a fallback Share button only once there are messages to export.
             const messageSelectors = engine.providers?.chatgpt?.messageSelectors || ['div[data-message-author-role]'];
             const hasConversation = options.hasConversation || (() => messageSelectors.some(selector => {
                 try {
@@ -5323,31 +5345,39 @@
                 }
             }));
 
-            const state = {
-                startedAt: doc.defaultView.Date.now(),
-                launcherDelay: typeof options.launcherDelay === 'number' ? options.launcherDelay : DEFAULT_LAUNCHER_DELAY,
-                hasConversation
-            };
+            const state = { hasConversation, shareTemplate: null };
 
             // A streaming answer fires mutations continuously, so the share-control
             // scan is coalesced instead of running per batch.
             const syncInterval = typeof options.syncInterval === 'number' ? options.syncInterval : DEFAULT_SYNC_INTERVAL;
             let syncScheduled = false;
-            const scheduleLauncherSync = () => {
+            const scheduleHeaderSync = () => {
                 if (syncInterval <= 0) {
-                    syncLauncher(doc, actions, state);
+                    syncHeaderShareButton(doc, state);
                     return;
                 }
                 if (syncScheduled) return;
                 syncScheduled = true;
                 doc.defaultView.setTimeout(() => {
                     syncScheduled = false;
-                    syncLauncher(doc, actions, state);
+                    syncHeaderShareButton(doc, state);
                 }, syncInterval);
             };
 
             doc.addEventListener('click', event => {
-                if (event.target.closest?.(`#${LAUNCHER_ID}`)) return;
+                const fallback = event.target.closest?.(`#${SHARE_BUTTON_ID}`);
+                if (fallback) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    if (doc.getElementById(MENU_ID)?.getAttribute('data-export-anchor') === SHARE_BUTTON_ID) {
+                        closeShareMenu(doc);
+                    } else {
+                        openShareMenu(doc, fallback, actions, { includeNativeShare: false, includeCopyLink: false });
+                        fallback.setAttribute('aria-expanded', 'true');
+                        fallback.setAttribute('data-state', 'open');
+                    }
+                    return;
+                }
 
                 const shareButton = isHeaderShareButton(event.target);
                 if (shareButton) {
@@ -5371,8 +5401,9 @@
             });
 
             const start = () => {
+                doc.getElementById('chat-exporter-launcher')?.remove();
                 injectConversationMenuItems(doc, doc, actions);
-                syncLauncher(doc, actions, state);
+                syncHeaderShareButton(doc, state);
                 const observer = new doc.defaultView.MutationObserver(records => {
                     for (const record of records) {
                         if (record.type === 'attributes') {
@@ -5384,7 +5415,7 @@
                             }
                         }
                     }
-                    scheduleLauncherSync();
+                    scheduleHeaderSync();
                 });
                 observer.observe(doc.documentElement, {
                     attributes: true,
@@ -5392,11 +5423,6 @@
                     childList: true,
                     subtree: true
                 });
-                // ChatGPT can settle without further mutations; re-check once the
-                // header has had time to render.
-                if (state.launcherDelay > 0) {
-                    doc.defaultView.setTimeout(() => syncLauncher(doc, actions, state), state.launcherDelay + 100);
-                }
             };
 
             if (doc.readyState === 'loading') {
@@ -5410,12 +5436,7 @@
             try {
                 doc.defaultView.ChatExporter = {
                     markdown: () => actions.exportMarkdown(),
-                    pdf: () => actions.exportPdf(),
-                    showLauncher: () => {
-                        state.forced = true;
-                        state.launcherDelay = 0;
-                        return syncLauncher(doc, actions, state);
-                    }
+                    pdf: () => actions.exportPdf()
                 };
             } catch (error) {
                 console.warn('[Chat Exporter] Could not expose the console helper.', error);
@@ -5431,7 +5452,9 @@
                 findHeaderShareButton,
                 findShareItem,
                 findCloneTemplate,
-                syncLauncher
+                createHeaderShareButton,
+                findHeaderActions,
+                syncHeaderShareButton
             }
         };
     });
