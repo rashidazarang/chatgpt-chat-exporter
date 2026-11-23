@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Chat Exporter - Markdown
 // @namespace    https://github.com/rashidazarang/chatgpt-chat-exporter
-// @version      1.2.4
+// @version      1.2.5
 // @description  Export ChatGPT conversations to Markdown or PDF from the native conversation menus
 // @author       rashidazarang
 // @homepageURL  https://github.com/rashidazarang/chatgpt-chat-exporter
@@ -32,7 +32,7 @@
     })(typeof globalThis !== 'undefined' ? globalThis : this, function buildChatExporterEngine() {
         'use strict';
 
-        const ENGINE_VERSION = '1.2.4';
+        const ENGINE_VERSION = '1.2.5';
 
         // Pixels of slack when deciding the scroll container has reached its end.
         const BOTTOM_TOLERANCE = 4;
@@ -1789,6 +1789,535 @@
             }).filter(Boolean).join('\n\n').trim();
         }
 
+        // ── Interface replies (issue #47) ─────────────────────────────────────
+        //
+        // GPT-6 can answer with an interface: options to pick, a button, a link
+        // card. ChatGPT stores the model's source for it as the message part —
+        // Markdown mixed with JSX-like component tags, `{@body const
+        // [choice,setChoice] = DIL.useState("md")}` state and click handlers — and
+        // compiles it into the controls the reader sees. The payload-first read
+        // took that part for Markdown, so the source reached the reader's file.
+        //
+        // Beside every compiled program the server keeps a Markdown fallback for
+        // clients that cannot run it: the prose, citations in the inline markup
+        // resolvePayloadCitations already reads, and interactive parts reduced to
+        // static text. That is the Markdown an export wants. Its location,
+        // `metadata.model_dil_v2.fallbackMarkdown`, comes from a third-party
+        // description of the feature (openui.com, 2026-10-08) and is unverified
+        // against a live payload, so any `model_dil*` key is read, and a reply
+        // without a fallback is converted from its source (renderDilSource).
+        function dilFallbackMarkdown(message) {
+            const metadata = message?.metadata;
+            if (!metadata || typeof metadata !== 'object') return '';
+            for (const key of Object.keys(metadata)) {
+                if (!/^model_dil(?:_v\d+)?$/.test(key)) continue;
+                const dil = metadata[key];
+                const fallback = dil && typeof dil === 'object' ? (dil.fallbackMarkdown ?? dil.fallback_markdown) : null;
+                if (typeof fallback === 'string' && fallback.trim()) return fallback;
+            }
+            return '';
+        }
+
+        const interfaceMessages = new WeakMap();
+        const fallbackMessages = new WeakSet();
+
+        // An interface reply reads as its fallback everywhere the export looks at
+        // it. Only its text parts are replaced; an asset pointer stays, so an
+        // image it carried is still found by payloadAttachmentDescriptors.
+        function payloadInterfaceMessage(message) {
+            if (!message || typeof message !== 'object' || message.author?.role !== 'assistant') return message;
+            if (interfaceMessages.has(message)) return interfaceMessages.get(message);
+            const fallback = dilFallbackMarkdown(message);
+            let rendered = message;
+            if (fallback) {
+                const parts = Array.isArray(message.content?.parts) ? message.content.parts : [];
+                const assets = parts.filter(part => part && typeof part === 'object' &&
+                    typeof part.text !== 'string' && typeof part.content !== 'string');
+                rendered = { ...message, content: { content_type: 'text', ...message.content, parts: [fallback, ...assets] } };
+                fallbackMessages.add(rendered);
+            }
+            interfaceMessages.set(message, rendered);
+            return rendered;
+        }
+
+        // What follows reads interface source when no fallback was stored. The
+        // rule is to keep what the reader could read — option labels in order,
+        // a button's text, links, citations, code — and drop the machinery.
+        // Nothing is evaluated: attributes are read as text, expressions skipped.
+
+        // Names are matched case-sensitively. The source spells layouts and
+        // controls in lower case and its own components in PascalCase, so
+        // `Option<Card>` or `List<Row>` in prose is never one of them.
+        const DIL_LAYOUT = new Set(['box', 'stack', 'grid', 'card', 'form', 'AppBlock', 'AsyncImageGroup']);
+        const DIL_OPTIONS = new Set(['radio', 'checkbox', 'option', 'segment', 'tab']);
+        const DIL_GROUPS = new Set(['radio-group', 'checkbox-group', 'toggle-group', 'segmented-control', 'select', 'tabs']);
+        // Elements that hold nothing. One written without `/>` must not swallow
+        // the text after it.
+        const DIL_VOID = new Set(['icon', 'divider', 'separator', 'slider', 'Cite', 'Image', 'AsyncImage']);
+        const DIL_COMPONENTS = new Set([...DIL_LAYOUT, ...DIL_OPTIONS, ...DIL_GROUPS, ...DIL_VOID,
+            'row', 'text', 'title', 'button', 'Link', 'CodeBlock', 'Entity']);
+        // Evidence that a part is interface source, which is what licenses
+        // converting it at all. A lower-case tag counts only with an expression
+        // attribute (`gap={3}`, `onChange={setChoice}`), which HTML never has, or
+        // as `<icon name="…">`; a component counts only with an attribute
+        // (`<Cite ref="…"/>`, `<Link url="…"/>`). A bare `<row>` or `<Link>` in a
+        // sentence is someone's prose.
+        const DIL_PASCAL = new Set(['Link', 'Cite', 'CodeBlock', 'Image', 'AsyncImage', 'AsyncImageGroup', 'Entity', 'AppBlock']);
+        const DIL_LOWER_EVIDENCE = new Set(['box', 'row', 'stack', 'grid', 'card', 'icon', 'divider', 'slider',
+            'radio', 'checkbox', 'segment', 'radio-group', 'checkbox-group', 'toggle-group', 'segmented-control']);
+        // How far one tag, statement or binding may run, and how deep elements
+        // nest. Bounded so that malformed input cannot make the scan quadratic or
+        // the rendering recurse past the stack.
+        const DIL_TAG_LIMIT = 4096;
+        const DIL_STATEMENT_LIMIT = 4096;
+        const DIL_BINDING_LIMIT = 256;
+        const DIL_MAX_DEPTH = 64;
+
+        function isDilComponent(name) {
+            return DIL_COMPONENTS.has(name);
+        }
+
+        function isDilEvidenceName(name) {
+            return DIL_PASCAL.has(name) || DIL_LOWER_EVIDENCE.has(name);
+        }
+
+        function isDilEvidence(name, region) {
+            if (DIL_PASCAL.has(name)) return /[A-Za-z]/.test(region);
+            if (!DIL_LOWER_EVIDENCE.has(name)) return false;
+            return /[\w-]\s*=\s*\{/.test(region) || (name === 'icon' && /\bname\s*=\s*["']/.test(region));
+        }
+
+        // `{@body …}` opens a line of state. Svelte's `{@html}`, `{@const}` and
+        // JSDoc's `{@link}` are other things, and stay.
+        const DIL_STATEMENT = /^[ \t]*\{@body\b/;
+
+        // Where a quoted, braced construct ends: the index after its closing
+        // character, or -1. Quotes include backticks, so a template literal in a
+        // handler cannot end the tag early.
+        function dilScanEnd(source, from, limit, stopAt) {
+            let depth = 0;
+            let quote = '';
+            const end = Math.min(source.length, from + limit);
+            for (let at = from; at < end; at++) {
+                const char = source[at];
+                if (quote) {
+                    if (char === '\\') at++;
+                    else if (char === quote) quote = '';
+                    continue;
+                }
+                if (char === '"' || char === "'" || char === '`') quote = char;
+                else if (char === '{') depth++;
+                else if (char === '}') {
+                    depth--;
+                    if (stopAt === '}' && depth === 0) return at + 1;
+                    if (depth < 0) depth = 0;
+                } else if (stopAt === '>' && char === '>' && depth === 0) return at + 1;
+            }
+            return -1;
+        }
+
+        // Literal attributes only (`url="…"`, `title='…'`). An expression value is
+        // state or a handler; it is blanked first so that `choice="md"` inside an
+        // onClick is never read as an attribute.
+        function dilAttributes(region) {
+            let plain = '';
+            let depth = 0;
+            let quote = '';
+            for (let at = 0; at < region.length; at++) {
+                const char = region[at];
+                if (depth > 0) {
+                    if (quote) {
+                        if (char === '\\') at++;
+                        else if (char === quote) quote = '';
+                    } else if (char === '"' || char === "'" || char === '`') quote = char;
+                    else if (char === '{') depth++;
+                    else if (char === '}') depth--;
+                    plain += ' ';
+                    continue;
+                }
+                if (quote) {
+                    if (char === quote) quote = '';
+                    plain += char;
+                    continue;
+                }
+                if (char === '"' || char === "'") quote = char;
+                if (char === '{') {
+                    depth = 1;
+                    plain += ' ';
+                    continue;
+                }
+                plain += char;
+            }
+            const attributes = new Map();
+            const pattern = /([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+            let match;
+            while ((match = pattern.exec(plain)) !== null) {
+                attributes.set(match[1].toLowerCase(), match[2] ?? match[3]);
+            }
+            return attributes;
+        }
+
+        // Each backtick run's closer — the next run of the same length within the
+        // paragraph — found once, from the right, so the scan stays linear.
+        function dilCodeSpanClosers(source) {
+            const runs = [];
+            for (let at = 0; at < source.length;) {
+                if (source[at] !== '`') {
+                    at++;
+                    continue;
+                }
+                let end = at;
+                while (source[end] === '`') end++;
+                runs.push({ at, end });
+                at = end;
+            }
+            const closers = new Map();
+            if (!runs.length) return closers;
+            const blankLines = [];
+            const blank = /\n[ \t]*\n/g;
+            let match;
+            while ((match = blank.exec(source)) !== null) {
+                blankLines.push(match.index);
+                blank.lastIndex = match.index + 1;
+            }
+            const blankBetween = (from, to) => {
+                let low = 0;
+                let high = blankLines.length;
+                while (low < high) {
+                    const middle = (low + high) >> 1;
+                    if (blankLines[middle] < from) low = middle + 1;
+                    else high = middle;
+                }
+                return low < blankLines.length && blankLines[low] < to;
+            };
+            const next = new Map();
+            for (let index = runs.length - 1; index >= 0; index--) {
+                const run = runs[index];
+                const length = run.end - run.at;
+                const closer = next.get(length);
+                if (closer && !blankBetween(run.end, closer.at)) closers.set(run.at, closer.end);
+                next.set(length, run);
+            }
+            return closers;
+        }
+
+        // A fenced block runs to a closing fence of the same character, at least
+        // as long, or to the end of the part. Layout indents it, so any leading
+        // whitespace is allowed.
+        function dilFenceEnd(source, from, fence) {
+            let at = source.indexOf('\n', from);
+            while (at >= 0) {
+                const lineStart = at + 1;
+                const lineEnd = source.indexOf('\n', lineStart);
+                const line = source.slice(lineStart, lineEnd < 0 ? source.length : lineEnd).trim();
+                if (line.length >= fence.length && line[0] === fence[0] && line.split('').every(char => char === fence[0])) {
+                    return lineEnd < 0 ? source.length : lineEnd + 1;
+                }
+                at = lineEnd;
+            }
+            return source.length;
+        }
+
+        // A `{…}` in text is a value the widget computed while it ran, never words
+        // the export can know. Only a member access, call or index counts: a
+        // brace in maths — `x_{i}`, `\frac{a}{b}` — or a bare `{word}` stays.
+        function isDilBinding(source, at, end) {
+            const previous = source[at - 1] || '';
+            if (previous && '_^\\}$'.includes(previous)) return false;
+            if (/\\[A-Za-z]+$/.test(source.slice(Math.max(0, at - 32), at))) return false;
+            const inner = source.slice(at + 1, end - 1);
+            return /^[\x20-\x7e]+$/.test(inner) && /^\s*[A-Za-z_$][\w$]*\s*(?:\??\.|\(|\[)/.test(inner);
+        }
+
+        function parseDil(source) {
+            const root = { name: '', attributes: new Map(), children: [] };
+            const stack = [root];
+            const closers = dilCodeSpanClosers(source);
+            let evidence = false;
+            let text = '';
+            let at = 0;
+            const top = () => stack[stack.length - 1];
+            const flush = () => {
+                if (text) top().children.push(text);
+                text = '';
+            };
+
+            while (at < source.length) {
+                const char = source[at];
+
+                if (at === 0 || source[at - 1] === '\n') {
+                    const line = source.slice(at, at + 256);
+                    const fence = /^[ \t]*(`{3,}|~{3,})/.exec(line);
+                    if (fence) {
+                        const end = dilFenceEnd(source, at, fence[1]);
+                        text += source.slice(at, end);
+                        at = end;
+                        continue;
+                    }
+                    // `{@body …}` sets up state; the reader never sees it. A
+                    // statement cut off mid-stream ends with its line.
+                    const statement = DIL_STATEMENT.exec(line);
+                    if (statement) {
+                        const open = at + statement[0].length - '{@body'.length;
+                        let end = dilScanEnd(source, open, DIL_STATEMENT_LIMIT, '}');
+                        if (end < 0) {
+                            const lineEnd = source.indexOf('\n', open);
+                            end = lineEnd < 0 ? source.length : lineEnd;
+                        }
+                        evidence = true;
+                        flush();
+                        at = end;
+                        continue;
+                    }
+                }
+
+                if (char === '`') {
+                    let end = at;
+                    while (source[end] === '`') end++;
+                    const close = closers.get(at) ?? end;
+                    text += source.slice(at, close);
+                    at = close;
+                    continue;
+                }
+
+                if (char === '{') {
+                    const next = source[at + 1] || '';
+                    // `{#if …}`, `{:else}`, `{/each}`: only the keyword goes. Every
+                    // branch's text stays, since which one showed is runtime state.
+                    // Not evidence on its own: Svelte writes the same blocks.
+                    if (/^\{(?:#(?:if|each|key|await)\s|:(?:else|then|catch)\b|\/(?:if|each|key|await)\s*\})/.test(source.slice(at, at + 12))) {
+                        const end = dilScanEnd(source, at, DIL_BINDING_LIMIT, '}');
+                        if (end > 0) {
+                            flush();
+                            at = end;
+                            continue;
+                        }
+                    }
+                    if (/[A-Za-z_$]/.test(next)) {
+                        const end = dilScanEnd(source, at, DIL_BINDING_LIMIT, '}');
+                        if (end > 0 && isDilBinding(source, at, end)) {
+                            at = end;
+                            continue;
+                        }
+                    }
+                }
+
+                if (char === '<') {
+                    const closing = /^<\/([A-Za-z][\w-]*)\s*>/.exec(source.slice(at, at + 64));
+                    if (closing && isDilComponent(closing[1])) {
+                        // Close the nearest open element of that name; anything
+                        // still open inside it closes with it. A closing tag with
+                        // nothing to close is machinery too, and goes.
+                        let open = stack.length - 1;
+                        while (open > 0 && stack[open].name !== closing[1]) open--;
+                        flush();
+                        if (open > 0) stack.length = open;
+                        at += closing[0].length;
+                        continue;
+                    }
+                    const tag = /^<([A-Za-z][\w-]*)/.exec(source.slice(at, at + 64));
+                    if (tag && isDilComponent(tag[1])) {
+                        const name = tag[1];
+                        const end = dilScanEnd(source, at + tag[0].length, DIL_TAG_LIMIT, '>');
+                        if (end > 0) {
+                            const region = source.slice(at + tag[0].length, end - 1);
+                            flush();
+                            if (isDilEvidence(name, region)) evidence = true;
+                            const element = { name, attributes: dilAttributes(region), children: [] };
+                            top().children.push(element);
+                            at = end;
+                            if (/\/\s*$/.test(region) || DIL_VOID.has(name)) continue;
+                            if (name === 'CodeBlock') {
+                                // A code block's body is the reader's code, kept
+                                // byte for byte up to its own closing tag.
+                                const close = /<\/CodeBlock\s*>/g;
+                                close.lastIndex = at;
+                                const found = close.exec(source);
+                                element.children.push({ raw: source.slice(at, found ? found.index : source.length) });
+                                at = found ? found.index + found[0].length : source.length;
+                                continue;
+                            }
+                            if (stack.length < DIL_MAX_DEPTH) stack.push(element);
+                            continue;
+                        }
+                    }
+                }
+
+                text += char;
+                at++;
+            }
+
+            flush();
+            return { nodes: root.children, evidence };
+        }
+
+        // Lift the indentation layout gave a block of text, keeping each line's
+        // indentation relative to the rest. The first line began after a tag, so
+        // its indentation says nothing about the block's.
+        function dilDedent(value) {
+            const lines = String(value).split('\n');
+            let indent = Infinity;
+            lines.slice(1).forEach(line => {
+                if (line.trim()) indent = Math.min(indent, /^[ \t]*/.exec(line)[0].length);
+            });
+            if (!Number.isFinite(indent) || indent === 0) return value;
+            return lines.map((line, index) => (index === 0 ? line : line.slice(Math.min(indent, /^[ \t]*/.exec(line)[0].length)))).join('\n');
+        }
+
+        function dilFence(code) {
+            let longest = 2;
+            (code.match(/`+/g) || []).forEach(run => { longest = Math.max(longest, run.length); });
+            return '`'.repeat(longest + 1);
+        }
+
+        function renderDilCode(node) {
+            const raw = node.children.find(child => child && typeof child.raw === 'string')?.raw || '';
+            let code = raw.replace(/^[ \t]*\n/, '').replace(/\s+$/, '');
+            if (code.trim()) {
+                const lines = code.split('\n');
+                let indent = Infinity;
+                lines.forEach(line => {
+                    if (line.trim()) indent = Math.min(indent, /^[ \t]*/.exec(line)[0].length);
+                });
+                code = lines.map(line => line.slice(Math.min(indent, /^[ \t]*/.exec(line)[0].length))).join('\n');
+            } else {
+                code = String(node.attributes.get('code') ?? node.attributes.get('content') ?? '').replace(/\s+$/, '');
+            }
+            if (!code.trim()) return '';
+            const language = String(node.attributes.get('lang') || node.attributes.get('language') || '').trim();
+            const fence = dilFence(code);
+            return `\n\n${fence}${/^[\w+#.-]{1,24}$/.test(language) ? language : ''}\n${code}\n${fence}\n\n`;
+        }
+
+        function renderDilBlocks(nodes, separator) {
+            return nodes.map(node => dilDedent(renderDilNode(node)).trim()).filter(Boolean).join(separator);
+        }
+
+        function renderDilNode(node) {
+            if (typeof node === 'string') return node;
+            if (typeof node.raw === 'string') return node.raw;
+            const { name, attributes } = node;
+            const inline = () => node.children.map(renderDilNode).join('').replace(/\s+/g, ' ').trim();
+            const literal = () => ['label', 'title', 'text', 'name', 'alt'].map(key => attributes.get(key))
+                .find(value => typeof value === 'string' && value.trim())?.trim() || '';
+
+            if (name === 'icon') return '';
+            if (name === 'slider') {
+                const label = literal();
+                return label ? `\n\n${label}\n\n` : '';
+            }
+            if (name === 'divider' || name === 'separator') return '\n\n---\n\n';
+            if (name === 'CodeBlock') return renderDilCode(node);
+
+            if (name === 'Cite') {
+                // Handed to the citation machinery that already ships: a marker
+                // with a matching content_reference becomes its source link, any
+                // other is stripped.
+                const reference = String(attributes.get('ref') || '').trim();
+                return /^[\w-]{1,200}$/.test(reference) ? `\uE200cite\uE202${reference}\uE201` : '';
+            }
+
+            if (name === 'Link') {
+                const href = String(attributes.get('url') || attributes.get('href') || '').trim();
+                const label = literal() || inline() || href;
+                if (!label) return '';
+                return /^https?:\/\//i.test(href) && !isUnsafeHref(href)
+                    ? `[${escapeMarkdownLinkText(label)}](${escapeMarkdownUrl(href)})`
+                    : label;
+            }
+
+            if (name === 'Image' || name === 'AsyncImage') {
+                const label = String(attributes.get('alt') || attributes.get('query') || attributes.get('title') || '').trim();
+                return label ? `[Image: ${label}]` : '';
+            }
+
+            if (name === 'button') {
+                const label = inline() || literal();
+                return label ? `\n\n**${label}**\n\n` : '';
+            }
+
+            if (name === 'title') {
+                const label = inline() || literal();
+                return label ? `\n\n**${label}**\n\n` : '';
+            }
+
+            if (DIL_OPTIONS.has(name)) {
+                const label = inline() || literal();
+                return label ? `\n\n- ${label}\n\n` : '';
+            }
+
+            if (DIL_GROUPS.has(name)) {
+                // Options are one list, offered in order.
+                const lines = node.children.map(child => dilDedent(renderDilNode(child)).trim()).filter(Boolean);
+                return lines.length ? `\n\n${lines.join('\n')}\n\n` : '';
+            }
+
+            if (name === 'row') {
+                // A row reads as one line, unless what it holds has lines of its
+                // own — code, a list — that joining would destroy.
+                const parts = node.children.map(child => dilDedent(renderDilNode(child)).trim()).filter(Boolean);
+                const line = parts.some(part => part.includes('\n')) ? parts.join('\n\n') : parts.join(' ');
+                return line ? `\n\n${line}\n\n` : '';
+            }
+
+            if (name === 'text') return node.children.map(renderDilNode).join('');
+
+            // A layout, or a component this release does not know: what it held,
+            // in order, or failing that the label it carried.
+            const blocks = renderDilBlocks(node.children, '\n\n');
+            if (blocks) return `\n\n${blocks}\n\n`;
+            const label = literal();
+            return label ? `\n\n${label}\n\n` : '';
+        }
+
+        // Blank lines left by removed statements and block breaks collapse to one,
+        // outside fenced code only: a blank line inside code is the code's own.
+        function tidyDilMarkdown(value) {
+            const lines = value.split('\n');
+            const kept = [];
+            let fence = null;
+            lines.forEach(line => {
+                const marker = /^[ \t]*(`{3,}|~{3,})/.exec(line);
+                if (fence) {
+                    kept.push(line);
+                    if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !line.trim().slice(marker[1].length).trim()) fence = null;
+                    return;
+                }
+                if (marker) fence = marker[1];
+                if (!line.trim()) {
+                    if (kept.length && kept[kept.length - 1] === '') return;
+                    kept.push('');
+                    return;
+                }
+                // Two trailing spaces are a hard line break; keep those.
+                kept.push(/\S {2,}$/.test(line) ? line : line.replace(/[ \t]+$/, ''));
+            });
+            return kept.join('\n').trim();
+        }
+
+        // Cheap first look: could this part hold interface source at all? Code is
+        // not excluded here; parseDil, which skips it, has the final word.
+        function mayHoldDilSource(source) {
+            if (/(?:^|\n)[ \t]*\{@body\b/.test(source)) return true;
+            const tags = /<([A-Za-z][\w-]*)/g;
+            let match;
+            while ((match = tags.exec(source)) !== null) {
+                if (isDilEvidenceName(match[1])) return true;
+            }
+            return false;
+        }
+
+        // The entry point: a payload part in, readable Markdown out. A part with no
+        // interface source outside code — every ordinary reply — is returned
+        // exactly as it arrived.
+        function renderDilSource(value) {
+            const source = String(value ?? '');
+            if (!mayHoldDilSource(source)) return source;
+            const parsed = parseDil(source);
+            if (!parsed.evidence) return source;
+            return tidyDilMarkdown(parsed.nodes.map(renderDilNode).join(''));
+        }
+
         function activePayloadMessages(payload) {
             const mapping = payload?.mapping;
             if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) return [];
@@ -1979,7 +2508,7 @@
 
         function payloadRenderableMessage(message) {
             const report = payloadEmbeddedReport(message);
-            if (!report) return message;
+            if (!report) return payloadInterfaceMessage(message);
             if (renderableMessages.has(message)) return renderableMessages.get(message);
             const reportContent = report.content || (typeof report.text === 'string'
                 ? { content_type: 'text', parts: [report.text] }
@@ -2840,13 +3369,20 @@
         // export wants; HTML exports escape it and keep the paragraph breaks.
         function payloadMessageToExport(entry, assistantName, format, doc, options = {}) {
             const message = payloadRenderableMessage(entry.message);
-            const text = resolvePayloadCitations(payloadContentText(message.content), message, format);
+            const isUser = payloadMessageRole(message) === 'user';
+            const source = payloadContentText(message.content);
+            // An interface reply with no stored fallback is converted from its
+            // source (issue #47). A prompt is the reader's own text, and a Deep
+            // Research report is a document; neither is ever rewritten.
+            const isInterfaceCandidate = !isUser && !fallbackMessages.has(message) &&
+                entry.message?.author?.role === 'assistant' && !isAsyncPayloadResult(entry.message);
+            const readable = isInterfaceCandidate ? renderDilSource(source) : source;
+            const text = resolvePayloadCitations(readable, message, format);
             // No text is not the same as no message: an image-only turn carries its
             // content in attachments, which the caller appends.
             const allowEmpty = options.allowEmpty === true;
             if (!text && !allowEmpty) return null;
 
-            const isUser = payloadMessageRole(message) === 'user';
             const content = !text ? '' : (format === 'markdown'
                 ? closeOpenFence(text)
                 : text.split(/\n{2,}/).map(block => `<p>${sanitizeHtml(block).replace(/\n/g, '<br>')}</p>`).join(''));
@@ -4595,6 +5131,7 @@
             },
             internals: {
                 serializeMessageContent,
+                renderDilSource,
                 extractCodeBlock,
                 tableToMarkdown,
                 tableToHtml,

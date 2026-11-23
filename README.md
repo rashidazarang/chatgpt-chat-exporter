@@ -101,7 +101,13 @@ Chromium, Firefox, and WebKit CI exercise every shipped console bundle, both use
 
 ---
 
-## 🔧 What's New in v1.2.4
+## 🔧 What's New in v1.2.5
+
+- 🧩 **GPT-6 interface replies export as text, not source code.** A reply shown as choices, buttons or link cards no longer writes `<radio-group>`, `{@body …}` or click handlers into the `.md` file. The export uses the Markdown version ChatGPT stores for the reply, or converts the interface itself: options become a list, links and citations become links, and code and maths are kept. Ordinary replies are unchanged ([#47](https://github.com/rashidazarang/chatgpt-chat-exporter/issues/47)).
+
+([release notes](temporal/release-notes-v1.2.5.md))
+
+### v1.2.4
 
 - 🖼️ **Markdown with images downloads as a ZIP.** The readable `.md` document links to individual files in an `images/` folder, with repeated images stored once. Extract the ZIP to view or copy the images. Text-only chats still download as `.md`.
 - 🔤 **Code examples stay verbatim.** Image syntax inside fenced or inline code and HTML reasoning recaps is preserved.
@@ -406,7 +412,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/EXPORTER_GUIDE.md](docs/EXPORTE
 
 ## 🚀 Version History
 
-- **v1.2.3** (Current) - Signed-in ChatGPT in HTML and PDF: its page layout, reverse scrolling and lazily loaded history; original image files; tool file reads no longer exported as replies
+- **v1.2.5** (Current) - GPT-6 interface replies (choices, buttons, link cards) export as readable Markdown instead of component source
+- **v1.2.4** - Markdown with images downloads as a ZIP with an `images/` folder
+- **v1.2.3** - Signed-in ChatGPT in HTML and PDF: its page layout, reverse scrolling and lazily loaded history; original image files; tool file reads no longer exported as replies
 - **v1.2.2** - Interrupted replies shown instead of flagging the export incomplete; closed code fences; local dates
 - **v1.2.1** - Generated images and every uploaded image in Markdown exports; tool plumbing no longer shown as reasoning
 - **v1.2.0** - ChatGPT's new page layout, short prompts and temporary-chat images, complete long conversations, Deep Research, bookmarklets, Gemini formatting, and release hardening
