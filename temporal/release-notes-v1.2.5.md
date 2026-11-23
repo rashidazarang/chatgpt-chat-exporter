@@ -21,7 +21,7 @@ Markdown exports now contain what the reader could read:
 
 - 13 new regressions cover the issue's shapes: options and a button; a link row with a citation; a framed example holding a heading, maths, a table and code; a code component; a template-literal handler; a reply cut off mid-stream; void elements and unclosed rows; a pasted prompt; a Deep Research report; JSX in prose; and four adversarial inputs. 13 samples of ordinary Markdown must pass through unchanged.
 - An independent review of the first version found that the detection fired on ordinary Markdown such as `Option<Card>`, `{#if}`, `{@link}`, `<mat-card>` and `<col>`. It also found that a divider could swallow text and that deep nesting could overflow the stack. Each finding was reproduced, fixed and pinned by a test above.
-- On the parent commit, the three end-to-end reproductions fail; the new unit checks fail there because `renderDilSource` does not exist; the pasted-prompt guard passes on both.
+- On the parent commit, the three end-to-end reproductions fail. The unit checks fail there because `renderDilSource` does not exist. The pasted-prompt and Deep Research report guards pass on both commits.
 - The full suite passes: 217 tests.
 - Not done: a check against a live GPT-6 interface reply. The browser extension used for live checks was not connected.
 
