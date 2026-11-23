@@ -1658,6 +1658,210 @@ test('non-citation payload references never remove spaces from an answer', async
     assert.doesNotMatch(body, /Thesystemmustnot|Localdivergenceisstored/);
 });
 
+// Issue #47. A GPT-6 interface reply stores its source — Markdown mixed with
+// component tags, `{@body …}` state and click handlers — as the message part.
+// The shapes below are transcribed from the issue's screenshots; the strings
+// are invented, apart from the reporter's own Chinese option labels.
+const DIL_CHOICE_SOURCE = [
+    'You can choose the next step:',
+    '',
+    '{@body const [choice,setChoice] = DIL.useState("md")}',
+    '<box gap={3}>',
+    ' <radio-group direction="col" value={choice} onChange={setChoice}>',
+    '  <radio value="md">完整导出一个对话为 `.md`，尽量保留公式、表格和代码</radio>',
+    '  <radio value="paste">继续用复制粘贴，解决 Typora 图片下载报错</radio>',
+    '  <radio value="pdf">直接将单个对话保存为 PDF</radio>',
+    ' </radio-group>',
+    ' <button block onClick={()=>GenUI.issueNewTurn(choice="md"?"Teach me <the> {md} export":choice="paste"?"Fix the paste":"Save a PDF")}>继续操作 <icon name="arrow-right" inline/></button>',
+    '</box>'
+].join('\n');
+
+const DIL_LINK_SOURCE = [
+    'Found an open-source project:',
+    '',
+    '<row align="center" gap={2}>',
+    ' <icon name="github" size="lg"/>',
+    ' <Link url="https://example.com/roast-notes" title="Roast notes"/>',
+    '</row>',
+    '',
+    'It keeps headings, tables and code.<Cite ref="turn4210search0"/>'
+].join('\n');
+
+function dilPayload(assistantContent, assistantMetadata = {}) {
+    const payload = payloadWithMessages(['d1', 'd2']);
+    payload.mapping['node-d2'].message.content.parts = [assistantContent];
+    payload.mapping['node-d2'].message.metadata = assistantMetadata;
+    return payload;
+}
+
+async function exportPayload(payload, format = 'markdown') {
+    const dom = payloadDom();
+    dom.window.fetch = chatGptBackendStub({ payload }).fetch;
+    return engine.extractConversationFull({
+        document: dom.window.document, provider: 'chatgpt', format, awaitStreaming: false
+    });
+}
+
+function assertNoDilSource(body) {
+    assert.doesNotMatch(body, /\{@body|DIL\.useState|GenUI\.|onClick|onChange/, `no widget machinery, got: ${body}`);
+    assert.doesNotMatch(body, /<\/?(?:box|row|radio-group|radio|button|icon|Link|Cite)\b/, `no component tags, got: ${body}`);
+}
+
+test('an interface reply exports the Markdown fallback ChatGPT stores beside it (issue #47)', async () => {
+    const payload = dilPayload(DIL_LINK_SOURCE, {
+        model_dil_v2: {
+            code: 'compiled program',
+            constants: { 0: 'Roast notes' },
+            fallbackMarkdown: 'Found an open-source project: [Roast notes](https://example.com/roast-notes)\n\n' +
+                'It keeps headings, tables and code.citeturn4210search0'
+        },
+        content_references: [{
+            matched_text: 'citeturn4210search0',
+            items: [{ title: 'Roast notes', url: 'https://example.com/roast-notes' }]
+        }]
+    });
+
+    const conversation = await exportPayload(payload);
+    const body = conversation.messages[1].content;
+
+    assertNoDilSource(body);
+    assert.match(body, /^Found an open-source project: \[Roast notes\]\(https:\/\/example\.com\/roast-notes\)/);
+    assert.match(body, /tables and code\. \(\[Roast notes\]\(https:\/\/example\.com\/roast-notes\)\)/,
+        'the fallback\'s citation resolves like any other');
+    assert.ok(!/[-]/.test(body));
+});
+
+test('an interface reply without a fallback is converted from its source, not written out (issue #47)', async () => {
+    const conversation = await exportPayload(dilPayload(DIL_CHOICE_SOURCE));
+    const body = conversation.messages[1].content;
+
+    assertNoDilSource(body);
+    assert.ok(body.startsWith('You can choose the next step:\n\n'), body);
+    assert.match(body, /^- 完整导出一个对话为 `\.md`，尽量保留公式、表格和代码\n- 继续用复制粘贴，解决 Typora 图片下载报错\n- 直接将单个对话保存为 PDF$/m,
+        'the options read as one list, in the order offered, inline code intact');
+    assert.match(body, /^\*\*继续操作\*\*$/m, 'the button keeps the text it showed');
+    assert.doesNotMatch(body, /Teach me|Fix the paste|Save a PDF/, 'a handler\'s strings were never shown');
+});
+
+test('a converted link row and citation read as links (issue #47)', async () => {
+    const conversation = await exportPayload(dilPayload(DIL_LINK_SOURCE, {
+        content_references: [{
+            matched_text: 'citeturn4210search0',
+            items: [{ title: 'Roast notes', url: 'https://example.com/roast-notes' }]
+        }]
+    }));
+    const body = conversation.messages[1].content;
+
+    assertNoDilSource(body);
+    assert.match(body, /^\[Roast notes\]\(https:\/\/example\.com\/roast-notes\)$/m);
+    assert.match(body, /tables and code\. \(\[Roast notes\]\(https:\/\/example\.com\/roast-notes\)\)/);
+    assert.ok(!/[-]/.test(body));
+});
+
+test('a prompt that pastes interface source is the reader\'s own text', async () => {
+    const payload = dilPayload('Understood.');
+    payload.mapping['node-d1'].message.content.parts = [DIL_CHOICE_SOURCE];
+
+    const conversation = await exportPayload(payload);
+
+    assert.equal(conversation.messages[0].content.includes('<radio-group direction="col"'), true,
+        conversation.messages[0].content);
+    assert.equal(conversation.messages[0].content.includes('{@body const [choice,setChoice]'), true);
+});
+
+test('ordinary Markdown never reaches the interface converter', () => {
+    const render = engine.internals.renderDilSource;
+    const samples = [
+        'Use `<radio-group>` and `<box gap={3}>` for that.',
+        '```jsx\n<box gap={3}>\n  {@body const [a, setA] = DIL.useState(1)}\n  <radio value="a">A</radio>\n</box>\n```',
+        'A hard break  \nthen <br> and x<sup>2</sup> and <details><summary>More</summary>text</details>.',
+        'Maths: $J_{after} - \\frac{a}{b}$ and a {placeholder} and obj.call({ key: value }).',
+        'Compare a <b and c>d, or List<String> in prose, or <link rel="x"> and <cite>Title</cite>.',
+        'An HTML form: <form><button type="submit">Send</button></form>'
+    ];
+    samples.forEach(sample => assert.equal(render(sample), sample, `changed: ${sample}`));
+});
+
+test('interface layout keeps the Markdown, code and maths it holds (issue #47)', () => {
+    const source = [
+        'The file looks like this:',
+        '',
+        '<box border radius="lg" padding={3} gap={2}>',
+        ' <row align="center" gap={2}>',
+        '  <icon name="file-text" color="secondary"/>',
+        '  <text weight="medium">Roast log 2026.md</text>',
+        ' </row>',
+        ' <divider color="subtle"/>',
+        ' <box background="surface-secondary" radius="md" padding={3} gap={2}>',
+        '  ### Roast log',
+        '',
+        '  $$\\Delta J = J_{after} - J_{before}$$ and {batch.label} and `{kept.inline}`',
+        '',
+        '  | Batch | Crack |',
+        '  | --- | --- |',
+        '  | 114 | 11:40 |',
+        '',
+        '  ```python',
+        '  if batch.done:',
+        '',
+        '      log(batch)',
+        '  ```',
+        ' </box>',
+        '</box>'
+    ].join('\n');
+
+    assert.equal(engine.internals.renderDilSource(source), [
+        'The file looks like this:',
+        '',
+        'Roast log 2026.md',
+        '',
+        '---',
+        '',
+        '### Roast log',
+        '',
+        '$$\\Delta J = J_{after} - J_{before}$$ and  and `{kept.inline}`',
+        '',
+        '| Batch | Crack |',
+        '| --- | --- |',
+        '| 114 | 11:40 |',
+        '',
+        '```python',
+        'if batch.done:',
+        '',
+        '    log(batch)',
+        '```'
+    ].join('\n'));
+});
+
+test('interface code blocks keep their code byte for byte (issue #47)', () => {
+    const render = engine.internals.renderDilSource;
+    const children = render('<box gap={2}>\n  <text>Replace</text>\n  <CodeBlock lang="javascript">\n    if (a < b) {\n      GM_setValue(`x${a}`, {b});\n    }\n  </CodeBlock>\n</box>');
+    assert.equal(children, 'Replace\n\n```javascript\nif (a < b) {\n  GM_setValue(`x${a}`, {b});\n}\n```');
+
+    const attribute = render('<box gap={2}><CodeBlock lang="js" code="GM_setValue(\'roast\', 1);" /></box>');
+    assert.equal(attribute, '```js\nGM_setValue(\'roast\', 1);\n```');
+});
+
+test('a template literal in a handler does not end its tag early (issue #47)', () => {
+    const body = engine.internals.renderDilSource(
+        '<box><button onClick={() => GenUI.issueNewTurn(`Order ${size} > now`)}>Order</button></box>');
+    assert.equal(body, '**Order**');
+});
+
+test('interface source cut off mid-stream still exports what it showed (issue #47)', () => {
+    const render = engine.internals.renderDilSource;
+    assert.equal(render('Pick one:\n<box gap={3}>\n <radio-group value={c}>\n  <radio value="a">Light roast</radio>\n  <radio value="b">Dark'),
+        'Pick one:\n\n- Light roast\n- Dark');
+    assert.equal(render('Before\n{@body const [a,setA] = DIL.useState("x"\n<box><text>After</text></box>'), 'Before\n\nAfter');
+});
+
+test('interface conversion stays linear on hostile input', () => {
+    const hostile = '<box>' + '{a.b'.repeat(20000) + '<row '.repeat(20000) + '`'.repeat(3) + 'x`'.repeat(20000);
+    const started = Date.now();
+    engine.internals.renderDilSource(hostile);
+    assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+});
+
 test('an image-only turn survives the payload path', async () => {
     // payloadContentText yields '' for a multimodal part, which used to drop the
     // message entirely.
