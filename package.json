@@ -32,7 +32,7 @@
   "devDependencies": {
     "@playwright/test": "1.65.1",
     "jsdom": "31.0.1",
-    "terser": "5.51.3"
+    "terser": "5.51.4"
   },
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
